@@ -1,0 +1,22 @@
+{
+  "name": "Test Z-Image Turbo full_24s",
+  "timestamp": "20260301_142246",
+  "prompt": "A majestic mountain landscape at sunset, dramatic lighting, cinematic",
+  "height": 512,
+  "width": 512,
+  "steps": 4,
+  "seed": -1,
+  "guidance": 0.0,
+  "device": "mps",
+  "model_choice": "Z-Image Turbo (Full - LoRA support)",
+  "model_source": "Local",
+  "lora_file": "",
+  "lora_strength": 1.0,
+  "img_strength": 0.6,
+  "repeat_count": 1,
+  "upscale_enabled": false,
+  "upscale_model_path": "/Users/cris/Documents/ComfyUI/models/upscale_models/4x-UltraSharp.pth",
+  "num_frames": 25,
+  "fps": 24,
+  "reference_images": []
+}

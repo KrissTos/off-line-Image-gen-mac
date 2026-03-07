@@ -1,0 +1,22 @@
+{
+  "name": "Test Flux2 94B_73s",
+  "timestamp": "20260301_135801",
+  "prompt": "A majestic mountain landscape at sunset, dramatic lighting, cinematic",
+  "height": 1024,
+  "width": 1024,
+  "steps": 4,
+  "seed": -1,
+  "guidance": 3.5,
+  "device": "mps",
+  "model_choice": "FLUX.2-klein-4B (Int8)",
+  "model_source": "Local",
+  "lora_file": "",
+  "lora_strength": 1.0,
+  "img_strength": 0.6,
+  "repeat_count": 1,
+  "upscale_enabled": false,
+  "upscale_model_path": "/Users/cris/Documents/ComfyUI/models/upscale_models/4x-UltraSharp.pth",
+  "num_frames": 25,
+  "fps": 24,
+  "reference_images": []
+}

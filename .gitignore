@@ -1,0 +1,14 @@
+models/
+venv/
+.claude/
+imageGen/
+__pycache__/
+*.safetensors
+*.bin
+*.gguf
+*.pt
+*.pth
+.DS_Store
+huggingface/
+*.env
+.env*
