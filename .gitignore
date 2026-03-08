@@ -1,4 +1,5 @@
 models/
+.tmp_uploads/
 venv/
 .claude/
 imageGen/
