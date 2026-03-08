@@ -5,7 +5,7 @@ import {
 import { useState, useEffect, useCallback } from 'react'
 import {
   fetchStorage, fetchSettings, updateSettings, fetchModels, deleteModel,
-  checkModelUpdates, updateModel, openFolderDialog,
+  checkModelUpdates, updateModel, openFolderDialog, openOutputFolder,
   type ModelUpdateResult,
 } from '../api'
 import { applyThemeColors } from '../App'
@@ -293,11 +293,13 @@ export default function SettingsDrawer({ open, onClose }: Props) {
                 {outputDirSaved ? 'Saved' : 'Save'}
               </button>
               <button
-                onClick={() => { setOutputDir(DEFAULT_OUTPUT_DIR); setOutputDirSaved(false) }}
+                onClick={() => openOutputFolder().catch(() => {})}
+                title="Open output folder in Finder"
+                aria-label="Open output folder in Finder"
                 className="flex-1 px-3 py-2 rounded-md bg-card border border-border text-muted
                            hover:text-white text-xs transition-colors flex items-center justify-center gap-1.5"
               >
-                Reset
+                <FolderOpen size={12} /> Open
               </button>
             </div>
             {/* Row 2: full-width path field */}

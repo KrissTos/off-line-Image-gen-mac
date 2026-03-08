@@ -57,8 +57,10 @@ export const checkModelUpdates = () =>
 export const updateModel = (model_choice: string) =>
   post<{ status: string }>('/api/models/update', { model_choice, device: '' })
 
-export const openFolderDialog = () =>
+export const openFolderDialog  = () =>
   get<{ path: string | null; cancelled: boolean }>('/api/open-folder-dialog')
+export const openOutputFolder  = () =>
+  get<{ ok: boolean }>('/api/open-output-folder')
 
 // ── Upload ────────────────────────────────────────────────────────────────────
 
