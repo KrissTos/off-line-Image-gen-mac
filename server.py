@@ -359,6 +359,24 @@ async def api_open_folder_dialog():
         raise HTTPException(500, str(e))
 
 
+@app.get("/api/open-output-folder")
+async def api_open_output_folder():
+    """Reveal the current output folder in Finder (macOS) or file manager."""
+    import subprocess, platform
+    folder = os.path.expanduser(_output_dir())
+    os.makedirs(folder, exist_ok=True)
+    try:
+        if platform.system() == "Darwin":
+            subprocess.Popen(["open", folder])
+        elif platform.system() == "Windows":
+            subprocess.Popen(["explorer", folder])
+        else:
+            subprocess.Popen(["xdg-open", folder])
+        return {"ok": True}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
 # ── Routes: Generation (SSE) ─────────────────────────────────────────────────
 
 @app.post("/api/generate")

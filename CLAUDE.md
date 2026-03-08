@@ -1,6 +1,6 @@
 # off-line-Image-gen-mac — Project Notes
 
-<!-- TOC: maintaining · what-is · entry-points · run · architecture · api-table · sse-events · state-slots · iterate-masks · models · deps · gitignore · known-issues -->
+<!-- TOC: maintaining · what-is · entry-points · run · architecture · api-table · sse-events · state-slots · iterate-masks · models · deps · gitignore · known-issues · features -->
 
 ## Maintaining this file
 - **Single file only** — never split into multiple docs; one file is easier for AI sessions to load and reason about
@@ -144,9 +144,9 @@ Pass N  re-upload out_N-1 → tmp
 
 ## Key Python modules
 - `pipeline.py` — `PipelineManager`, SSE generation loop
-- `lora_zimage.py` — LoRA injection for Linear/Conv2d layers
-- `quantized_flux2.py` — 4-bit SDNQ + int8 quantization utilities
-- `workflow_utils.py` — workflow parse/save/load, ComfyUI importer, `get_locally_available_models()`
+- `core/lora_zimage.py` — LoRA injection for Linear/Conv2d layers
+- `core/quantized_flux2.py` — 4-bit SDNQ + int8 quantization utilities
+- `core/workflow_utils.py` — workflow parse/save/load, ComfyUI importer, `get_locally_available_models()`
 
 ## Models (cached in `./models/`)
 | Model | VRAM | Notes |
@@ -191,3 +191,10 @@ Tailwind tokens: `bg:#0a0a0a` · `surface:#141414` · `card:#1c1c1c` · `border:
 
 ## API endpoints added
 - `DELETE /api/output/{filename:path}` — deletes file + `.json` sidecar
+
+## Features added (this session)
+- **Step progress**: `generate_image()` takes `step_callback(step, total)`; diffusers `callback_on_step_end` wired to all 8 pipe calls; `pipeline.py` pushes `{step,total}` SSE events; Canvas shows `%` + progress bar
+- **Model-aware size presets**: 3-col grid in Sidebar, presets differ per model family (FLUX=6, Z-Image=3, LTX=4); label + pixel size shown per button
+- **Auto-outpaint**: when slot #1 image dimensions ≠ output size and no explicit mask, `_prepare_outpaint()` composites ref onto black canvas + auto-generates white extension mask; `outpaint_align` (9-position) controls anchor; UI shows 3×3 picker when ref image present
+- **Project restructure**: helper modules moved to `core/` (`lora_zimage`, `quantized_flux2`, `workflow_utils`); `.tmp_uploads/` added to `.gitignore`
+- **Gallery padding fix**: equal top/bottom spacing (removed asymmetric `pb-1`)

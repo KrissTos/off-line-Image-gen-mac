@@ -849,18 +849,29 @@ def load_upscaler(safetensors_path: str):
 
 
 def upscale_image(image: Image.Image, safetensors_path: str, device: str) -> Image.Image:
-    """Upscale a PIL image using a spandrel-compatible upscaler model."""
+    """Upscale a PIL image using a spandrel-compatible upscaler model.
+    Falls back to CPU if the requested device fails (e.g. limited MPS support)."""
     import numpy as np
 
     model = load_upscaler(safetensors_path)
-    model.to(device)
 
     img_rgb = image.convert("RGB") if image.mode != "RGB" else image
     img_np = np.array(img_rgb).astype("float32") / 255.0
     img_tensor = torch.from_numpy(img_np).permute(2, 0, 1).unsqueeze(0)
 
-    with torch.inference_mode():
-        out = model(img_tensor.to(device))
+    # Try requested device, fall back to CPU if unsupported
+    for run_device in ([device, "cpu"] if device != "cpu" else ["cpu"]):
+        try:
+            model.to(run_device)
+            with torch.inference_mode():
+                out = model(img_tensor.to(run_device))
+            if run_device != device:
+                print(f"[Upscaler] Note: fell back to CPU (device '{device}' unsupported)")
+            break
+        except Exception as e:
+            if run_device == "cpu":
+                raise  # nothing left to try
+            print(f"[Upscaler] {device} failed ({e}), retrying on CPU…")
 
     out_np = out.squeeze(0).permute(1, 2, 0).cpu().numpy()
     out_np = (out_np.clip(0, 1) * 255).astype("uint8")
@@ -1303,13 +1314,18 @@ def generate_image(
         else:
             # Optional upscaling before save/display
             upscale_note = ""
-            if upscale_enabled and upscale_model_path and os.path.isfile(upscale_model_path):
-                try:
-                    image = upscale_image(image, upscale_model_path, device)
-                    upscale_note = f" | Upscaled to {image.size[0]}×{image.size[1]}"
-                except Exception as ue:
-                    upscale_note = f" | Upscale failed: {ue}"
-                    print(f"[Upscaler] Error: {ue}")
+            if upscale_enabled and upscale_model_path:
+                if not os.path.isfile(upscale_model_path):
+                    upscale_note = " | Upscale skipped: model file not found"
+                else:
+                    try:
+                        image = upscale_image(image, upscale_model_path, device)
+                        upscale_note = f" | Upscaled ✓ {image.size[0]}×{image.size[1]}"
+                    except Exception as ue:
+                        upscale_note = f" | Upscale failed: {ue}"
+                        print(f"[Upscaler] Error: {ue}")
+            elif upscale_enabled and not upscale_model_path:
+                upscale_note = " | Upscale skipped: no model loaded"
 
             info = (f"{iter_label}Seed: {current_seed} | Model: {model_short} | Mode: {mode}"
                     f" | Device: {device}{cfg_info}{lora_info}{upscale_note}{time_info}{sync_note}")
