@@ -141,7 +141,7 @@ Examples:
     if args.workflow:
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         try:
-            from workflow_utils import load_any_workflow, workflow_summary
+            from core.workflow_utils import load_any_workflow, workflow_summary
             wf = load_any_workflow(args.workflow)
             print(f"✓ Workflow loaded  ({wf.get('_source', '?')} format)")
             print(f"  {workflow_summary(wf)}")

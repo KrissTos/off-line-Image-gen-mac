@@ -152,7 +152,7 @@ def _mgr():
     return manager
 
 def _wu():
-    from workflow_utils import load_any_workflow, get_locally_available_models
+    from core.workflow_utils import load_any_workflow, get_locally_available_models
     return load_any_workflow, get_locally_available_models
 
 # ── Pydantic models ───────────────────────────────────────────────────────────
@@ -261,7 +261,7 @@ async def api_devices():
 
 @app.get("/api/models")
 async def api_models():
-    from workflow_utils import get_locally_available_models
+    from core.workflow_utils import get_locally_available_models
     a = _app()
     choices    = a.MODEL_CHOICES
     models_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
@@ -578,7 +578,7 @@ async def api_import_comfyui(file: UploadFile = File(...)):
     if wf.get("_source") != "comfyui":
         raise HTTPException(400, "File is a native workflow — use /api/workflows/{name} instead")
 
-    from workflow_utils import get_locally_available_models as glam
+    from core.workflow_utils import get_locally_available_models as glam
     models_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
     available  = glam(models_dir)
 

@@ -481,7 +481,7 @@ def load_flux2_klein_pipeline(device="mps"):
     from accelerate import init_empty_weights
     from safetensors.torch import load_file
     from huggingface_hub import snapshot_download
-    from quantized_flux2 import QuantizedFlux2Transformer2DModel
+    from core.quantized_flux2 import QuantizedFlux2Transformer2DModel
 
     cache_dir = get_active_cache_dir()
 
@@ -1905,7 +1905,7 @@ def import_comfyui_workflow(json_file_path):
     if not json_file_path:
         return (_no_op,) * 17 + ("No file selected",)
     try:
-        from workflow_utils import load_any_workflow, get_locally_available_models
+        from core.workflow_utils import load_any_workflow, get_locally_available_models
         wf = load_any_workflow(json_file_path)
     except Exception as e:
         return (_no_op,) * 17 + (f"Error reading file: {e}",)
