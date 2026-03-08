@@ -340,21 +340,31 @@ async def api_update_model(req: LoadModelRequest):
 @app.get("/api/open-folder-dialog")
 async def api_open_folder_dialog():
     """Open a native macOS folder picker dialog and return the selected path."""
-    import subprocess, platform
+    import platform
     if platform.system() != "Darwin":
         raise HTTPException(400, "Folder picker only supported on macOS")
     try:
-        result = subprocess.run(
-            ["osascript", "-e", 'POSIX path of (choose folder with prompt "Select output folder")'],
-            capture_output=True, text=True, timeout=60
+        proc = await asyncio.create_subprocess_exec(
+            "osascript", "-e",
+            'POSIX path of (choose folder with prompt "Select output folder")',
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
         )
-        if result.returncode != 0:
-            # User cancelled
+        try:
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
+        except asyncio.TimeoutError:
+            proc.kill()
             return {"path": None, "cancelled": True}
-        path = result.stdout.strip().rstrip("/")
+        if proc.returncode != 0:
+            err = stderr.decode().strip()
+            # "User cancelled" is normal — anything else is a real error worth surfacing
+            if err and "cancelled" not in err.lower() and "cancel" not in err.lower():
+                raise HTTPException(500, f"osascript error: {err}")
+            return {"path": None, "cancelled": True}
+        path = stdout.decode().strip().rstrip("/")
         return {"path": path, "cancelled": False}
-    except subprocess.TimeoutExpired:
-        return {"path": None, "cancelled": True}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(500, str(e))
 

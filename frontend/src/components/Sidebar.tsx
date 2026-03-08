@@ -5,7 +5,7 @@ import {
   Wand2, ArrowUpCircle, FolderInput, ListOrdered, FolderOpen,
 } from 'lucide-react'
 import type { GenerateParams } from '../types'
-import { importComfyUI, loadWorkflow, saveWorkflow, uploadLora, uploadUpscaleModel, streamBatchUpscale, openFolderDialog } from '../api'
+import { importComfyUI, loadWorkflow, saveWorkflow, uploadLora, uploadUpscaleModel, streamBatchUpscale, openFolderDialog, updateSettings } from '../api'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -328,6 +328,7 @@ function UpscalePanel({ enabled, modelPath, onChange, onStatus }: UpscalePanelPr
       const { path, name } = await uploadUpscaleModel(file)
       onChange('upscale_model_path', path)
       setModelName(name)
+      updateSettings({ upscale_model_path: path }).catch(() => {})
       onStatus(`✓ Upscale model loaded: ${name}`)
     } catch (e: unknown) {
       onStatus(`Upscale error: ${(e as Error).message}`)
@@ -339,6 +340,7 @@ function UpscalePanel({ enabled, modelPath, onChange, onStatus }: UpscalePanelPr
   function handleClear() {
     onChange('upscale_model_path', '')
     setModelName(null)
+    updateSettings({ upscale_model_path: '' }).catch(() => {})
     onStatus('Upscale model cleared')
   }
 

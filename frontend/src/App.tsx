@@ -157,6 +157,11 @@ export default function App() {
       if (s.theme_colors && typeof s.theme_colors === 'object') {
         applyThemeColors(s.theme_colors as Record<string, string>)
       }
+      // support both old key ('upscaler_model_path') and new key ('upscale_model_path')
+      const savedModel = (s.upscale_model_path || s.upscaler_model_path) as string | undefined
+      if (savedModel) {
+        dispatch({ type: 'SET_PARAM', key: 'upscale_model_path', value: savedModel })
+      }
     }).catch(() => {})
 
     refreshWorkflows()
