@@ -859,6 +859,7 @@ def generate_image(
     mask_image=None,
     mask_mode="Crop & Composite (Fast)",
     progress=gr.Progress(track_tqdm=True),
+    step_callback=None,
 ):
     global pipe, img2img_pipe, inpaint_pipe, video_pipe, current_video_device, model_source
 
@@ -997,6 +998,16 @@ def generate_image(
 
         print_memory(f"Before generation {i + 1}/{repeat_count}")
 
+        # Build diffusers step-end callback for progress reporting
+        _n_steps = int(steps)
+        def _step_cb(pipeline, step_index, timestep, callback_kwargs,
+                     _cb=step_callback, _total=_n_steps):
+            if _cb is not None:
+                _cb(step_index + 1, _total)
+            return callback_kwargs
+        _cb = _step_cb if step_callback is not None else None
+
+
         iter_label = f"[{i + 1}/{repeat_count}] " if repeat_count > 1 else ""
         yield None, None, f"{iter_label}Generating…"
 
@@ -1028,6 +1039,7 @@ def generate_image(
                                 num_inference_steps=int(steps),
                                 guidance_scale=float(guidance),
                                 generator=generator,
+                                callback_on_step_end=_cb,
                             ).images[0]
                             mode = "inpainting (FLUX)"
                             video_frames = None
@@ -1052,6 +1064,7 @@ def generate_image(
                             num_inference_steps=int(steps),
                             guidance_scale=float(guidance),
                             generator=generator,
+                            callback_on_step_end=_cb,
                         ).images[0]
 
                         if hasattr(pipe, "vae") and hasattr(pipe.vae, "enable_tiling"):
@@ -1070,6 +1083,7 @@ def generate_image(
                             num_inference_steps=int(steps),
                             guidance_scale=float(guidance),
                             generator=generator,
+                            callback_on_step_end=_cb,
                         ).images[0]
                         mode = "txt2img"
                         video_frames = None
@@ -1094,6 +1108,7 @@ def generate_image(
                                 num_inference_steps=int(steps),
                                 guidance_scale=float(guidance),
                                 generator=generator,
+                                callback_on_step_end=_cb,
                             ).images[0]
                             mode = "inpainting (Z-Image)"
                         except Exception as _e:
@@ -1114,6 +1129,7 @@ def generate_image(
                             num_inference_steps=int(steps),
                             guidance_scale=float(guidance),
                             generator=generator,
+                            callback_on_step_end=_cb,
                         ).images[0]
                         mode = "img2img (ref)"
                     video_frames = None
@@ -1136,6 +1152,7 @@ def generate_image(
                             num_inference_steps=int(steps),
                             guidance_scale=float(guidance),
                             generator=generator,
+                            callback_on_step_end=_cb,
                         )
                         mode = "img2video"
                     else:
@@ -1147,6 +1164,7 @@ def generate_image(
                             num_inference_steps=int(steps),
                             guidance_scale=float(guidance),
                             generator=generator,
+                            callback_on_step_end=_cb,
                         )
                         mode = "txt2video"
                     video_frames = result.frames[0]
@@ -1159,6 +1177,7 @@ def generate_image(
                         num_inference_steps=int(steps),
                         guidance_scale=float(guidance),
                         generator=generator,
+                        callback_on_step_end=_cb,
                     ).images[0]
                     mode = "txt2img"
                     video_frames = None
