@@ -233,8 +233,13 @@ def _load_pil(file_id: str):
 
 def _output_dir() -> str:
     a = _app()
-    return getattr(a, "DEFAULT_OUTPUT_DIR",
-                   os.path.join(os.path.expanduser("~"), "Pictures", "ultra-fast-image-gen"))
+    default = getattr(a, "DEFAULT_OUTPUT_DIR",
+                      os.path.join(os.path.expanduser("~"), "Pictures", "ultra-fast-image-gen"))
+    try:
+        settings = a.load_settings()
+        return settings.get("output_dir") or default
+    except Exception:
+        return default
 
 
 # ── Routes: Heartbeat ─────────────────────────────────────────────────────────

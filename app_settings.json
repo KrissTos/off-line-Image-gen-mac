@@ -1,4 +1,4 @@
 {
   "upscaler_model_path": "/Users/cris/Documents/ComfyUI/models/upscale_models/4x-UltraSharp.pth",
-  "output_dir": "~/Pictures/ultra-fast-image-gen"
+  "output_dir": "/Users/cris/Pictures/Image-gen"
 }
