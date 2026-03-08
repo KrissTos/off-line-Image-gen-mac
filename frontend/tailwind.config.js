@@ -4,15 +4,15 @@ export default {
   theme: {
     extend: {
       colors: {
-        bg:      '#0a0a0a',
-        surface: '#141414',
-        card:    '#1c1c1c',
-        border:  '#2a2a2a',
-        accent:  '#7c3aed',
-        muted:   '#6b7280',
+        bg:      'rgb(var(--color-bg) / <alpha-value>)',
+        surface: 'rgb(var(--color-surface) / <alpha-value>)',
+        card:    'rgb(var(--color-card) / <alpha-value>)',
+        border:  'rgb(var(--color-border) / <alpha-value>)',
+        accent:  'rgb(var(--color-accent) / <alpha-value>)',
+        muted:   'rgb(var(--color-muted) / <alpha-value>)',
+        label:   'rgb(var(--color-label) / <alpha-value>)',
       },
     },
   },
   plugins: [require('@tailwindcss/forms')],
 }
-

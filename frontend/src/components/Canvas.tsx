@@ -89,13 +89,26 @@ export default function Canvas({
 
         {/* Generating overlay */}
         {isGenerating && (
-          <div className="absolute inset-0 bg-bg/80 backdrop-blur-sm flex flex-col items-center justify-center gap-4">
-            <Loader2 size={36} className="text-accent animate-spin" />
+          <div
+            role="status"
+            aria-live="polite"
+            aria-label={progressMsg || 'Generating image…'}
+            className="absolute inset-0 bg-bg/80 backdrop-blur-sm flex flex-col items-center justify-center gap-4"
+          >
+            {/* Spinner with percentage overlay */}
+            <div className="relative flex items-center justify-center">
+              <Loader2 size={56} className="text-accent animate-spin" aria-hidden="true" />
+              {pct !== null && (
+                <span className="absolute text-xs font-bold text-accent tabular-nums" aria-hidden="true">
+                  {pct}%
+                </span>
+              )}
+            </div>
             {progressMsg && (
-              <p className="text-sm text-muted max-w-xs text-center">{progressMsg}</p>
+              <p className="text-sm text-white/90 max-w-xs text-center">{progressMsg}</p>
             )}
             {pct !== null && (
-              <div className="w-48 h-1 bg-border rounded-full overflow-hidden">
+              <div className="w-48 h-1.5 bg-border rounded-full overflow-hidden">
                 <div
                   className="h-full bg-accent transition-all duration-300 rounded-full"
                   style={{ width: `${pct}%` }}

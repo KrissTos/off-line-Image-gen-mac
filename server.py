@@ -12,15 +12,38 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
+import logging
 import os
 import shutil
+import signal
 import sys
 import tempfile
 import time
 import uuid
+import warnings
 from pathlib import Path
 from typing import Any
+
+# ── Suppress semaphore-leak warning ───────────────────────────────────────────
+# The warning is emitted by Python's multiprocessing.resource_tracker *daemon*
+# — a separate child process that does NOT inherit warnings.filterwarnings().
+# Setting PYTHONWARNINGS in os.environ before that daemon is spawned (which
+# happens on the first torch/multiprocessing semaphore creation) is the only
+# reliable way to silence it in the daemon's process.
+_pw = os.environ.get("PYTHONWARNINGS", "")
+if "resource_tracker" not in _pw:
+    os.environ["PYTHONWARNINGS"] = (
+        f"{_pw},ignore::UserWarning:multiprocessing.resource_tracker"
+    ).lstrip(",")
+del _pw
+# Belt-and-suspenders: also suppress in the main process.
+warnings.filterwarnings(
+    "ignore",
+    message="resource_tracker: There appear to be",
+    category=UserWarning,
+)
 
 import uvicorn
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
@@ -50,6 +73,73 @@ app.add_middleware(
 # Serve React SPA (only if built)
 if DIST.exists():
     app.mount("/assets", StaticFiles(directory=str(DIST / "assets")), name="assets")
+
+# ── Single-line access logging ────────────────────────────────────────────────
+# Uvicorn prints one INFO line per request, which makes the terminal scroll
+# continuously.  This handler rewrites the *same* terminal line instead
+# (using CR + ANSI "clear to EOL") when connected to a real TTY.
+# Falls back to normal newline output when piped / redirected.
+
+class _SingleLineHandler(logging.StreamHandler):
+    """Overwrites the current terminal line for every log record."""
+
+    _tty: bool = hasattr(sys.stderr, "isatty") and sys.stderr.isatty()
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            msg = self.format(record)
+            if self._tty:
+                # \r  → go to column 0
+                # \033[K → erase from cursor to end of line
+                sys.stderr.write(f"\r\033[K{msg}")
+            else:
+                sys.stderr.write(msg + "\n")
+            sys.stderr.flush()
+        except Exception:
+            self.handleError(record)
+
+
+async def _startup_patch_access_log() -> None:
+    """
+    Replace uvicorn.access's default StreamHandler with our single-line variant.
+    Runs on startup — AFTER uvicorn has already configured its own handlers.
+    """
+    alog = logging.getLogger("uvicorn.access")
+    if alog.handlers:
+        fmt = alog.handlers[0].formatter   # keep uvicorn's existing formatter
+        h = _SingleLineHandler()
+        h.setFormatter(fmt)
+        alog.handlers = [h]
+        alog.propagate = False
+
+
+app.add_event_handler("startup", _startup_patch_access_log)
+
+# ── Browser heartbeat (auto-shutdown when browser closes) ─────────────────────
+
+_last_ping:          float = time.time()   # updated by POST /api/ping
+_auto_shutdown:      bool  = True          # set to False via --no-auto-shutdown
+_HEARTBEAT_TIMEOUT:  float = 15.0          # seconds of silence → shutdown
+_HEARTBEAT_INTERVAL: float = 5.0          # check interval
+
+
+async def _heartbeat_watcher() -> None:
+    """Shut down the server if no browser ping arrives within the timeout."""
+    # Give the browser time to open on first launch
+    await asyncio.sleep(_HEARTBEAT_TIMEOUT + 5)
+    while True:
+        await asyncio.sleep(_HEARTBEAT_INTERVAL)
+        if time.time() - _last_ping > _HEARTBEAT_TIMEOUT:
+            print("\n⏹  No browser heartbeat received — shutting down server.", flush=True)
+            os.kill(os.getpid(), signal.SIGTERM)
+            return
+
+
+@app.on_event("startup")
+async def _start_heartbeat() -> None:
+    if _auto_shutdown:
+        asyncio.create_task(_heartbeat_watcher())
+
 
 # ── Lazy imports (avoid loading torch at import time) ─────────────────────────
 
@@ -146,6 +236,16 @@ def _output_dir() -> str:
                    os.path.join(os.path.expanduser("~"), "Pictures", "ultra-fast-image-gen"))
 
 
+# ── Routes: Heartbeat ─────────────────────────────────────────────────────────
+
+@app.post("/api/ping")
+async def api_ping() -> dict:
+    """Browser heartbeat — resets the auto-shutdown timer."""
+    global _last_ping
+    _last_ping = time.time()
+    return {"ok": True}
+
+
 # ── Routes: Status / devices / models ────────────────────────────────────────
 
 @app.get("/api/status")
@@ -187,6 +287,73 @@ async def api_delete_model(model_name: str):
         # delete_model returns a 3-tuple in Gradio; extract status message
         msg = result[2] if isinstance(result, (list, tuple)) and len(result) >= 3 else str(result)
         return {"status": msg}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.get("/api/models/check-updates")
+async def api_check_model_updates():
+    """Query HuggingFace Hub for latest commit hashes of all known models."""
+    a = _app()
+    try:
+        table, _ = await asyncio.get_event_loop().run_in_executor(None, a.check_online_versions)
+        # Return per-model status list for the UI
+        results = []
+        for repo_id, display_name in a.KNOWN_MODELS.items():
+            from app import online_version_cache, get_model_snapshot_info, get_local_models_dir
+            local_hash, _ = get_model_snapshot_info(get_local_models_dir(), repo_id)
+            online_hash   = online_version_cache.get(repo_id)
+            if online_hash is None:
+                status = "error"
+            elif local_hash is None:
+                status = "not_downloaded"
+            elif local_hash == online_hash:
+                status = "up_to_date"
+            else:
+                status = "update_available"
+            results.append({
+                "choice":       display_name,
+                "repo_id":      repo_id,
+                "local_hash":   local_hash[:8]  if local_hash  else None,
+                "online_hash":  online_hash[:8] if online_hash else None,
+                "status":       status,
+            })
+        return {"results": results}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.post("/api/models/update")
+async def api_update_model(req: LoadModelRequest):
+    """Download / update a model from HuggingFace Hub."""
+    a = _app()
+    try:
+        msg, _, _ = await asyncio.get_event_loop().run_in_executor(
+            None, a.download_model_update, req.model_choice
+        )
+        return {"status": msg}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.get("/api/open-folder-dialog")
+async def api_open_folder_dialog():
+    """Open a native macOS folder picker dialog and return the selected path."""
+    import subprocess, platform
+    if platform.system() != "Darwin":
+        raise HTTPException(400, "Folder picker only supported on macOS")
+    try:
+        result = subprocess.run(
+            ["osascript", "-e", 'POSIX path of (choose folder with prompt "Select output folder")'],
+            capture_output=True, text=True, timeout=60
+        )
+        if result.returncode != 0:
+            # User cancelled
+            return {"path": None, "cancelled": True}
+        path = result.stdout.strip().rstrip("/")
+        return {"path": path, "cancelled": False}
+    except subprocess.TimeoutExpired:
+        return {"path": None, "cancelled": True}
     except Exception as e:
         raise HTTPException(500, str(e))
 
@@ -279,6 +446,19 @@ async def api_serve_temp(file_id: str):
     if not p.exists():
         raise HTTPException(404)
     return FileResponse(str(p))
+
+
+@app.delete("/api/output/{filename:path}")
+async def api_delete_output(filename: str):
+    """Delete an output file and its sidecar JSON."""
+    p = Path(_output_dir()) / filename
+    if not p.exists():
+        raise HTTPException(404, detail="File not found")
+    p.unlink()
+    sidecar = p.with_suffix(".json")
+    if sidecar.exists():
+        sidecar.unlink()
+    return {"deleted": filename}
 
 
 @app.get("/api/output/{filename:path}")
@@ -455,6 +635,51 @@ async def api_upload_lora(file: UploadFile = File(...)):
     return {"path": str(dest), "name": fname}
 
 
+@app.post("/api/upscale/upload")
+async def api_upload_upscale(file: UploadFile = File(...)):
+    """Upload an upscale model (.pth/.safetensors/etc.) and return its saved path."""
+    fname = Path(file.filename or "upscale_model.pth").name
+    dest  = ROOT / "upscale_models" / fname
+    dest.parent.mkdir(exist_ok=True)
+    with open(dest, "wb") as fh:
+        shutil.copyfileobj(file.file, fh)
+    return {"path": str(dest), "name": fname}
+
+
+class BatchUpscaleRequest(BaseModel):
+    input_folder:  str
+    output_folder: str = ""
+    scale_choice:  str = "×4"
+    model_path:    str
+
+
+@app.post("/api/upscale/batch")
+async def api_batch_upscale(req: BatchUpscaleRequest):
+    """Stream batch upscale progress as SSE log events."""
+
+    def event_stream():
+        try:
+            for log_line in _app().batch_upscale_folder(
+                req.input_folder,
+                req.output_folder,
+                req.scale_choice,
+                req.model_path,
+            ):
+                # batch_upscale_folder yields cumulative log strings;
+                # send only the last appended line for efficiency
+                last = log_line.rstrip("\n").split("\n")[-1]
+                yield f"data: {json.dumps({'type': 'log', 'message': last})}\n\n"
+            yield f"data: {json.dumps({'type': 'done'})}\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 # ── Routes: Settings ──────────────────────────────────────────────────────────
 
 @app.get("/api/settings")
@@ -476,7 +701,11 @@ async def api_update_settings(req: UpdateSettingsRequest):
 async def api_storage():
     a = _app()
     models, summary = a.scan_downloaded_models()
-    return {"models": models, "summary": summary}
+    normalized = [
+        {"choice": m.get("display_name", ""), "name": m.get("cache_name", ""), "size": m.get("size_str", "")}
+        for m in models
+    ]
+    return {"models": normalized, "summary": summary}
 
 
 # ── Routes: HuggingFace auth ──────────────────────────────────────────────────
@@ -525,7 +754,12 @@ if __name__ == "__main__":
     parser.add_argument("--host",   type=str, default="127.0.0.1")
     parser.add_argument("--reload", action="store_true",
                         help="Enable uvicorn auto-reload (dev mode)")
+    parser.add_argument("--no-auto-shutdown", action="store_true",
+                        help="Keep server running even when the browser is closed")
     args = parser.parse_args()
+
+    if args.no_auto_shutdown:
+        _auto_shutdown = False  # type: ignore[assignment]
 
     print(f"Starting ultra-fast-image-gen API on http://{args.host}:{args.port}")
     if DIST.exists():

@@ -1,11 +1,11 @@
 import { useState, useRef } from 'react'
 import {
-  ChevronDown, ChevronRight, Play,
+  ChevronDown, ChevronRight, Play, Square,
   Layers, Sliders, Video, UploadCloud, X, Workflow, Cpu,
-  Wand2, ArrowUpCircle, FolderOpen,
+  Wand2, ArrowUpCircle, FolderInput, ListOrdered, FolderOpen,
 } from 'lucide-react'
 import type { GenerateParams } from '../types'
-import { importComfyUI, loadWorkflow, saveWorkflow, uploadLora } from '../api'
+import { importComfyUI, loadWorkflow, saveWorkflow, uploadLora, uploadUpscaleModel, streamBatchUpscale, openFolderDialog } from '../api'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -20,8 +20,9 @@ function Accordion({ label, icon, children, defaultOpen = false }: AccordionProp
   return (
     <div className="border-b border-border last:border-0">
       <button
-        className="w-full flex items-center justify-between px-4 py-2.5 text-xs font-semibold uppercase tracking-wider text-muted hover:text-white transition-colors"
+        className="w-full flex items-center justify-between px-4 py-2.5 text-xs font-semibold uppercase tracking-wider text-label hover:text-white transition-colors"
         onClick={() => setOpen(!open)}
+        aria-expanded={open}
       >
         <span className="flex items-center gap-2">{icon}{label}</span>
         {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
@@ -37,14 +38,17 @@ function Slider({
   label: string; value: number; min: number; max: number
   step?: number; onChange: (v: number) => void; unit?: string
 }) {
+  const id = `slider-${label.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '')}`
   return (
     <div>
       <div className="flex justify-between mb-1">
-        <label className="text-xs text-muted">{label}</label>
-        <span className="text-xs text-white">{value}{unit}</span>
+        <label htmlFor={id} className="text-xs text-muted">{label}</label>
+        <span className="text-xs text-white" aria-hidden="true">{value}{unit}</span>
       </div>
       <input
+        id={id}
         type="range" min={min} max={max} step={step} value={value}
+        aria-label={`${label}: ${value}${unit}`}
         onChange={e => onChange(Number(e.target.value))}
         className="w-full h-1 appearance-none bg-border rounded-full accent-accent"
       />
@@ -72,16 +76,19 @@ function NumberInput({
 
 function Toggle({ label, value, onChange }: { label: string; value: boolean; onChange: (v: boolean) => void }) {
   return (
-    <label className="flex items-center justify-between cursor-pointer">
+    <div className="flex items-center justify-between">
       <span className="text-xs text-muted">{label}</span>
-      <div
+      <button
+        role="switch"
+        aria-checked={value}
+        aria-label={label}
         onClick={() => onChange(!value)}
-        className={`relative w-9 h-5 rounded-full transition-colors ${value ? 'bg-accent' : 'bg-border'}`}
+        className={`relative w-9 h-5 rounded-full transition-colors cursor-pointer focus:outline-none focus:ring-2 focus:ring-accent/50 ${value ? 'bg-accent' : 'bg-border'}`}
       >
         <div className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform shadow
           ${value ? 'translate-x-4' : 'translate-x-0.5'}`} />
-      </div>
-    </label>
+      </button>
+    </div>
   )
 }
 
@@ -235,9 +242,32 @@ interface UpscalePanelProps {
   enabled:   boolean
   modelPath: string
   onChange:  (k: keyof GenerateParams, v: unknown) => void
+  onStatus:  (msg: string) => void
 }
-function UpscalePanel({ enabled, modelPath, onChange }: UpscalePanelProps) {
+function UpscalePanel({ enabled, modelPath, onChange, onStatus }: UpscalePanelProps) {
+  const [loading, setLoading] = useState(false)
+  const [modelName, setModelName] = useState<string | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
+
+  async function handleUpload(file: File) {
+    setLoading(true)
+    try {
+      const { path, name } = await uploadUpscaleModel(file)
+      onChange('upscale_model_path', path)
+      setModelName(name)
+      onStatus(`✓ Upscale model loaded: ${name}`)
+    } catch (e: unknown) {
+      onStatus(`Upscale error: ${(e as Error).message}`)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  function handleClear() {
+    onChange('upscale_model_path', '')
+    setModelName(null)
+    onStatus('Upscale model cleared')
+  }
 
   return (
     <div className="space-y-3">
@@ -247,40 +277,212 @@ function UpscalePanel({ enabled, modelPath, onChange }: UpscalePanelProps) {
         onChange={v => onChange('upscale_enabled', v)}
       />
       {enabled && (
-        <div>
-          <label className="text-xs text-muted block mb-1">Model file</label>
-          <div className="flex gap-2">
-            <input
-              type="text"
-              value={modelPath}
-              onChange={e => onChange('upscale_model_path', e.target.value)}
-              placeholder="path/to/4x_ESRGAN.pth"
-              className="flex-1 min-w-0 bg-card border border-border rounded-md px-3 py-1.5 text-sm text-white
-                         placeholder-muted focus:outline-none focus:border-accent transition-colors"
-            />
+        <div className="space-y-3">
+          {modelPath ? (
+            <div className="flex items-center justify-between bg-card border border-border rounded-md px-3 py-2">
+              <span className="text-xs text-white truncate">{modelName ?? modelPath.split('/').pop()}</span>
+              <button onClick={handleClear} className="text-muted hover:text-white ml-2 shrink-0">
+                <X size={13} />
+              </button>
+            </div>
+          ) : (
             <button
               onClick={() => fileRef.current?.click()}
-              title="Browse for model file"
-              className="shrink-0 px-2.5 py-1.5 rounded-md bg-card border border-border
-                         text-muted hover:text-white hover:border-accent transition-colors"
+              disabled={loading}
+              className="w-full border border-dashed border-border rounded-lg py-3 flex items-center justify-center gap-2
+                         text-muted hover:border-accent hover:text-white transition-colors text-xs disabled:opacity-50"
             >
-              <FolderOpen size={14} />
+              <UploadCloud size={14} />
+              {loading ? 'Uploading…' : 'Upload .pth / .safetensors'}
             </button>
-          </div>
+          )}
           <input
             ref={fileRef}
             type="file"
             accept=".pth,.pt,.onnx,.safetensors,.bin"
             className="hidden"
             onChange={e => {
-              const f = e.target.files?.[0]
-              if (f) onChange('upscale_model_path', f.name)
+              if (e.target.files?.[0]) handleUpload(e.target.files[0])
               e.target.value = ''
             }}
           />
-          <p className="text-[10px] text-muted mt-1 opacity-70">
-            Browse sets filename; type full path if needed.
-          </p>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Batch Upscale panel ───────────────────────────────────────────────────────
+
+interface BatchUpscalePanelProps {
+  modelPath: string
+  onStatus:  (msg: string) => void
+}
+function BatchUpscalePanel({ modelPath, onStatus }: BatchUpscalePanelProps) {
+  const [inputFolder,    setInputFolder]    = useState('')
+  const [outputFolder,   setOutputFolder]   = useState('')
+  const [scale,          setScale]          = useState('×4')
+  const [running,        setRunning]        = useState(false)
+  const [log,            setLog]            = useState<string[]>([])
+  const [pickingInput,   setPickingInput]   = useState(false)
+  const [pickingOutput,  setPickingOutput]  = useState(false)
+  const abortRef = useRef<AbortController | null>(null)
+  const logRef   = useRef<HTMLDivElement>(null)
+
+  async function pickFolder(setter: (p: string) => void, setPickingFlag: (v: boolean) => void) {
+    setPickingFlag(true)
+    try {
+      const data = await openFolderDialog()
+      if (!data.cancelled && data.path) setter(data.path)
+    } catch (e: unknown) {
+      onStatus(`Folder picker error: ${(e as Error).message}`)
+    } finally {
+      setPickingFlag(false)
+    }
+  }
+
+  async function handleRun() {
+    if (!modelPath) { onStatus('⚠ Load an upscale model first'); return }
+    if (!inputFolder.trim()) { onStatus('⚠ Enter an input folder path'); return }
+    setRunning(true)
+    setLog([])
+    abortRef.current = new AbortController()
+    try {
+      await streamBatchUpscale(
+        { input_folder: inputFolder.trim(), output_folder: outputFolder.trim(), scale_choice: scale, model_path: modelPath },
+        ev => {
+          if (ev.type === 'log' && ev.message) {
+            setLog(prev => {
+              const next = [...prev, ev.message!]
+              // auto-scroll
+              setTimeout(() => { logRef.current?.scrollTo(0, logRef.current.scrollHeight) }, 0)
+              return next
+            })
+          }
+          if (ev.type === 'error') onStatus(`Batch error: ${ev.message}`)
+          if (ev.type === 'done')  onStatus('✓ Batch upscale complete')
+        },
+        abortRef.current.signal,
+      )
+    } catch (e: unknown) {
+      if ((e as Error).name !== 'AbortError') onStatus(`Batch error: ${(e as Error).message}`)
+    } finally {
+      setRunning(false)
+    }
+  }
+
+  function handleStop() {
+    abortRef.current?.abort()
+    setRunning(false)
+    onStatus('Batch upscale stopped')
+  }
+
+  return (
+    <div className="space-y-3">
+      {/* Input folder */}
+      <div>
+        <label className="text-xs text-muted block mb-1">Input folder</label>
+        <div className="flex gap-2">
+          <input
+            type="text"
+            value={inputFolder}
+            onChange={e => setInputFolder(e.target.value)}
+            placeholder="/Users/you/Pictures/originals"
+            className="flex-1 bg-card border border-border rounded-md px-3 py-1.5 text-xs text-white
+                       placeholder-muted focus:outline-none focus:border-accent transition-colors"
+          />
+          <button
+            onClick={() => pickFolder(setInputFolder, setPickingInput)}
+            disabled={pickingInput}
+            title="Browse for input folder"
+            aria-label="Browse for input folder"
+            className="px-2 py-1.5 rounded-md bg-card border border-border text-muted hover:text-white
+                       hover:border-accent transition-colors disabled:opacity-50 shrink-0"
+          >
+            <FolderOpen size={13} aria-hidden="true" />
+          </button>
+        </div>
+      </div>
+
+      {/* Output folder */}
+      <div>
+        <label className="text-xs text-muted block mb-1">Output folder <span className="opacity-50">(blank = same as input)</span></label>
+        <div className="flex gap-2">
+          <input
+            type="text"
+            value={outputFolder}
+            onChange={e => setOutputFolder(e.target.value)}
+            placeholder="/Users/you/Pictures/upscaled"
+            className="flex-1 bg-card border border-border rounded-md px-3 py-1.5 text-xs text-white
+                       placeholder-muted focus:outline-none focus:border-accent transition-colors"
+          />
+          <button
+            onClick={() => pickFolder(setOutputFolder, setPickingOutput)}
+            disabled={pickingOutput}
+            title="Browse for output folder"
+            aria-label="Browse for output folder"
+            className="px-2 py-1.5 rounded-md bg-card border border-border text-muted hover:text-white
+                       hover:border-accent transition-colors disabled:opacity-50 shrink-0"
+          >
+            <FolderOpen size={13} aria-hidden="true" />
+          </button>
+        </div>
+      </div>
+
+      {/* Scale selector */}
+      <div>
+        <label className="text-xs text-muted block mb-1">Scale</label>
+        <div className="flex gap-2">
+          {['×2', '×3', '×4'].map(s => (
+            <button
+              key={s}
+              onClick={() => setScale(s)}
+              className={`flex-1 py-1.5 rounded-md text-xs font-medium transition-colors
+                ${scale === s ? 'bg-accent text-white' : 'bg-card border border-border text-muted hover:text-white'}`}
+            >
+              {s}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Model hint when none loaded */}
+      {!modelPath && (
+        <p className="text-[10px] text-amber-400/80">⚠ Enable upscaling and upload a model above first.</p>
+      )}
+
+      {/* Run / Stop */}
+      {running ? (
+        <button
+          onClick={handleStop}
+          className="w-full py-2 rounded-lg bg-red-600/80 hover:bg-red-600 text-white text-xs font-medium
+                     flex items-center justify-center gap-2 transition-colors"
+        >
+          <Square size={12} /> Stop
+        </button>
+      ) : (
+        <button
+          onClick={handleRun}
+          disabled={!modelPath || !inputFolder.trim()}
+          className="w-full py-2 rounded-lg bg-accent hover:bg-accent/80 text-white text-xs font-medium
+                     flex items-center justify-center gap-2 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          <FolderInput size={13} /> Run Batch Upscale
+        </button>
+      )}
+
+      {/* Log */}
+      {log.length > 0 && (
+        <div
+          ref={logRef}
+          className="bg-bg border border-border rounded-md p-2 text-[10px] text-muted font-mono
+                     max-h-36 overflow-y-auto space-y-0.5"
+        >
+          {log.map((line, i) => (
+            <div key={i} className={line.includes('✓') ? 'text-green-400' : line.includes('✗') ? 'text-red-400' : ''}>
+              {line}
+            </div>
+          ))}
         </div>
       )}
     </div>
@@ -401,24 +603,27 @@ function WorkflowPanel({ workflows, params, onLoad, onRefresh, onImportComfyUI, 
 // ── Main Sidebar ──────────────────────────────────────────────────────────────
 
 interface SidebarProps {
-  params:            GenerateParams
-  models:            string[]
-  availableModels:   string[]
-  devices:           string[]
-  workflows:         string[]
-  isGenerating:      boolean
-  onParamChange:     (k: keyof GenerateParams, v: unknown) => void
-  onParamsChange:    (p: Partial<GenerateParams>) => void
-  onGenerate:        () => void
-  onStop:            () => void
-  onWorkflowLoad:    (wf: Record<string, unknown>) => void
-  onWorkflowRefresh: () => void
-  onStatus:          (msg: string) => void
+  params:               GenerateParams
+  models:               string[]
+  availableModels:      string[]
+  devices:              string[]
+  workflows:            string[]
+  isGenerating:         boolean
+  hasIteratableMasks:   boolean   // true when ≥1 ref slot has a mask → show Iterate button
+  onParamChange:        (k: keyof GenerateParams, v: unknown) => void
+  onParamsChange:       (p: Partial<GenerateParams>) => void
+  onGenerate:           () => void
+  onStop:               () => void
+  onIterate:            () => void
+  onWorkflowLoad:       (wf: Record<string, unknown>) => void
+  onWorkflowRefresh:    () => void
+  onStatus:             (msg: string) => void
 }
 
 export default function Sidebar({
   params, models, availableModels, devices, workflows, isGenerating,
-  onParamChange, onParamsChange, onGenerate, onStop,
+  hasIteratableMasks,
+  onParamChange, onParamsChange, onGenerate, onStop, onIterate,
   onWorkflowLoad, onWorkflowRefresh, onStatus,
 }: SidebarProps) {
   const isVideo = params.model_choice.includes('LTX-Video')
@@ -436,18 +641,18 @@ export default function Sidebar({
   }
 
   return (
-    <aside className="w-[576px] flex flex-col bg-surface border-r border-border overflow-y-auto shrink-0">
+    <aside aria-label="Generation controls" className="w-[576px] flex flex-col bg-surface border-r border-border overflow-y-auto shrink-0">
 
       {/* Prompt */}
       <div className="p-4 border-b border-border">
-        <label className="text-xs font-semibold text-muted uppercase tracking-wider block mb-2">Prompt</label>
+        <label className="text-xs font-semibold text-label uppercase tracking-wider block mb-2">Prompt</label>
         <textarea
           value={params.prompt}
           onChange={e => onParamChange('prompt', e.target.value)}
           rows={8}
           placeholder="Describe the image you want to generate…"
           className="w-full bg-card border border-border rounded-lg px-3 py-2.5 text-sm text-white
-                     placeholder-muted resize-none focus:outline-none focus:border-accent transition-colors"
+                     placeholder-muted resize-y min-h-[5rem] focus:outline-none focus:border-accent transition-colors"
         />
       </div>
 
@@ -468,8 +673,8 @@ export default function Sidebar({
         <NumberInput label="Seed (-1 = random)" value={params.seed} onChange={v => onParamChange('seed', v)} placeholder="-1" />
       </Accordion>
 
-      {/* Size */}
-      <Accordion label="Size" icon={<Layers size={13} />}>
+      {/* Output Size */}
+      <Accordion label="Output Size" icon={<Layers size={13} />}>
         <SizePanel params={params} onChange={(k, v) => onParamChange(k, v)} />
       </Accordion>
 
@@ -489,7 +694,15 @@ export default function Sidebar({
           enabled={params.upscale_enabled}
           modelPath={params.upscale_model_path}
           onChange={onParamChange}
+          onStatus={onStatus}
         />
+        <div className="border-t border-border pt-3 mt-1">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted mb-2">Batch folder upscale</p>
+          <BatchUpscalePanel
+            modelPath={params.upscale_model_path}
+            onStatus={onStatus}
+          />
+        </div>
       </Accordion>
 
       {/* Video */}
@@ -517,21 +730,28 @@ export default function Sidebar({
       {/* Spacer */}
       <div className="flex-1" />
 
-      {/* Generate button */}
+      {/* Generate / Iterate / Stop — single button that adapts to context */}
       <div className="p-4 border-t border-border">
         {isGenerating ? (
           <button onClick={onStop}
             className="w-full py-3 rounded-xl bg-red-600/80 hover:bg-red-600 text-white font-semibold text-sm transition-colors">
             Stop
           </button>
-        ) : (
-          <button onClick={onGenerate} disabled={!params.prompt.trim() || !params.model_choice}
-            className="w-full py-3 rounded-xl bg-accent hover:bg-accent/80 text-white font-semibold text-sm
-                       transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2">
-            <Play size={15} />
-            Generate
-          </button>
-        )}
+        ) : (() => {
+          // Rename to "Iterate Masks" only when Inpainting Pipeline mode is active AND masks exist
+          const useIterate = hasIteratableMasks && params.mask_mode === 'Inpainting Pipeline (Quality)'
+          return (
+            <button
+              onClick={useIterate ? onIterate : onGenerate}
+              disabled={!params.prompt.trim() || !params.model_choice}
+              className="w-full py-3 rounded-xl bg-accent hover:bg-accent/80 text-white font-semibold text-sm
+                         transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+            >
+              {useIterate ? <ListOrdered size={15} /> : <Play size={15} />}
+              {useIterate ? 'Iterate Masks' : 'Generate'}
+            </button>
+          )
+        })()}
       </div>
     </aside>
   )

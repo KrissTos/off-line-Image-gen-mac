@@ -1001,6 +1001,11 @@ def generate_image(
         yield None, None, f"{iter_label}Generating…"
 
         _t0 = time.perf_counter()
+        # Guard against UnboundLocalError: some conditional branches below may be
+        # skipped entirely (e.g. inpainting fallback when FluxInpaintPipeline is
+        # unavailable).  Initialise here so the post-try composite & save code is safe.
+        image        = None
+        video_frames = None
         try:
             with torch.inference_mode():
                 if current_model in ("flux2-klein-int8", "flux2-klein-sdnq", "flux2-klein-9b-sdnq"):

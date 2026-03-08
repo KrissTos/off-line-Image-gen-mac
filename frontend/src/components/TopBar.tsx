@@ -20,7 +20,7 @@ export default function TopBar({ status, onOpenSettings }: Props) {
       <div className="flex items-center gap-2">
         <Zap size={18} className="text-accent" />
         <span className="text-sm font-semibold text-white tracking-wide">
-          ultra-fast-image-gen
+          Local AI Image Gen
         </span>
       </div>
 
@@ -45,9 +45,10 @@ export default function TopBar({ status, onOpenSettings }: Props) {
         )}
         <button
           onClick={onOpenSettings}
+          aria-label="Settings"
           className="p-1.5 rounded-md text-muted hover:text-white hover:bg-card transition-colors"
         >
-          <Settings size={16} />
+          <Settings size={16} aria-hidden="true" />
         </button>
       </div>
     </header>

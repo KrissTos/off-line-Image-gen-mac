@@ -47,10 +47,11 @@ def _pil_to_data_url(img) -> str:
 
 def _save_output_image(img, output_dir: str, prompt: str, seed: int) -> str:
     """Save PIL image to output_dir, return the file path."""
-    import re
+    import re, datetime
     os.makedirs(output_dir, exist_ok=True)
     slug = re.sub(r"[^\w\s-]", "", (prompt or "image"))[:40].strip().replace(" ", "_")
-    ts   = time.strftime("%Y%m%d_%H%M%S")
+    # Use millisecond precision so repeat-count images within the same second get unique names
+    ts   = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:19]   # …_mmm
     filename = f"{ts}_{seed}_{slug}.png"
     path = os.path.join(output_dir, filename)
     img.save(path, "PNG")
@@ -181,7 +182,7 @@ class PipelineManager:
                 lora_strength     = float(params.get("lora_strength", 1.0)),
                 img_strength      = float(params.get("img_strength", 1.0)),
                 repeat_count      = int(params.get("repeat_count", 1)),
-                auto_save         = bool(params.get("auto_save", True)),
+                auto_save         = False,   # pipeline handles saving + sidecar; prevents double-save
                 output_dir        = params.get("output_dir", _app.DEFAULT_OUTPUT_DIR),
                 upscale_enabled   = bool(params.get("upscale_enabled", False)),
                 upscale_model_path= params.get("upscale_model_path", ""),
@@ -195,9 +196,13 @@ class PipelineManager:
             try:
                 for image, video, status in _app.generate_image(**kwargs):
                     if image is not None:
-                        # Save to disk; derive URL from filename
+                        # Save to disk; derive URL from filename.
+                        # app.py embeds the actual per-iteration seed in status ("Seed: 123456 | …"),
+                        # so parse it out for the filename instead of the original seed kwarg.
+                        import re as _re
                         out_dir  = kwargs["output_dir"]
-                        seed_val = kwargs["seed"]
+                        _sm = _re.search(r"Seed:\s*(\d+)", status or "")
+                        seed_val = int(_sm.group(1)) if _sm else kwargs["seed"]
                         fpath    = _save_output_image(
                             image, out_dir, kwargs["prompt"], seed_val
                         )
