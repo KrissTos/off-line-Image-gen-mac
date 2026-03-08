@@ -10,6 +10,7 @@ __pycache__/
 *.pt
 *.pth
 .DS_Store
+CLAUDE.md
 huggingface/
 *.env
 .env*
