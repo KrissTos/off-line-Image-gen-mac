@@ -25,13 +25,13 @@ export default function Gallery({ outputs, onSelect, onDelete }: Props) {
       onWheel={handleWheel}
       className="h-full border-t border-border bg-surface px-4 py-2 overflow-x-auto overflow-y-hidden"
     >
-      <div className="flex gap-2 h-full items-center pb-1">
+      <div className="flex gap-2 h-full items-center">
         {outputs.map((item) => (
           <button
             key={item.url}
             onClick={() => onSelect(item)}
             title={[item.name, item.prompt].filter(Boolean).join('\n')}
-            className="relative shrink-0 aspect-square h-[calc(100%-8px)] rounded-lg overflow-hidden border border-border
+            className="relative shrink-0 aspect-square h-full rounded-lg overflow-hidden border border-border
                        hover:border-accent transition-colors group"
           >
             {item.kind === 'video' ? (

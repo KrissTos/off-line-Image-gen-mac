@@ -143,25 +143,54 @@ function ModelSelector({ choices, available, value, device, devices, onChange }:
 
 // ── Size panel ────────────────────────────────────────────────────────────────
 
-const PRESETS = ['512×512', '768×512', '512×768', '1024×1024', '1024×576', '576×1024']
+type SizePreset = { label: string; w: number; h: number }
+
+const PRESETS_FLUX: SizePreset[] = [
+  { label: 'Square',    w: 512,  h: 512  },
+  { label: 'Landscape', w: 768,  h: 512  },
+  { label: 'Portrait',  w: 512,  h: 768  },
+  { label: 'Wide',      w: 896,  h: 512  },
+  { label: 'Tall',      w: 512,  h: 896  },
+  { label: 'HD Square', w: 1024, h: 1024 },
+]
+
+const PRESETS_ZIMAGE: SizePreset[] = [
+  { label: 'Square',    w: 512, h: 512 },
+  { label: 'Landscape', w: 768, h: 512 },
+  { label: 'Portrait',  w: 512, h: 768 },
+]
+
+const PRESETS_LTX: SizePreset[] = [
+  { label: 'Square',    w: 512, h: 512 },
+  { label: 'Landscape', w: 704, h: 480 },
+  { label: 'Portrait',  w: 480, h: 704 },
+  { label: 'Wide',      w: 768, h: 512 },
+]
+
+function presetsForModel(model: string): SizePreset[] {
+  if (model.includes('LTX'))     return PRESETS_LTX
+  if (model.includes('Z-Image')) return PRESETS_ZIMAGE
+  return PRESETS_FLUX
+}
 
 function SizePanel({ params, onChange }: { params: GenerateParams; onChange: (k: keyof GenerateParams, v: number) => void }) {
+  const presets = presetsForModel(params.model_choice)
   return (
     <div className="space-y-3">
-      <div className="grid grid-cols-2 gap-2">
-        {PRESETS.map(p => {
-          const [w, h] = p.split('×').map(Number)
-          const active = params.width === w && params.height === h
+      <div className="grid grid-cols-3 gap-2">
+        {presets.map(p => {
+          const active = params.width === p.w && params.height === p.h
           return (
             <button
-              key={p}
-              onClick={() => { onChange('width', w); onChange('height', h) }}
-              className={`py-1.5 rounded-md text-xs transition-colors
+              key={`${p.w}×${p.h}`}
+              onClick={() => { onChange('width', p.w); onChange('height', p.h) }}
+              className={`py-1.5 px-1 rounded-md text-center transition-colors flex flex-col items-center gap-0.5
                 ${active
                   ? 'bg-accent text-white'
                   : 'bg-card border border-border text-muted hover:text-white'}`}
             >
-              {p}
+              <span className="text-[11px] font-medium leading-none">{p.label}</span>
+              <span className={`text-[9px] leading-none ${active ? 'text-white/70' : 'text-muted/60'}`}>{p.w}×{p.h}</span>
             </button>
           )
         })}
