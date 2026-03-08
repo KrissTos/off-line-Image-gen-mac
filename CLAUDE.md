@@ -166,7 +166,7 @@ PYTORCH_MPS_HIGH_WATERMARK_RATIO = "0.0"
 HF_HUB_CACHE = "./models"
 ```
 Package manager: **`uv`** (not pip). Lock: `uv.lock`. Metadata: `pyproject.toml`.
-Key deps: `torch`, `transformers`, `diffusers` (git), `sdnq` (git), `gradio>=6.0`, `peft>=0.17`, `optimum-quanto>=0.2.7`, `fastapi>=0.115`, `uvicorn[standard]>=0.30`, `python-multipart>=0.0.12`, `aiofiles>=24.0`
+Key deps: `torch`, `transformers`, `diffusers` (git), `sdnq` (git), `gradio>=6.0`, `peft>=0.17`, `optimum-quanto>=0.2.7`, `fastapi>=0.115`, `uvicorn[standard]>=0.30`, `python-multipart>=0.0.12`, `aiofiles>=24.0`, `spandrel>=0.4.0` (upscaler)
 
 Tailwind tokens: `bg:#0a0a0a` · `surface:#141414` · `card:#1c1c1c` · `border:#2a2a2a` · `accent:#7c3aed` · `muted:#6b7280` · `label:#6b7280`
 
@@ -178,13 +178,13 @@ Tailwind tokens: `bg:#0a0a0a` · `surface:#141414` · `card:#1c1c1c` · `border:
 - **`slotsToParams()`**: single-pass only sends slot #1's mask; use Iterate Masks (Pipeline mode) for per-slot masks
 - **No CLIP loader** — text encoders are bundled per model, loaded at model-load time, not configurable per generation
 
-## Guidance scale per model
-| Model | guidance | Reason |
-|-------|----------|--------|
-| Z-Image Turbo (any) | **0** | Distilled — CFG not used; >0 hurts quality |
-| LTX-Video | **3.0** | |
-| FLUX.2 (all) | **3.5** | |
-`guidanceForModel(model)` helper in `App.tsx` auto-sets on model change and bootstrap.
+## Guidance scale + Steps per model
+| Model | guidance | steps | Reason |
+|-------|----------|-------|--------|
+| Z-Image Turbo (any) | **0** | **4** | Distilled — CFG not used; more steps hurt quality |
+| LTX-Video | **3.0** | **25** | |
+| FLUX.2 (all) | **3.5** | **20** | |
+`guidanceForModel(model)` and `stepsForModel(model)` helpers in `App.tsx` auto-set on model change and bootstrap.
 
 ## Implementation notes
 - `_save_output_image` uses `%H%M%S_%f` (ms precision) — prevents repeat-count filename collisions
@@ -193,6 +193,8 @@ Tailwind tokens: `bg:#0a0a0a` · `surface:#141414` · `card:#1c1c1c` · `border:
 - `GET /api/open-folder-dialog` — macOS folder picker via `asyncio.create_subprocess_exec` + osascript (async, not blocking)
 - `upscale_model_path` saved to `app_settings.json` on upload/clear; restored into params on bootstrap; handles old key `upscaler_model_path` too
 - `upscale_image()` tries requested device, falls back to CPU if MPS unsupported by spandrel; errors surfaced in info bar
+- **Upscale broken root cause**: `spandrel` was missing from `pyproject.toml` → `ModuleNotFoundError` silently caught; fixed by adding `spandrel>=0.4.0` dep
+- **GitHub Actions**: `.github/workflows/claude.yml` installed — `@claude` mentions in PRs/issues trigger Claude Code bot
 - Step progress: `generate_image()` `step_callback(step,total)` → diffusers `callback_on_step_end` on all 8 pipe calls → SSE `{step,total}` → Canvas `%` + bar
 - Auto-outpaint: `_prepare_outpaint(ref, w, h, align)` fires when ref dims ≠ output size and no explicit mask; `outpaint_align` param (9-pos); 3×3 picker in SizePanel when `hasRefImage`
 - Model-aware size presets: `presetsForModel()` in Sidebar; FLUX=6, Z-Image=3, LTX=4; 3-col grid with label+dims
