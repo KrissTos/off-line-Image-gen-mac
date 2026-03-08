@@ -63,6 +63,12 @@ function guidanceForModel(model: string): number {
   return 3.5
 }
 
+function stepsForModel(model: string): number {
+  if (model.includes('Z-Image')) return 4   // distilled — more steps hurt quality
+  if (model.includes('LTX-Video')) return 25
+  return 20  // FLUX.2 variants
+}
+
 export default function App() {
   const { state, dispatch } = useAppState()
   const abortRef    = useRef<AbortController | null>(null)
@@ -143,6 +149,7 @@ export default function App() {
       if (m) {
         dispatch({ type: 'SET_PARAM', key: 'model_choice', value: m })
         dispatch({ type: 'SET_PARAM', key: 'guidance', value: guidanceForModel(m) })
+        dispatch({ type: 'SET_PARAM', key: 'steps',    value: stepsForModel(m) })
       }
     }).catch(() => {})
 
@@ -419,6 +426,7 @@ export default function App() {
             dispatch({ type: 'SET_PARAM', key, value })
             if (key === 'model_choice') {
               dispatch({ type: 'SET_PARAM', key: 'guidance', value: guidanceForModel(String(value)) })
+              dispatch({ type: 'SET_PARAM', key: 'steps',    value: stepsForModel(String(value)) })
             }
           }}
           onParamsChange={(p) => dispatch({ type: 'SET_PARAMS', params: p })}
