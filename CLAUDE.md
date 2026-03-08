@@ -186,15 +186,13 @@ Tailwind tokens: `bg:#0a0a0a` · `surface:#141414` · `card:#1c1c1c` · `border:
 | FLUX.2 (all) | **3.5** | |
 `guidanceForModel(model)` helper in `App.tsx` auto-sets on model change and bootstrap.
 
-## Repeat-count filename fix (pipeline.py)
-`_save_output_image` uses `%H%M%S_%f` (ms precision) — prevents overwrites when Z-Image Turbo generates faster than 1 s/image. Also parses actual `current_seed` from app.py status string (`"Seed: 123456 | …"`).
-
-## API endpoints added
+## Implementation notes
+- `_save_output_image` uses `%H%M%S_%f` (ms precision) — prevents repeat-count filename collisions
 - `DELETE /api/output/{filename:path}` — deletes file + `.json` sidecar
-
-## Features added (this session)
-- **Step progress**: `generate_image()` takes `step_callback(step, total)`; diffusers `callback_on_step_end` wired to all 8 pipe calls; `pipeline.py` pushes `{step,total}` SSE events; Canvas shows `%` + progress bar
-- **Model-aware size presets**: 3-col grid in Sidebar, presets differ per model family (FLUX=6, Z-Image=3, LTX=4); label + pixel size shown per button
-- **Auto-outpaint**: when slot #1 image dimensions ≠ output size and no explicit mask, `_prepare_outpaint()` composites ref onto black canvas + auto-generates white extension mask; `outpaint_align` (9-position) controls anchor; UI shows 3×3 picker when ref image present
-- **Project restructure**: helper modules moved to `core/` (`lora_zimage`, `quantized_flux2`, `workflow_utils`); `.tmp_uploads/` added to `.gitignore`
-- **Gallery padding fix**: equal top/bottom spacing (removed asymmetric `pb-1`)
+- `GET /api/open-output-folder` — reveals output folder in Finder via `open <path>`
+- `GET /api/open-folder-dialog` — macOS folder picker via `asyncio.create_subprocess_exec` + osascript (async, not blocking)
+- `upscale_model_path` saved to `app_settings.json` on upload/clear; restored into params on bootstrap; handles old key `upscaler_model_path` too
+- `upscale_image()` tries requested device, falls back to CPU if MPS unsupported by spandrel; errors surfaced in info bar
+- Step progress: `generate_image()` `step_callback(step,total)` → diffusers `callback_on_step_end` on all 8 pipe calls → SSE `{step,total}` → Canvas `%` + bar
+- Auto-outpaint: `_prepare_outpaint(ref, w, h, align)` fires when ref dims ≠ output size and no explicit mask; `outpaint_align` param (9-pos); 3×3 picker in SizePanel when `hasRefImage`
+- Model-aware size presets: `presetsForModel()` in Sidebar; FLUX=6, Z-Image=3, LTX=4; 3-col grid with label+dims
