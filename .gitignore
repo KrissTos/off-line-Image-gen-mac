@@ -11,6 +11,10 @@ __pycache__/
 *.pth
 .DS_Store
 CLAUDE.md
+requirements.txt
+workflows/
+lora_uploads/
+upscale_models/
 huggingface/
 *.env
 .env*
