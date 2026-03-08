@@ -409,6 +409,7 @@ export default function App() {
           workflows={state.workflows}
           isGenerating={state.isGenerating}
           hasIteratableMasks={state.refSlots.some(s => !!s.maskId)}
+          hasRefImage={state.refSlots.length > 0 && !!state.refSlots[0]?.imageId}
           onParamChange={(key, value) => {
             dispatch({ type: 'SET_PARAM', key, value })
             if (key === 'model_choice') {

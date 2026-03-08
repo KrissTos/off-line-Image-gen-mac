@@ -180,6 +180,7 @@ class GenerateRequest(BaseModel):
     num_frames:         int   = 25
     fps:                int   = 24
     mask_mode:          str   = "Crop & Composite (Fast)"
+    outpaint_align:     str   = "center"
 
 
 class LoadModelRequest(BaseModel):

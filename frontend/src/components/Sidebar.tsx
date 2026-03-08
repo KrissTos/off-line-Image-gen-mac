@@ -173,7 +173,45 @@ function presetsForModel(model: string): SizePreset[] {
   return PRESETS_FLUX
 }
 
-function SizePanel({ params, onChange }: { params: GenerateParams; onChange: (k: keyof GenerateParams, v: number) => void }) {
+const ALIGN_GRID = [
+  'top-left',    'top',    'top-right',
+  'left',        'center', 'right',
+  'bottom-left', 'bottom', 'bottom-right',
+]
+
+function AlignPicker({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  return (
+    <div className="space-y-1">
+      <p className="text-[10px] text-label">Outpaint anchor</p>
+      <div className="grid grid-cols-3 gap-1 w-24">
+        {ALIGN_GRID.map(pos => {
+          const active = value === pos
+          return (
+            <button
+              key={pos}
+              title={pos.replace('-', ' ')}
+              onClick={() => onChange(pos)}
+              aria-label={`Anchor ${pos}`}
+              aria-pressed={active}
+              className={`h-7 rounded flex items-center justify-center transition-colors
+                ${active ? 'bg-accent' : 'bg-card border border-border hover:border-accent/60'}`}
+            >
+              <span className={`w-2 h-2 rounded-sm ${active ? 'bg-white' : 'bg-muted'}`} />
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+function SizePanel({
+  params, onChange, hasRefImage,
+}: {
+  params: GenerateParams
+  onChange: (k: keyof GenerateParams, v: unknown) => void
+  hasRefImage: boolean
+}) {
   const presets = presetsForModel(params.model_choice)
   return (
     <div className="space-y-3">
@@ -199,6 +237,12 @@ function SizePanel({ params, onChange }: { params: GenerateParams; onChange: (k:
         <NumberInput label="Width"  value={params.width}  onChange={v => onChange('width', v)} />
         <NumberInput label="Height" value={params.height} onChange={v => onChange('height', v)} />
       </div>
+      {hasRefImage && (
+        <AlignPicker
+          value={params.outpaint_align}
+          onChange={v => onChange('outpaint_align', v)}
+        />
+      )}
     </div>
   )
 }
@@ -639,6 +683,7 @@ interface SidebarProps {
   workflows:            string[]
   isGenerating:         boolean
   hasIteratableMasks:   boolean   // true when ≥1 ref slot has a mask → show Iterate button
+  hasRefImage:          boolean   // true when slot #1 has an image → show outpaint anchor
   onParamChange:        (k: keyof GenerateParams, v: unknown) => void
   onParamsChange:       (p: Partial<GenerateParams>) => void
   onGenerate:           () => void
@@ -651,7 +696,7 @@ interface SidebarProps {
 
 export default function Sidebar({
   params, models, availableModels, devices, workflows, isGenerating,
-  hasIteratableMasks,
+  hasIteratableMasks, hasRefImage,
   onParamChange, onParamsChange, onGenerate, onStop, onIterate,
   onWorkflowLoad, onWorkflowRefresh, onStatus,
 }: SidebarProps) {
@@ -704,7 +749,7 @@ export default function Sidebar({
 
       {/* Output Size */}
       <Accordion label="Output Size" icon={<Layers size={13} />}>
-        <SizePanel params={params} onChange={(k, v) => onParamChange(k, v)} />
+        <SizePanel params={params} onChange={onParamChange} hasRefImage={hasRefImage} />
       </Accordion>
 
       {/* LoRA */}

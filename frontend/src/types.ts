@@ -31,6 +31,7 @@ export interface GenerateParams {
   num_frames:         number
   fps:                number
   mask_mode:          string
+  outpaint_align:     string
 }
 
 /** One reference-image slot — image + optional per-slot mask, labeled #1/#2/… */

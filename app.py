@@ -382,6 +382,40 @@ def download_all_online_updates():
     return "\n".join(msgs), table, gr.update(choices=updatable, value=None)
 
 
+def _prepare_outpaint(ref_img, target_w, target_h, align="center"):
+    """
+    Composite ref_img onto a black canvas at (target_w × target_h).
+    Returns (canvas_image, mask_image):
+      canvas_image — ref pasted on black background
+      mask_image   — white where content must be generated, black where ref was placed
+    Align is one of: top-left, top, top-right, left, center, right,
+                     bottom-left, bottom, bottom-right
+    """
+    from PIL import Image, ImageDraw
+
+    rw, rh = ref_img.size
+    # Scale down if ref is larger than target (never upscale)
+    scale = min(target_w / rw, target_h / rh, 1.0)
+    if scale < 1.0:
+        rw = int(rw * scale)
+        rh = int(rh * scale)
+        ref_img = ref_img.resize((rw, rh), Image.LANCZOS)
+
+    parts = align.split("-")
+    x = 0 if "left" in parts else (target_w - rw if "right" in parts else (target_w - rw) // 2)
+    y = 0 if "top" in parts  else (target_h - rh if "bottom" in parts else (target_h - rh) // 2)
+
+    canvas = Image.new("RGB", (target_w, target_h), (0, 0, 0))
+    canvas.paste(ref_img, (x, y))
+
+    # Mask: white = generate, black = preserve original
+    mask = Image.new("L", (target_w, target_h), 255)
+    draw = ImageDraw.Draw(mask)
+    draw.rectangle([x, y, x + rw - 1, y + rh - 1], fill=0)
+
+    return canvas, mask
+
+
 def load_zimage_pipeline(device="mps", use_full_model=False):
     """Load Z-Image pipeline (quantized or full)."""
     import sdnq  # Required for quantized model
@@ -860,6 +894,7 @@ def generate_image(
     mask_mode="Crop & Composite (Fast)",
     progress=gr.Progress(track_tqdm=True),
     step_callback=None,
+    outpaint_align="center",
 ):
     global pipe, img2img_pipe, inpaint_pipe, video_pipe, current_video_device, model_source
 
@@ -909,6 +944,23 @@ def generate_image(
 
     # Pre-process reference images once — same size/mode for every iteration
     img_w, img_h = int(width), int(height)
+
+    # ── Auto-outpaint: if ref image aspect ratio ≠ output size and no explicit mask,
+    #    composite the ref onto a black canvas and auto-generate the extension mask.
+    if (input_images is not None and len(input_images) > 0
+            and mask_image is None and not is_video_model):
+        raw0 = input_images[0][0] if isinstance(input_images[0], tuple) else input_images[0]
+        rw, rh = raw0.size
+        # Only activate when there is actual size difference (>4px margin to avoid float rounding)
+        if abs(rw - img_w) > 4 or abs(rh - img_h) > 4:
+            canvas, auto_mask = _prepare_outpaint(raw0, img_w, img_h, outpaint_align)
+            # Replace slot #1 with the composited canvas; keep extra slots intact
+            rest = input_images[1:] if len(input_images) > 1 else []
+            input_images = [canvas] + rest
+            mask_image = auto_mask
+            mask_mode  = "Inpainting Pipeline (Quality)"
+            print(f"  Auto-outpaint: {rw}×{rh} → {img_w}×{img_h} (align={outpaint_align})")
+
     preprocessed_flux_refs  = None
     preprocessed_zimage_ref = None
     if input_images is not None and len(input_images) > 0:

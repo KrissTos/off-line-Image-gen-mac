@@ -190,6 +190,7 @@ class PipelineManager:
                 fps_val           = int(params.get("fps", 24)),
                 mask_image        = params.get("mask_image"),       # PIL or None
                 mask_mode         = params.get("mask_mode", "Crop & Composite (Fast)"),
+                outpaint_align    = params.get("outpaint_align", "center"),
                 progress          = _NoOpProgress(track_tqdm=True),
                 step_callback     = lambda s, t: asyncio.run_coroutine_threadsafe(
                     queue.put({"type": "progress", "message": f"Step {s}/{t}", "step": s, "total": t}),

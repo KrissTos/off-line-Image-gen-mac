@@ -53,6 +53,7 @@ const DEFAULT_PARAMS: GenerateParams = {
   num_frames:         25,
   fps:                24,
   mask_mode:          'Crop & Composite (Fast)',
+  outpaint_align:     'center',
 }
 
 export const initialState: State = {
