@@ -477,6 +477,7 @@ export default function App() {
               slots={state.refSlots}
               maskMode={state.params.mask_mode}
               onAddSlots={handleAddRefSlots}
+              onAddSlotDirect={(imageId, imageUrl) => dispatch({ type: 'ADD_REF_SLOT', imageId, imageUrl })}
               onRemoveSlot={handleRemoveRefSlot}
               onUploadMask={handleUploadSlotMask}
               onClearMask={handleClearSlotMask}

@@ -1,6 +1,8 @@
 import { useRef, useState, useEffect, useCallback } from 'react'
 import { UploadCloud, X, Plus, Pencil } from 'lucide-react'
 import type { RefImageSlot, GenerateParams } from '../types'
+import { uploadFromUrl } from '../api'
+import HelpTip from './HelpTip'
 
 // ── MaskEditorModal ────────────────────────────────────────────────────────────
 
@@ -375,7 +377,10 @@ function SlotCard({ slot, isBase, thumbSize, onRemove, onUploadMask, onClearMask
       {/* Per-slot strength slider */}
       <div style={{ width: thumbSize + maskSize + 6 }}>
         <div className="flex justify-between mb-0.5">
-          <label htmlFor={`slot-strength-${slot.slotId}`} className="text-[9px] text-muted">strength</label>
+          <label htmlFor={`slot-strength-${slot.slotId}`} className="text-[9px] text-muted flex items-center gap-0.5">
+            strength
+            <HelpTip text="How strongly this reference image blends into the output. Slot #1 is the base image — lower values preserve more of the original." />
+          </label>
           <span className="text-[9px] text-white" aria-hidden="true">{slot.strength.toFixed(2)}</span>
         </div>
         <input
@@ -396,6 +401,7 @@ interface Props {
   slots:                RefImageSlot[]
   maskMode:             string
   onAddSlots:           (files: File[]) => void
+  onAddSlotDirect?:     (imageId: string, imageUrl: string) => void
   onRemoveSlot:         (slotId: number) => void
   onUploadMask:         (slotId: number, file: File) => void
   onClearMask:          (slotId: number) => void
@@ -405,12 +411,36 @@ interface Props {
 
 export default function RefImagesRow({
   slots, maskMode,
-  onAddSlots, onRemoveSlot, onUploadMask, onClearMask,
+  onAddSlots, onAddSlotDirect, onRemoveSlot, onUploadMask, onClearMask,
   onSlotStrengthChange, onParamChange,
 }: Props) {
   const addRef = useRef<HTMLInputElement>(null)
   const [maskEditorSlot, setMaskEditorSlot] = useState<RefImageSlot | null>(null)
   const [thumbSize, setThumbSize] = useState(80)
+  const [dragOverNew, setDragOverNew] = useState(false)
+
+  async function handleRefDrop(e: React.DragEvent) {
+    e.preventDefault()
+    setDragOverNew(false)
+
+    // File drop (from OS)
+    const file = e.dataTransfer.files[0]
+    if (file) {
+      onAddSlots([file])
+      return
+    }
+
+    // Gallery drag (URL string)
+    const srcUrl = e.dataTransfer.getData('text/plain')
+    if (srcUrl && onAddSlotDirect) {
+      try {
+        const { id, url } = await uploadFromUrl(srcUrl)
+        onAddSlotDirect(id, url)
+      } catch (err) {
+        console.error('Drop upload failed', err)
+      }
+    }
+  }
 
   // The base image is always slot #1 — all masks are drawn on it
   const baseImageUrl = slots[0]?.imageUrl ?? ''
@@ -432,14 +462,20 @@ export default function RefImagesRow({
 
         <div className="flex items-start gap-3 overflow-x-auto pb-1">
 
-          {/* Add ref button */}
+          {/* Add ref button — also a drop zone for gallery drag */}
           <button
             onClick={() => addRef.current?.click()}
-            title="Add reference image"
+            title="Add reference image (or drop from gallery)"
             style={{ width: thumbSize, height: thumbSize }}
-            className="shrink-0 flex flex-col items-center justify-center rounded-lg
-                       border border-dashed border-border text-muted mt-0
-                       hover:border-accent hover:text-white transition-colors gap-1"
+            onDragOver={e => { e.preventDefault(); setDragOverNew(true) }}
+            onDragLeave={() => setDragOverNew(false)}
+            onDrop={handleRefDrop}
+            className={`shrink-0 flex flex-col items-center justify-center rounded-lg
+                       border border-dashed text-muted mt-0
+                       hover:border-accent hover:text-white transition-colors gap-1
+                       ${dragOverNew
+                         ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/10 text-white'
+                         : 'border-border'}`}
           >
             <Plus size={16} />
             <span className="text-[9px] leading-none">ref img</span>
@@ -474,7 +510,10 @@ export default function RefImagesRow({
           {/* Mask-mode dropdown (only when any slot has a mask) */}
           {slots.some(s => s.maskUrl) && (
             <div className="shrink-0 flex flex-col gap-1 pl-2 border-l border-border ml-1 min-w-[140px] pt-0.5">
-              <span className="text-[10px] text-muted block mb-0.5">Mask mode</span>
+              <span className="text-[10px] text-muted flex items-center gap-1 mb-0.5">
+                Mask mode
+                <HelpTip text="Controls how the drawn mask is applied during inpainting. Use Iterate Masks mode for applying different masks from different reference slots." />
+              </span>
               <select
                 value={maskMode}
                 onChange={e => onParamChange('mask_mode', e.target.value)}
