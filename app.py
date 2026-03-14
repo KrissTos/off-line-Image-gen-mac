@@ -684,45 +684,53 @@ def load_pipeline(model_choice: str, device: str = "mps"):
 
 
 def load_lora(lora_file, lora_strength: float, device: str):
-    """Load or update LoRA adapter (Z-Image full model only)."""
+    """Load or update LoRA adapter. Supports Z-Image Full and all FLUX.2-klein models."""
     global current_lora_path, pipe
-    
-    if current_model != "zimage-full":
-        return "LoRA only supported with Z-Image Full model"
-    
+
+    is_flux   = current_model is not None and current_model.startswith("flux2")
+    is_zimage = current_model is not None and current_model == "zimage-full"
+
+    if not is_flux and not is_zimage:
+        return "LoRA requires FLUX.2-klein or Z-Image Full model"
+
     if lora_file is None or lora_file == "":
         if current_lora_path is not None:
-            print("Unloading current LoRA...")
-            pipe.unload_lora_weights()
+            if is_flux:
+                from core.lora_flux2 import unload_lora as _flux_unload
+                _flux_unload(pipe)
+            else:
+                pipe.unload_lora_weights()
             current_lora_path = None
         return "No LoRA loaded"
-    
+
     lora_path = lora_file if isinstance(lora_file, str) else lora_file.name
-    
+
     if not os.path.exists(lora_path):
         return f"LoRA file not found: {lora_path}"
-    
+
     if not lora_path.endswith('.safetensors'):
-        return "Please select a .safetensors file"
-    
-    if current_lora_path == lora_path:
-        pipe.set_adapters(["default"], adapter_weights=[lora_strength])
-        return f"Updated LoRA strength to {lora_strength}"
-    
-    if current_lora_path is not None:
-        print(f"Unloading previous LoRA: {current_lora_path}")
-        pipe.unload_lora_weights()
-    
-    try:
+        return "Only .safetensors LoRA files are supported"
+
+    if is_flux:
+        from core.lora_flux2 import load_lora as _flux_load_lora
+        try:
+            status = _flux_load_lora(pipe, lora_path, lora_strength)
+            current_lora_path = lora_path
+            return status
+        except RuntimeError as e:
+            return f"LoRA error: {e}"
+    else:
+        # Original Z-Image path
+        if current_lora_path == lora_path:
+            pipe.set_adapters(["default"], adapter_weights=[lora_strength])
+            return f"Updated LoRA strength to {lora_strength}"
+        if current_lora_path is not None:
+            pipe.unload_lora_weights()
         lora_name = os.path.basename(lora_path)
-        print(f"Loading LoRA: {lora_path}")
         pipe.load_lora_weights(lora_path, adapter_name="default")
         pipe.set_adapters(["default"], adapter_weights=[lora_strength])
         current_lora_path = lora_path
-        return f"Loaded LoRA: {lora_name} (strength={lora_strength})"
-    except Exception as e:
-        current_lora_path = None
-        return f"Error loading LoRA: {str(e)}"
+        return f"Loaded LoRA: {lora_name} (strength {lora_strength})"
 
 
 def update_lora_strength(strength: float):
@@ -906,6 +914,9 @@ def generate_image(
     progress=gr.Progress(track_tqdm=True),
     step_callback=None,
     outpaint_align="center",
+    ip_adapter_images: list | None = None,
+    ip_adapter_scales: list | None = None,
+    ip_adapter_enabled: bool = False,
 ):
     global pipe, img2img_pipe, inpaint_pipe, video_pipe, current_video_device, model_source
 
@@ -1082,6 +1093,13 @@ def generate_image(
         video_frames = None
         try:
             with torch.inference_mode():
+                # IP-Adapter conditioning
+                _ipa_active = bool(ip_adapter_enabled and ip_adapter_images)
+                if _ipa_active:
+                    from core.ip_adapter_flux import set_scale as _ipa_set_scale
+                    _scales = ip_adapter_scales or [0.6] * len(ip_adapter_images)
+                    _ipa_set_scale(pipe, _scales)
+
                 if current_model in ("flux2-klein-int8", "flux2-klein-sdnq", "flux2-klein-9b-sdnq"):
                     # ── FLUX inpainting pipeline (mask + full-image quality mode) ──
                     if (has_mask and mask_full is not None
@@ -1103,6 +1121,7 @@ def generate_image(
                                 guidance_scale=float(guidance),
                                 generator=generator,
                                 callback_on_step_end=_cb,
+                                **({"ip_adapter_image": ip_adapter_images} if _ipa_active else {}),
                             ).images[0]
                             mode = "inpainting (FLUX)"
                             video_frames = None
@@ -1147,6 +1166,7 @@ def generate_image(
                             guidance_scale=float(guidance),
                             generator=generator,
                             callback_on_step_end=_cb,
+                            **({"ip_adapter_image": ip_adapter_images} if _ipa_active else {}),
                         ).images[0]
                         mode = "txt2img"
                         video_frames = None

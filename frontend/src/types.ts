@@ -32,6 +32,9 @@ export interface GenerateParams {
   fps:                number
   mask_mode:          string
   outpaint_align:     string
+  ip_adapter_image_ids: string[]
+  ip_adapter_scales:    number[]
+  ip_adapter_enabled:   boolean
 }
 
 /** One reference-image slot — image + optional per-slot mask, labeled #1/#2/… */
@@ -63,4 +66,18 @@ export interface OutputItem {
 
 export interface Workflow {
   name: string
+}
+
+/** One IP-Adapter reference image slot */
+export interface IpAdapterSlot {
+  slotId:   number       // 1-based
+  imageId:  string       // temp upload id
+  imageUrl: string       // preview URL
+  scale:    number       // per-image strength (0–1)
+}
+
+/** Status of IP-Adapter weights on disk / in pipeline */
+export interface IpAdapterStatus {
+  downloaded:  boolean
+  loaded:      boolean
 }

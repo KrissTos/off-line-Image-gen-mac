@@ -179,6 +179,47 @@ export const updateSettings = (settings: Record<string, unknown>) =>
 export const fetchStorage = () =>
   get<{ models: { name: string; size: string; choice: string }[]; summary: string }>('/api/storage')
 
+// ── IP-Adapter ────────────────────────────────────────────────────────────────
+
+export const fetchIpAdapterStatus = () =>
+  get<{ downloaded: boolean; loaded: boolean }>('/api/ip-adapter/status')
+
+export const deleteIpAdapter = () =>
+  del<{ status: string }>('/api/ip-adapter')
+
+/**
+ * Stream IP-Adapter weight download progress via SSE.
+ */
+export async function streamIpAdapterDownload(
+  onEvent: (e: { type: string; pct?: number; message?: string }) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const r = await fetch('/api/ip-adapter/download', { method: 'POST', signal })
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({ detail: r.statusText }))
+    throw new Error(err.detail ?? `Download failed: ${r.status}`)
+  }
+  const reader  = r.body!.getReader()
+  const decoder = new TextDecoder()
+  let   buf     = ''
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buf += decoder.decode(value, { stream: true })
+    const lines = buf.split('\n')
+    buf = lines.pop() ?? ''
+    for (const line of lines) {
+      if (line.startsWith('data: ')) {
+        try {
+          const ev = JSON.parse(line.slice(6))
+          onEvent(ev)
+          if (ev.type === 'done' || ev.type === 'error') return
+        } catch { /* ignore malformed */ }
+      }
+    }
+  }
+}
+
 // ── Generation SSE ────────────────────────────────────────────────────────────
 
 /**

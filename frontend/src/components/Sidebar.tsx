@@ -1,11 +1,14 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import {
   ChevronDown, ChevronRight, Play, Square,
   Layers, Sliders, Video, UploadCloud, X, Workflow, Cpu,
   Wand2, ArrowUpCircle, FolderInput, ListOrdered, FolderOpen,
 } from 'lucide-react'
-import type { GenerateParams } from '../types'
-import { importComfyUI, loadWorkflow, saveWorkflow, uploadLora, uploadUpscaleModel, streamBatchUpscale, openFolderDialog, updateSettings } from '../api'
+import type { GenerateParams, IpAdapterSlot, IpAdapterStatus } from '../types'
+import type { Action } from '../store'
+import { importComfyUI, loadWorkflow, saveWorkflow, uploadLora, uploadUpscaleModel, streamBatchUpscale, openFolderDialog, updateSettings, fetchIpAdapterStatus } from '../api'
+import IpAdapterPanel from './IpAdapterPanel'
+import HelpTip from './HelpTip'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -33,16 +36,18 @@ function Accordion({ label, icon, children, defaultOpen = false }: AccordionProp
 }
 
 function Slider({
-  label, value, min, max, step = 1, onChange, unit = '',
+  label, value, min, max, step = 1, onChange, unit = '', helpTip,
 }: {
   label: string; value: number; min: number; max: number
-  step?: number; onChange: (v: number) => void; unit?: string
+  step?: number; onChange: (v: number) => void; unit?: string; helpTip?: React.ReactNode
 }) {
   const id = `slider-${label.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '')}`
   return (
     <div>
       <div className="flex justify-between mb-1">
-        <label htmlFor={id} className="text-xs text-muted">{label}</label>
+        <label htmlFor={id} className="text-xs text-muted flex items-center gap-1">
+          {label}{helpTip}
+        </label>
         <span className="text-xs text-white" aria-hidden="true">{value}{unit}</span>
       </div>
       <input
@@ -57,13 +62,13 @@ function Slider({
 }
 
 function NumberInput({
-  label, value, onChange, placeholder = '',
+  label, value, onChange, placeholder = '', helpTip,
 }: {
-  label: string; value: number; onChange: (v: number) => void; placeholder?: string
+  label: string; value: number; onChange: (v: number) => void; placeholder?: string; helpTip?: React.ReactNode
 }) {
   return (
     <div>
-      <label className="text-xs text-muted block mb-1">{label}</label>
+      <label className="text-xs text-muted flex items-center gap-1 mb-1">{label}{helpTip}</label>
       <input
         type="number" value={value === -1 ? '' : value} placeholder={placeholder}
         onChange={e => onChange(e.target.value === '' ? -1 : Number(e.target.value))}
@@ -304,7 +309,8 @@ function LoraPanel({ loraFile, strength, onChange, onStatus }: LoraPanelProps) {
         onChange={e => { if (e.target.files?.[0]) handleUpload(e.target.files[0]) }} />
 
       <Slider label="LoRA strength" value={strength} min={0} max={2} step={0.05}
-        onChange={v => onChange('lora_strength', v)} />
+        onChange={v => onChange('lora_strength', v)}
+        helpTip={<HelpTip text="How strongly the LoRA style is applied. 0 = no effect, 1 = full strength. Values above 1 are possible but may cause artifacts." />} />
     </div>
   )
 }
@@ -686,6 +692,10 @@ interface SidebarProps {
   isGenerating:         boolean
   hasIteratableMasks:   boolean   // true when ≥1 ref slot has a mask → show Iterate button
   hasRefImage:          boolean   // true when slot #1 has an image → show outpaint anchor
+  ipAdapterSlots:       IpAdapterSlot[]
+  ipAdapterEnabled:     boolean
+  ipAdapterStatus:      IpAdapterStatus | null
+  dispatch:             (a: Action) => void
   onParamChange:        (k: keyof GenerateParams, v: unknown) => void
   onParamsChange:       (p: Partial<GenerateParams>) => void
   onGenerate:           () => void
@@ -699,10 +709,19 @@ interface SidebarProps {
 export default function Sidebar({
   params, models, availableModels, devices, workflows, isGenerating,
   hasIteratableMasks, hasRefImage,
+  ipAdapterSlots, ipAdapterEnabled, ipAdapterStatus, dispatch,
   onParamChange, onParamsChange, onGenerate, onStop, onIterate,
   onWorkflowLoad, onWorkflowRefresh, onStatus,
 }: SidebarProps) {
-  const isVideo = params.model_choice.includes('LTX-Video')
+  const isVideo    = params.model_choice.includes('LTX-Video')
+  const isFlux     = params.model_choice.toLowerCase().includes('flux')
+  const isZImageFull = params.model_choice.includes('Z-Image') && params.model_choice.includes('Full')
+
+  useEffect(() => {
+    fetchIpAdapterStatus()
+      .then(s => dispatch({ type: 'SET_IPA_STATUS', status: s }))
+      .catch(() => {})
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   function handleImportComfyUI(wf: Record<string, unknown>) {
     const p: Partial<GenerateParams> = {}
@@ -743,10 +762,14 @@ export default function Sidebar({
 
       {/* Params */}
       <Accordion label="Parameters" icon={<Sliders size={13} />} defaultOpen>
-        <Slider label="Steps"    value={params.steps}    min={1}   max={50}  onChange={v => onParamChange('steps', v)} />
-        <Slider label="Guidance" value={params.guidance} min={0}   max={20}  step={0.5} onChange={v => onParamChange('guidance', v)} />
-        <Slider label="Repeat"   value={params.repeat_count} min={1} max={8} onChange={v => onParamChange('repeat_count', v)} />
-        <NumberInput label="Seed (-1 = random)" value={params.seed} onChange={v => onParamChange('seed', v)} placeholder="-1" />
+        <Slider label="Steps"    value={params.steps}    min={1}   max={50}  onChange={v => onParamChange('steps', v)}
+          helpTip={<HelpTip text="Denoising iterations. More steps = more detail but slower. FLUX.2: 20, Z-Image Turbo: 4, LTX-Video: 25. Going beyond the recommended value rarely helps." />} />
+        <Slider label="Guidance" value={params.guidance} min={0}   max={20}  step={0.5} onChange={v => onParamChange('guidance', v)}
+          helpTip={<HelpTip text="How strictly the model follows your prompt. Lower = more creative, higher = more literal. Z-Image Turbo always uses 0 (distilled model)." />} />
+        <Slider label="Repeat"   value={params.repeat_count} min={1} max={8} onChange={v => onParamChange('repeat_count', v)}
+          helpTip={<HelpTip text="Generate N images in sequence with the same settings (different seeds if seed is -1). Each result is saved individually." />} />
+        <NumberInput label="Seed (-1 = random)" value={params.seed} onChange={v => onParamChange('seed', v)} placeholder="-1"
+          helpTip={<HelpTip text="Random seed. -1 = new random seed each time. Set a fixed number to reproduce the same image with different settings." />} />
       </Accordion>
 
       {/* Output Size */}
@@ -755,12 +778,30 @@ export default function Sidebar({
       </Accordion>
 
       {/* LoRA */}
-      <Accordion label="LoRA" icon={<Wand2 size={13} />}>
-        <LoraPanel
-          loraFile={params.lora_file}
-          strength={params.lora_strength}
-          onChange={onParamChange}
-          onStatus={onStatus}
+      {(isZImageFull || isFlux) && (
+        <Accordion label="LoRA" icon={<Wand2 size={13} />}>
+          <LoraPanel
+            loraFile={params.lora_file}
+            strength={params.lora_strength}
+            onChange={onParamChange}
+            onStatus={onStatus}
+          />
+          {isFlux && !isZImageFull && (
+            <p className="text-[11px] text-[var(--color-muted)] flex items-start gap-1 mt-1">
+              <HelpTip text="LoRAs trained for standard FLUX.1 may not be compatible with FLUX.2-klein. If loading fails, try a LoRA trained specifically for FLUX.2-klein." position="right" />
+              <span>FLUX.2-klein LoRA compatibility varies by trainer.</span>
+            </p>
+          )}
+        </Accordion>
+      )}
+
+      {/* IP-Adapter */}
+      <Accordion label="IP-Adapter" icon={<Cpu size={13} />}>
+        <IpAdapterPanel
+          slots={ipAdapterSlots}
+          enabled={ipAdapterEnabled}
+          status={ipAdapterStatus}
+          dispatch={dispatch}
         />
       </Accordion>
 

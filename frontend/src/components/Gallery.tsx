@@ -27,19 +27,33 @@ export default function Gallery({ outputs, onSelect, onDelete }: Props) {
     >
       <div className="flex gap-2 h-full items-center">
         {outputs.map((item) => (
-          <button
+          <div
             key={item.url}
-            onClick={() => onSelect(item)}
             title={[item.name, item.prompt].filter(Boolean).join('\n')}
+            draggable={item.kind !== 'video'}
+            onDragStart={e => {
+              e.dataTransfer.setData('text/plain', item.url)
+              e.dataTransfer.effectAllowed = 'copy'
+            }}
+            onClick={() => onSelect(item)}
+            role="button"
+            tabIndex={0}
+            onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') onSelect(item) }}
+            aria-label={item.prompt ? item.prompt.slice(0, 120) : (item.name || 'Generated image')}
             className="relative shrink-0 aspect-square h-full rounded-lg overflow-hidden border border-border
-                       hover:border-accent transition-colors group"
+                       hover:border-accent transition-colors group cursor-grab active:cursor-grabbing"
           >
             {item.kind === 'video' ? (
               <div className="w-full h-full bg-card flex items-center justify-center">
                 <Film size={18} className="text-muted" />
               </div>
             ) : (
-              <img src={item.url} alt={item.prompt ? item.prompt.slice(0, 120) : (item.name || 'Generated image')} className="w-full h-full object-cover" />
+              <img
+                src={item.url}
+                alt={item.prompt ? item.prompt.slice(0, 120) : (item.name || 'Generated image')}
+                className="w-full h-full object-cover hover:opacity-80 transition-opacity"
+                draggable={false}
+              />
             )}
 
             {/* Delete button */}
@@ -59,7 +73,7 @@ export default function Gallery({ outputs, onSelect, onDelete }: Props) {
                 {item.prompt}
               </div>
             )}
-          </button>
+          </div>
         ))}
       </div>
     </div>
