@@ -18,3 +18,4 @@ upscale_models/
 huggingface/
 *.env
 .env*
+.worktrees/
