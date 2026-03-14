@@ -835,6 +835,47 @@ async def api_storage():
     return {"models": normalized, "summary": summary}
 
 
+def _fmt_bytes(n: int) -> str:
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024:
+            return f"{n:.1f} {unit}"
+        n /= 1024
+    return f"{n:.1f} TB"
+
+
+@app.get("/api/models/extras")
+async def api_models_extras():
+    """Return info about non-HF-cache models: upscale files and IP-Adapter weights."""
+    from core.ip_adapter_flux import IP_ADAPTER_FILE
+
+    upscale_exts = {".pth", ".safetensors", ".ckpt", ".pt", ".bin"}
+    upscale_dir  = ROOT / "upscale_models"
+    upscale_list = []
+    if upscale_dir.exists():
+        for f in sorted(upscale_dir.iterdir()):
+            if f.is_file() and f.suffix.lower() in upscale_exts:
+                upscale_list.append({"name": f.name, "size": _fmt_bytes(f.stat().st_size)})
+
+    ipa: dict = {"downloaded": IP_ADAPTER_FILE.exists(), "size": None}
+    if IP_ADAPTER_FILE.exists():
+        ipa["size"] = _fmt_bytes(IP_ADAPTER_FILE.stat().st_size)
+
+    return {"upscale_models": upscale_list, "ip_adapter": ipa}
+
+
+@app.delete("/api/upscale/{filename:path}")
+async def api_delete_upscale(filename: str):
+    """Delete an upscale model file from disk."""
+    target = (ROOT / "upscale_models" / Path(filename).name).resolve()
+    # Safety: must stay inside upscale_models/
+    if not str(target).startswith(str((ROOT / "upscale_models").resolve())):
+        raise HTTPException(400, "Invalid path")
+    if not target.exists():
+        raise HTTPException(404, "File not found")
+    target.unlink()
+    return {"status": "deleted"}
+
+
 # ── Routes: HuggingFace auth ──────────────────────────────────────────────────
 
 class HFLoginRequest(BaseModel):

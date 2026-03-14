@@ -187,6 +187,14 @@ export const fetchIpAdapterStatus = () =>
 export const deleteIpAdapter = () =>
   del<{ status: string }>('/api/ip-adapter')
 
+export type ModelExtras = {
+  upscale_models: { name: string; size: string }[]
+  ip_adapter:     { downloaded: boolean; size: string | null }
+}
+export const fetchModelExtras  = () => get<ModelExtras>('/api/models/extras')
+export const deleteUpscaleModel = (filename: string) =>
+  del<{ status: string }>(`/api/upscale/${encodeURIComponent(filename)}`)
+
 /**
  * Stream IP-Adapter weight download progress via SSE.
  */
