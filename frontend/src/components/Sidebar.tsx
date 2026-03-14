@@ -1,11 +1,14 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import {
   ChevronDown, ChevronRight, Play, Square,
   Layers, Sliders, Video, UploadCloud, X, Workflow, Cpu,
   Wand2, ArrowUpCircle, FolderInput, ListOrdered, FolderOpen,
 } from 'lucide-react'
-import type { GenerateParams } from '../types'
-import { importComfyUI, loadWorkflow, saveWorkflow, uploadLora, uploadUpscaleModel, streamBatchUpscale, openFolderDialog, updateSettings } from '../api'
+import type { GenerateParams, IpAdapterSlot, IpAdapterStatus } from '../types'
+import type { Action } from '../store'
+import { importComfyUI, loadWorkflow, saveWorkflow, uploadLora, uploadUpscaleModel, streamBatchUpscale, openFolderDialog, updateSettings, fetchIpAdapterStatus } from '../api'
+import IpAdapterPanel from './IpAdapterPanel'
+import HelpTip from './HelpTip'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -686,6 +689,10 @@ interface SidebarProps {
   isGenerating:         boolean
   hasIteratableMasks:   boolean   // true when ≥1 ref slot has a mask → show Iterate button
   hasRefImage:          boolean   // true when slot #1 has an image → show outpaint anchor
+  ipAdapterSlots:       IpAdapterSlot[]
+  ipAdapterEnabled:     boolean
+  ipAdapterStatus:      IpAdapterStatus | null
+  dispatch:             (a: Action) => void
   onParamChange:        (k: keyof GenerateParams, v: unknown) => void
   onParamsChange:       (p: Partial<GenerateParams>) => void
   onGenerate:           () => void
@@ -699,10 +706,19 @@ interface SidebarProps {
 export default function Sidebar({
   params, models, availableModels, devices, workflows, isGenerating,
   hasIteratableMasks, hasRefImage,
+  ipAdapterSlots, ipAdapterEnabled, ipAdapterStatus, dispatch,
   onParamChange, onParamsChange, onGenerate, onStop, onIterate,
   onWorkflowLoad, onWorkflowRefresh, onStatus,
 }: SidebarProps) {
-  const isVideo = params.model_choice.includes('LTX-Video')
+  const isVideo    = params.model_choice.includes('LTX-Video')
+  const isFlux     = params.model_choice.toLowerCase().includes('flux')
+  const isZImageFull = params.model_choice.includes('Z-Image') && params.model_choice.includes('Full')
+
+  useEffect(() => {
+    fetchIpAdapterStatus()
+      .then(s => dispatch({ type: 'SET_IPA_STATUS', status: s }))
+      .catch(() => {})
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   function handleImportComfyUI(wf: Record<string, unknown>) {
     const p: Partial<GenerateParams> = {}
@@ -755,12 +771,30 @@ export default function Sidebar({
       </Accordion>
 
       {/* LoRA */}
-      <Accordion label="LoRA" icon={<Wand2 size={13} />}>
-        <LoraPanel
-          loraFile={params.lora_file}
-          strength={params.lora_strength}
-          onChange={onParamChange}
-          onStatus={onStatus}
+      {(isZImageFull || isFlux) && (
+        <Accordion label="LoRA" icon={<Wand2 size={13} />}>
+          <LoraPanel
+            loraFile={params.lora_file}
+            strength={params.lora_strength}
+            onChange={onParamChange}
+            onStatus={onStatus}
+          />
+          {isFlux && !isZImageFull && (
+            <p className="text-[11px] text-[var(--color-muted)] flex items-start gap-1 mt-1">
+              <HelpTip text="LoRAs trained for standard FLUX.1 may not be compatible with FLUX.2-klein. If loading fails, try a LoRA trained specifically for FLUX.2-klein." position="right" />
+              <span>FLUX.2-klein LoRA compatibility varies by trainer.</span>
+            </p>
+          )}
+        </Accordion>
+      )}
+
+      {/* IP-Adapter */}
+      <Accordion label="IP-Adapter" icon={<Cpu size={13} />}>
+        <IpAdapterPanel
+          slots={ipAdapterSlots}
+          enabled={ipAdapterEnabled}
+          status={ipAdapterStatus}
+          dispatch={dispatch}
         />
       </Accordion>
 

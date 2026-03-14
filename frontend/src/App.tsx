@@ -4,7 +4,7 @@ import type { GenerateParams, SSEEvent, OutputItem } from './types'
 import {
   fetchStatus, fetchModels, fetchDevices, fetchWorkflows,
   fetchOutputs, uploadImage, uploadFromUrl, streamGenerate, pingServer,
-  fetchSettings, deleteOutput,
+  fetchSettings, deleteOutput, fetchIpAdapterStatus,
 } from './api'
 
 function hexToRgbVar(hex: string): string {
@@ -170,6 +170,10 @@ export default function App() {
         dispatch({ type: 'SET_PARAM', key: 'upscale_model_path', value: savedModel })
       }
     }).catch(() => {})
+
+    fetchIpAdapterStatus()
+      .then(s => dispatch({ type: 'SET_IPA_STATUS', status: s }))
+      .catch(() => {})
 
     refreshWorkflows()
     refreshOutputs()
@@ -422,6 +426,10 @@ export default function App() {
           isGenerating={state.isGenerating}
           hasIteratableMasks={state.refSlots.some(s => !!s.maskId)}
           hasRefImage={state.refSlots.length > 0 && !!state.refSlots[0]?.imageId}
+          ipAdapterSlots={state.ipAdapterSlots}
+          ipAdapterEnabled={state.ipAdapterEnabled}
+          ipAdapterStatus={state.ipAdapterStatus}
+          dispatch={dispatch}
           onParamChange={(key, value) => {
             dispatch({ type: 'SET_PARAM', key, value })
             if (key === 'model_choice') {
