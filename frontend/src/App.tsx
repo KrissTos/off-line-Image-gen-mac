@@ -422,6 +422,11 @@ export default function App() {
           isGenerating={state.isGenerating}
           hasIteratableMasks={state.refSlots.some(s => !!s.maskId)}
           hasRefImage={state.refSlots.length > 0 && !!state.refSlots[0]?.imageId}
+          refImageSize={
+            state.refSlots[0]?.w && state.refSlots[0]?.h
+              ? { w: state.refSlots[0].w, h: state.refSlots[0].h }
+              : undefined
+          }
           onParamChange={(key, value) => {
             dispatch({ type: 'SET_PARAM', key, value })
             if (key === 'model_choice') {

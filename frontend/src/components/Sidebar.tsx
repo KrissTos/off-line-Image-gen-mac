@@ -176,6 +176,10 @@ function presetsForModel(model: string): SizePreset[] {
   return PRESETS_FLUX
 }
 
+function snapTo64(n: number): number {
+  return Math.max(64, Math.round(n / 64) * 64)
+}
+
 const ALIGN_GRID = [
   'top-left',    'top',    'top-right',
   'left',        'center', 'right',
@@ -209,11 +213,12 @@ function AlignPicker({ value, onChange }: { value: string; onChange: (v: string)
 }
 
 function SizePanel({
-  params, onChange, hasRefImage,
+  params, onChange, hasRefImage, refImageSize,
 }: {
   params: GenerateParams
   onChange: (k: keyof GenerateParams, v: unknown) => void
   hasRefImage: boolean
+  refImageSize?: { w: number; h: number }
 }) {
   const presets = presetsForModel(params.model_choice)
   return (
@@ -236,9 +241,22 @@ function SizePanel({
           )
         })}
       </div>
-      <div className="flex gap-2">
+      <div className="flex gap-2 items-end">
         <NumberInput label="Width"  value={params.width}  onChange={v => onChange('width', v)} />
         <NumberInput label="Height" value={params.height} onChange={v => onChange('height', v)} />
+        {refImageSize && (
+          <button
+            title={`Set to ref image size (${refImageSize.w}×${refImageSize.h} → snapped to 64)`}
+            onClick={() => {
+              onChange('width',  snapTo64(refImageSize.w))
+              onChange('height', snapTo64(refImageSize.h))
+            }}
+            className="shrink-0 mb-[1px] px-2 py-1 rounded bg-card border border-border text-[10px] text-muted
+                       hover:text-white hover:border-accent transition-colors whitespace-nowrap"
+          >
+            ↕ ref size
+          </button>
+        )}
       </div>
       {hasRefImage && (
         <AlignPicker
@@ -688,8 +706,9 @@ interface SidebarProps {
   devices:              string[]
   workflows:            string[]
   isGenerating:         boolean
-  hasIteratableMasks:   boolean   // true when ≥1 ref slot has a mask → show Iterate button
-  hasRefImage:          boolean   // true when slot #1 has an image → show outpaint anchor
+  hasIteratableMasks:   boolean                    // true when ≥1 ref slot has a mask → show Iterate button
+  hasRefImage:          boolean                    // true when slot #1 has an image → show outpaint anchor
+  refImageSize?:        { w: number; h: number }   // slot #1 natural dims for "Use ref size" button
   onParamChange:        (k: keyof GenerateParams, v: unknown) => void
   onParamsChange:       (p: Partial<GenerateParams>) => void
   onGenerate:           () => void
@@ -702,7 +721,7 @@ interface SidebarProps {
 
 export default function Sidebar({
   params, models, availableModels, devices, workflows, isGenerating,
-  hasIteratableMasks, hasRefImage,
+  hasIteratableMasks, hasRefImage, refImageSize,
   onParamChange, onParamsChange, onGenerate, onStop, onIterate,
   onWorkflowLoad, onWorkflowRefresh, onStatus,
 }: SidebarProps) {
@@ -761,7 +780,7 @@ export default function Sidebar({
 
       {/* Output Size */}
       <Accordion label="Output Size" icon={<Layers size={13} />}>
-        <SizePanel params={params} onChange={onParamChange} hasRefImage={hasRefImage} />
+        <SizePanel params={params} onChange={onParamChange} hasRefImage={hasRefImage} refImageSize={refImageSize} />
       </Accordion>
 
       {/* LoRA */}
@@ -825,7 +844,14 @@ export default function Sidebar({
       <div className="flex-1" />
 
       {/* Generate / Iterate / Stop — single button that adapts to context */}
-      <div className="p-4 border-t border-border">
+      <div className="p-4 border-t border-border space-y-2">
+        {params.model_choice.startsWith('FLUX') &&
+         params.mask_mode === 'Inpainting Pipeline (Quality)' && (
+          <p className="text-[10px] text-amber-400/70 bg-amber-900/20 border border-amber-800/30
+                        rounded px-2 py-1 leading-tight">
+            ⚠ Inpainting Pipeline unavailable for FLUX.2-klein — will use img2img
+          </p>
+        )}
         {isGenerating ? (
           <button onClick={onStop}
             className="w-full py-3 rounded-xl bg-red-600/80 hover:bg-red-600 text-white font-semibold text-sm transition-colors">
