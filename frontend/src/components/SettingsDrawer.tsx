@@ -6,7 +6,7 @@ import { useState, useEffect, useCallback } from 'react'
 import {
   fetchStorage, fetchSettings, updateSettings, fetchModels, deleteModel,
   checkModelUpdates, updateModel, openFolderDialog, openOutputFolder,
-  fetchModelExtras, deleteUpscaleModel, deleteIpAdapter,
+  fetchModelExtras, deleteUpscaleModel,
   type ModelUpdateResult, type ModelExtras,
 } from '../api'
 import { applyThemeColors } from '../App'
@@ -43,10 +43,9 @@ export default function SettingsDrawer({ open, onClose }: Props) {
   const [updateResults, setUpdateResults]     = useState<ModelUpdateResult[] | null>(null)
   const [checkingUpdates, setCheckingUpdates] = useState(false)
   const [updatingModel, setUpdatingModel]     = useState<string | null>(null)
-  // Extra models (upscale + IP-Adapter)
+  // Extra models (upscale)
   const [extras, setExtras]                   = useState<ModelExtras | null>(null)
   const [deletingUpscale, setDeletingUpscale] = useState<string | null>(null)
-  const [deletingIpa, setDeletingIpa]         = useState(false)
   // Theme colors
   const DEFAULT_THEME: Record<string, string> = {
     bg: '#0a0a0a', surface: '#141414', card: '#1c1c1c',
@@ -178,20 +177,6 @@ export default function SettingsDrawer({ open, onClose }: Props) {
       setStatusMsg(`Delete failed: ${(e as Error).message}`)
     } finally {
       setDeletingUpscale(null)
-    }
-  }
-
-  async function handleDeleteIpa() {
-    setDeletingIpa(true)
-    try {
-      await deleteIpAdapter()
-      const e = await fetchModelExtras()
-      setExtras(e)
-      await fetchStorage().then(setStorage).catch(() => {})
-    } catch (e: unknown) {
-      setStatusMsg(`Delete failed: ${(e as Error).message}`)
-    } finally {
-      setDeletingIpa(false)
     }
   }
 
@@ -506,41 +491,13 @@ export default function SettingsDrawer({ open, onClose }: Props) {
             </section>
           )}
 
-          {/* ── Other Models (upscale + IP-Adapter) ── */}
-          {extras && (extras.upscale_models.length > 0 || extras.ip_adapter) && (
+          {/* ── Other Models (upscale) ── */}
+          {extras && extras.upscale_models.length > 0 && (
             <section>
               <h3 className="text-xs font-semibold uppercase tracking-wider text-label mb-3 flex items-center gap-1.5">
                 <HardDrive size={13} /> Other Models
               </h3>
               <div className="space-y-2">
-
-                {/* IP-Adapter */}
-                {extras.ip_adapter && (
-                  <div className={`rounded-md border text-xs px-3 py-2.5 transition-colors
-                    ${extras.ip_adapter.downloaded ? 'bg-card border-border' : 'bg-bg border-border/50 opacity-60'}`}>
-                    <div className="flex items-start justify-between gap-2">
-                      <span className={`leading-snug ${extras.ip_adapter.downloaded ? 'text-white' : 'text-muted'}`}>
-                        IP-Adapter (InstantX FLUX)
-                      </span>
-                      <span className={`shrink-0 flex items-center gap-1 mt-0.5 ${extras.ip_adapter.downloaded ? 'text-green-400' : 'text-muted/50'}`}>
-                        {extras.ip_adapter.downloaded
-                          ? <><CheckCircle2 size={11} /> downloaded</>
-                          : <><Download size={11} /> not downloaded</>}
-                      </span>
-                    </div>
-                    {extras.ip_adapter.downloaded && (
-                      <div className="flex items-center justify-between mt-2 pt-2 border-t border-border/50">
-                        <span className="text-muted">{extras.ip_adapter.size}</span>
-                        <button onClick={handleDeleteIpa} disabled={deletingIpa}
-                          title="Delete IP-Adapter weights from disk"
-                          className="flex items-center gap-1 text-muted hover:text-red-400 transition-colors disabled:opacity-40">
-                          {deletingIpa ? <RefreshCw size={12} className="animate-spin" /> : <Trash2 size={12} />}
-                          <span>{deletingIpa ? 'Deleting…' : 'Delete'}</span>
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                )}
 
                 {/* Upscale models */}
                 {extras.upscale_models.map(m => (
