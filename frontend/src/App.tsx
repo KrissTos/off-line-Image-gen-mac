@@ -468,12 +468,14 @@ export default function App() {
             <RefImagesRow
               slots={state.refSlots}
               maskMode={state.params.mask_mode}
+              modelChoice={state.params.model_choice}
               onAddSlots={handleAddRefSlots}
               onAddSlotDirect={(imageId, imageUrl) => dispatch({ type: 'ADD_REF_SLOT', imageId, imageUrl })}
               onRemoveSlot={handleRemoveRefSlot}
               onUploadMask={handleUploadSlotMask}
               onClearMask={handleClearSlotMask}
               onSlotStrengthChange={handleSlotStrengthChange}
+              onSlotDimsLoaded={(slotId, w, h) => dispatch({ type: 'SET_SLOT_DIMS', slotId, w, h })}
               onParamChange={(k, v) => dispatch({ type: 'SET_PARAM', key: k, value: v })}
             />
           </div>

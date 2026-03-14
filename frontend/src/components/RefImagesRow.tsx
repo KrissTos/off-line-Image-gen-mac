@@ -409,19 +409,21 @@ function SlotCard({ slot, isBase, thumbSize, onRemove, onUploadMask, onClearMask
 interface Props {
   slots:                RefImageSlot[]
   maskMode:             string
+  modelChoice:          string
   onAddSlots:           (files: File[]) => void
   onAddSlotDirect?:     (imageId: string, imageUrl: string) => void
   onRemoveSlot:         (slotId: number) => void
   onUploadMask:         (slotId: number, file: File) => void
   onClearMask:          (slotId: number) => void
   onSlotStrengthChange: (slotId: number, strength: number) => void
+  onSlotDimsLoaded?:    (slotId: number, w: number, h: number) => void
   onParamChange:        (k: keyof GenerateParams, v: unknown) => void
 }
 
 export default function RefImagesRow({
-  slots, maskMode,
+  slots, maskMode, modelChoice,
   onAddSlots, onAddSlotDirect, onRemoveSlot, onUploadMask, onClearMask,
-  onSlotStrengthChange, onParamChange,
+  onSlotStrengthChange, onSlotDimsLoaded, onParamChange,
 }: Props) {
   const addRef = useRef<HTMLInputElement>(null)
   const [maskEditorSlot, setMaskEditorSlot] = useState<RefImageSlot | null>(null)
@@ -513,6 +515,7 @@ export default function RefImagesRow({
               onClearMask={() => onClearMask(slot.slotId)}
               onDrawMask={() => setMaskEditorSlot(slot)}
               onStrengthChange={v => onSlotStrengthChange(slot.slotId, v)}
+              onDimsLoaded={(w, h) => onSlotDimsLoaded?.(slot.slotId, w, h)}
             />
           ))}
 
@@ -536,6 +539,12 @@ export default function RefImagesRow({
                 <p className="text-[9px] text-teal-400/70 leading-tight mt-1">
                   {slots.filter(s => s.maskUrl).length} masks → use<br />
                   <strong>Iterate Masks</strong> button
+                </p>
+              )}
+              {modelChoice.startsWith('FLUX') && maskMode === 'Inpainting Pipeline (Quality)' && (
+                <p className="text-[9px] text-amber-400/80 bg-amber-900/20 border border-amber-800/30
+                              rounded px-1.5 py-1 leading-tight mt-1">
+                  ⓘ FLUX.2-klein doesn't support inpainting — will use img2img instead
                 </p>
               )}
             </div>
