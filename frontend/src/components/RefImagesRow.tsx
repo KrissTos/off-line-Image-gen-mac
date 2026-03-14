@@ -280,9 +280,10 @@ interface SlotCardProps {
   onClearMask:      () => void
   onDrawMask:       () => void
   onStrengthChange: (v: number) => void
+  onDimsLoaded?:    (w: number, h: number) => void
 }
 
-function SlotCard({ slot, isBase, thumbSize, onRemove, onUploadMask, onClearMask, onDrawMask, onStrengthChange }: SlotCardProps) {
+function SlotCard({ slot, isBase, thumbSize, onRemove, onUploadMask, onClearMask, onDrawMask, onStrengthChange, onDimsLoaded }: SlotCardProps) {
   const maskRef  = useRef<HTMLInputElement>(null)
   const maskSize = Math.round(thumbSize * 0.7)
 
@@ -295,7 +296,15 @@ function SlotCard({ slot, isBase, thumbSize, onRemove, onUploadMask, onClearMask
           className="relative rounded-lg overflow-hidden border border-border group"
           style={{ width: thumbSize, height: thumbSize }}
         >
-          <img src={slot.imageUrl} alt={`ref #${slot.slotId}`} className="w-full h-full object-cover" />
+          <img
+            src={slot.imageUrl}
+            alt={`ref #${slot.slotId}`}
+            className="w-full h-full object-cover"
+            onLoad={e => {
+              const img = e.currentTarget
+              onDimsLoaded?.(img.naturalWidth, img.naturalHeight)
+            }}
+          />
 
           {/* Slot role badge */}
           <div className={`absolute top-1 left-1 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-full shadow
