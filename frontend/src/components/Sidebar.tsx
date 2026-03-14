@@ -1,13 +1,11 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef } from 'react'
 import {
   ChevronDown, ChevronRight, Play, Square,
   Layers, Sliders, Video, UploadCloud, X, Workflow, Cpu,
   Wand2, ArrowUpCircle, FolderInput, ListOrdered, FolderOpen,
 } from 'lucide-react'
-import type { GenerateParams, IpAdapterSlot, IpAdapterStatus } from '../types'
-import type { Action } from '../store'
-import { importComfyUI, loadWorkflow, saveWorkflow, uploadLora, uploadUpscaleModel, streamBatchUpscale, openFolderDialog, updateSettings, fetchIpAdapterStatus } from '../api'
-import IpAdapterPanel from './IpAdapterPanel'
+import type { GenerateParams } from '../types'
+import { importComfyUI, loadWorkflow, saveWorkflow, uploadLora, uploadUpscaleModel, streamBatchUpscale, openFolderDialog, updateSettings } from '../api'
 import HelpTip from './HelpTip'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -692,10 +690,6 @@ interface SidebarProps {
   isGenerating:         boolean
   hasIteratableMasks:   boolean   // true when ≥1 ref slot has a mask → show Iterate button
   hasRefImage:          boolean   // true when slot #1 has an image → show outpaint anchor
-  ipAdapterSlots:       IpAdapterSlot[]
-  ipAdapterEnabled:     boolean
-  ipAdapterStatus:      IpAdapterStatus | null
-  dispatch:             (a: Action) => void
   onParamChange:        (k: keyof GenerateParams, v: unknown) => void
   onParamsChange:       (p: Partial<GenerateParams>) => void
   onGenerate:           () => void
@@ -709,19 +703,12 @@ interface SidebarProps {
 export default function Sidebar({
   params, models, availableModels, devices, workflows, isGenerating,
   hasIteratableMasks, hasRefImage,
-  ipAdapterSlots, ipAdapterEnabled, ipAdapterStatus, dispatch,
   onParamChange, onParamsChange, onGenerate, onStop, onIterate,
   onWorkflowLoad, onWorkflowRefresh, onStatus,
 }: SidebarProps) {
   const isVideo    = params.model_choice.includes('LTX-Video')
   const isFlux     = params.model_choice.toLowerCase().includes('flux')
   const isZImageFull = params.model_choice.includes('Z-Image') && params.model_choice.includes('Full')
-
-  useEffect(() => {
-    fetchIpAdapterStatus()
-      .then(s => dispatch({ type: 'SET_IPA_STATUS', status: s }))
-      .catch(() => {})
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   function handleImportComfyUI(wf: Record<string, unknown>) {
     const p: Partial<GenerateParams> = {}
@@ -794,16 +781,6 @@ export default function Sidebar({
           )}
         </Accordion>
       )}
-
-      {/* IP-Adapter */}
-      <Accordion label="IP-Adapter" icon={<Cpu size={13} />}>
-        <IpAdapterPanel
-          slots={ipAdapterSlots}
-          enabled={ipAdapterEnabled}
-          status={ipAdapterStatus}
-          dispatch={dispatch}
-        />
-      </Accordion>
 
       {/* Upscale */}
       <Accordion label="Upscale" icon={<ArrowUpCircle size={13} />}>
