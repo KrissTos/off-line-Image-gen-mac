@@ -42,6 +42,8 @@ export interface RefImageSlot {
   maskId:   string | null // temp upload id for mask
   maskUrl:  string | null // preview URL for mask
   strength: number        // per-slot inpaint strength (0–1); also drives img_strength for slot #1
+  w?:       number        // natural image width (populated on thumbnail load)
+  h?:       number        // natural image height
 }
 
 export type SSEEvent =

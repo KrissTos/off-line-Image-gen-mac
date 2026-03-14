@@ -100,6 +100,7 @@ export type Action =
   | { type: 'CLEAR_SLOT_MASK';      slotId: number }
   | { type: 'CLEAR_ALL_SLOTS' }
   | { type: 'UPDATE_SLOT_STRENGTH'; slotId: number; strength: number }
+  | { type: 'SET_SLOT_DIMS';        slotId: number; w: number; h: number }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -218,6 +219,13 @@ function reducer(state: State, action: Action): State {
       // Slot #1's strength drives the global img_strength for single-pass generate
       const extra = action.slotId === 1 ? { img_strength: action.strength } : {}
       return { ...state, refSlots: slots, params: { ...state.params, ...extra } }
+    }
+
+    case 'SET_SLOT_DIMS': {
+      const slots = state.refSlots.map(s =>
+        s.slotId === action.slotId ? { ...s, w: action.w, h: action.h } : s
+      )
+      return { ...state, refSlots: slots }
     }
 
     default:
