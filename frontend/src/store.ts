@@ -1,5 +1,5 @@
 import { useReducer } from 'react'
-import type { GenerateParams, OutputItem, AppStatus, RefImageSlot, IpAdapterSlot, IpAdapterStatus } from './types'
+import type { GenerateParams, OutputItem, AppStatus, RefImageSlot } from './types'
 
 // ── State ─────────────────────────────────────────────────────────────────────
 
@@ -25,10 +25,6 @@ export interface State {
   resultInfo: string | undefined
   // Reference image slots (#1, #2, …)
   refSlots: RefImageSlot[]
-  // IP-Adapter
-  ipAdapterSlots:   IpAdapterSlot[]
-  ipAdapterEnabled: boolean
-  ipAdapterStatus:  IpAdapterStatus | null
   // UI state
   settingsOpen: boolean
   error: string | null
@@ -58,9 +54,6 @@ const DEFAULT_PARAMS: GenerateParams = {
   fps:                24,
   mask_mode:          'Crop & Composite (Fast)',
   outpaint_align:     'center',
-  ip_adapter_image_ids: [],
-  ip_adapter_scales:    [],
-  ip_adapter_enabled:   false,
 }
 
 export const initialState: State = {
@@ -78,9 +71,6 @@ export const initialState: State = {
   resultUrl:       null,
   resultInfo:      undefined,
   refSlots:        [],
-  ipAdapterSlots:   [],
-  ipAdapterEnabled: false,
-  ipAdapterStatus:  null,
   settingsOpen:    false,
   error:           null,
 }
@@ -110,12 +100,6 @@ export type Action =
   | { type: 'CLEAR_SLOT_MASK';      slotId: number }
   | { type: 'CLEAR_ALL_SLOTS' }
   | { type: 'UPDATE_SLOT_STRENGTH'; slotId: number; strength: number }
-  | { type: 'ADD_IPA_SLOT';     imageId: string; imageUrl: string }
-  | { type: 'REMOVE_IPA_SLOT';  slotId: number }
-  | { type: 'UPDATE_IPA_SCALE'; slotId: number; scale: number }
-  | { type: 'CLEAR_IPA_SLOTS' }
-  | { type: 'TOGGLE_IPA' }
-  | { type: 'SET_IPA_STATUS';   status: IpAdapterStatus }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -124,15 +108,6 @@ function slotsToParams(slots: RefImageSlot[]): Pick<GenerateParams, 'input_image
   return {
     input_image_ids: slots.map(s => s.imageId),
     mask_image_id:   slots[0]?.maskId ?? null,   // first slot's mask as primary mask
-  }
-}
-
-function ipaSlotsToParams(slots: IpAdapterSlot[], enabled: boolean):
-  Pick<GenerateParams, 'ip_adapter_image_ids' | 'ip_adapter_scales' | 'ip_adapter_enabled'> {
-  return {
-    ip_adapter_image_ids: slots.map(s => s.imageId),
-    ip_adapter_scales:    slots.map(s => s.scale),
-    ip_adapter_enabled:   enabled && slots.length > 0,
   }
 }
 
@@ -244,47 +219,6 @@ function reducer(state: State, action: Action): State {
       const extra = action.slotId === 1 ? { img_strength: action.strength } : {}
       return { ...state, refSlots: slots, params: { ...state.params, ...extra } }
     }
-
-    case 'ADD_IPA_SLOT': {
-      if (state.ipAdapterSlots.length >= 3) return state
-      const slot: IpAdapterSlot = {
-        slotId:   state.ipAdapterSlots.length + 1,
-        imageId:  action.imageId,
-        imageUrl: action.imageUrl,
-        scale:    0.6,
-      }
-      const slots = [...state.ipAdapterSlots, slot]
-      return { ...state, ipAdapterSlots: slots,
-        params: { ...state.params, ...ipaSlotsToParams(slots, state.ipAdapterEnabled) } }
-    }
-
-    case 'REMOVE_IPA_SLOT': {
-      const slots = state.ipAdapterSlots
-        .filter(s => s.slotId !== action.slotId)
-        .map((s, i) => ({ ...s, slotId: i + 1 }))
-      return { ...state, ipAdapterSlots: slots,
-        params: { ...state.params, ...ipaSlotsToParams(slots, state.ipAdapterEnabled) } }
-    }
-
-    case 'UPDATE_IPA_SCALE': {
-      const slots = state.ipAdapterSlots.map(s =>
-        s.slotId === action.slotId ? { ...s, scale: action.scale } : s)
-      return { ...state, ipAdapterSlots: slots,
-        params: { ...state.params, ...ipaSlotsToParams(slots, state.ipAdapterEnabled) } }
-    }
-
-    case 'CLEAR_IPA_SLOTS':
-      return { ...state, ipAdapterSlots: [],
-        params: { ...state.params, ...ipaSlotsToParams([], state.ipAdapterEnabled) } }
-
-    case 'TOGGLE_IPA': {
-      const enabled = !state.ipAdapterEnabled
-      return { ...state, ipAdapterEnabled: enabled,
-        params: { ...state.params, ...ipaSlotsToParams(state.ipAdapterSlots, enabled) } }
-    }
-
-    case 'SET_IPA_STATUS':
-      return { ...state, ipAdapterStatus: action.status }
 
     default:
       return state
