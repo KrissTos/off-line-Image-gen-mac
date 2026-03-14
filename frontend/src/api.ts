@@ -186,7 +186,6 @@ export const fetchModelExtras  = () => get<ModelExtras>('/api/models/extras')
 export const deleteUpscaleModel = (filename: string) =>
   del<{ status: string }>(`/api/upscale/${encodeURIComponent(filename)}`)
 
-
 // ── Generation SSE ────────────────────────────────────────────────────────────
 
 /**
