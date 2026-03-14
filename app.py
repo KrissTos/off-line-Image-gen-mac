@@ -1091,33 +1091,13 @@ def generate_image(
         try:
             with torch.inference_mode():
                 if current_model in ("flux2-klein-int8", "flux2-klein-sdnq", "flux2-klein-9b-sdnq"):
-                    # ── FLUX inpainting pipeline (mask + full-image quality mode) ──
+                    # ── FLUX inpainting: FluxInpaintPipeline is incompatible with
+                    #    Flux2KleinPipeline (different transformer/vae types), so fall
+                    #    straight through to img2img for masked generations.
                     if (has_mask and mask_full is not None
                             and "Inpainting" in (mask_mode or "")
                             and ref_full is not None):
-                        try:
-                            from diffusers import FluxInpaintPipeline
-                            if inpaint_pipe is None:
-                                print("  Creating FluxInpaintPipeline (shared weights, one-time cost)...")
-                                inpaint_pipe = FluxInpaintPipeline.from_pipe(pipe)
-                            image = inpaint_pipe(
-                                prompt=prompt,
-                                image=ref_full,
-                                mask_image=mask_full,
-                                strength=float(img_strength),
-                                height=img_h,
-                                width=img_w,
-                                num_inference_steps=int(steps),
-                                guidance_scale=float(guidance),
-                                generator=generator,
-                                callback_on_step_end=_cb,
-                            ).images[0]
-                            mode = "inpainting (FLUX)"
-                            video_frames = None
-                        except Exception as _e:
-                            print(f"  FluxInpaintPipeline unavailable ({_e}) — falling back to img2img")
-                            # Fall through to normal img2img below
-                            preprocessed_flux_refs = preprocessed_flux_refs or [ref_full]
+                        preprocessed_flux_refs = preprocessed_flux_refs or [ref_full]
 
                     # ── FLUX img2img (reference images, incl. masked-crop mode) ──
                     if (not (has_mask and "Inpainting" in (mask_mode or ""))
