@@ -914,9 +914,6 @@ def generate_image(
     progress=gr.Progress(track_tqdm=True),
     step_callback=None,
     outpaint_align="center",
-    ip_adapter_images: list | None = None,
-    ip_adapter_scales: list | None = None,
-    ip_adapter_enabled: bool = False,
 ):
     global pipe, img2img_pipe, inpaint_pipe, video_pipe, current_video_device, model_source
 
@@ -1093,13 +1090,6 @@ def generate_image(
         video_frames = None
         try:
             with torch.inference_mode():
-                # IP-Adapter conditioning
-                _ipa_active = bool(ip_adapter_enabled and ip_adapter_images)
-                if _ipa_active:
-                    from core.ip_adapter_flux import set_scale as _ipa_set_scale
-                    _scales = ip_adapter_scales or [0.6] * len(ip_adapter_images)
-                    _ipa_set_scale(pipe, _scales)
-
                 if current_model in ("flux2-klein-int8", "flux2-klein-sdnq", "flux2-klein-9b-sdnq"):
                     # ── FLUX inpainting pipeline (mask + full-image quality mode) ──
                     if (has_mask and mask_full is not None
@@ -1121,7 +1111,6 @@ def generate_image(
                                 guidance_scale=float(guidance),
                                 generator=generator,
                                 callback_on_step_end=_cb,
-                                **({"ip_adapter_image": ip_adapter_images} if _ipa_active else {}),
                             ).images[0]
                             mode = "inpainting (FLUX)"
                             video_frames = None
@@ -1166,7 +1155,6 @@ def generate_image(
                             guidance_scale=float(guidance),
                             generator=generator,
                             callback_on_step_end=_cb,
-                            **({"ip_adapter_image": ip_adapter_images} if _ipa_active else {}),
                         ).images[0]
                         mode = "txt2img"
                         video_frames = None

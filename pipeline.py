@@ -191,9 +191,6 @@ class PipelineManager:
                 mask_image        = params.get("mask_image"),       # PIL or None
                 mask_mode         = params.get("mask_mode", "Crop & Composite (Fast)"),
                 outpaint_align    = params.get("outpaint_align", "center"),
-                ip_adapter_images = params.get("ip_adapter_images"),
-                ip_adapter_scales = params.get("ip_adapter_scales"),
-                ip_adapter_enabled= params.get("ip_adapter_enabled", False),
                 progress          = _NoOpProgress(track_tqdm=True),
                 step_callback     = lambda s, t: asyncio.run_coroutine_threadsafe(
                     queue.put({"type": "progress", "message": f"Step {s}/{t}", "step": s, "total": t}),

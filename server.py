@@ -155,16 +155,6 @@ def _wu():
     from core.workflow_utils import load_any_workflow, get_locally_available_models
     return load_any_workflow, get_locally_available_models
 
-from core.ip_adapter_flux import (
-    is_downloaded        as ipa_is_downloaded,
-    load_ip_adapter      as ipa_load,
-    unload_ip_adapter    as ipa_unload,
-    set_scale            as ipa_set_scale,
-    download             as ipa_download,
-)
-
-_ipa_loaded: bool = False   # tracks whether IP-Adapter is injected into current pipe
-
 # ── Pydantic models ───────────────────────────────────────────────────────────
 
 class GenerateRequest(BaseModel):
@@ -191,10 +181,6 @@ class GenerateRequest(BaseModel):
     fps:                int   = 24
     mask_mode:          str   = "Crop & Composite (Fast)"
     outpaint_align:     str   = "center"
-    ip_adapter_image_ids: list[str] = Field(default_factory=list)
-    ip_adapter_scales:    list[float] = Field(default_factory=list)
-    ip_adapter_enabled:   bool = False
-
 
 class LoadModelRequest(BaseModel):
     model_choice: str
@@ -293,9 +279,7 @@ async def api_models():
 
 @app.post("/api/models/load")
 async def api_load_model(req: LoadModelRequest):
-    global _ipa_loaded
     status = await _mgr().load_model(req.model_choice, req.device)
-    _ipa_loaded = False  # IP-Adapter must be re-injected into new pipeline
     return {"status": status}
 
 
@@ -439,23 +423,10 @@ async def api_generate(req: GenerateRequest):
         except Exception:
             pass
 
-    # IP-Adapter reference images
-    ip_adapter_images = None
-    if req.ip_adapter_enabled and req.ip_adapter_image_ids:
-        ip_adapter_images = [_load_pil(fid) for fid in req.ip_adapter_image_ids]
-        global _ipa_loaded
-        import app as _app_module
-        if not _ipa_loaded and _app_module.pipe is not None:
-            await asyncio.get_event_loop().run_in_executor(None, ipa_load, _app_module.pipe)
-            _ipa_loaded = True
-
     params = req.model_dump()
     params["input_images"] = input_images
     params["mask_image"]   = mask_image
     params["output_dir"]   = req.output_dir or _output_dir()
-    params["ip_adapter_images"]  = ip_adapter_images
-    params["ip_adapter_scales"]  = req.ip_adapter_scales or [0.6] * len(req.ip_adapter_image_ids)
-    params["ip_adapter_enabled"] = req.ip_adapter_enabled
 
     async def event_stream():
         try:
@@ -697,71 +668,6 @@ async def api_upload_lora(file: UploadFile = File(...)):
     return {"path": str(dest), "name": fname}
 
 
-# ── IP-Adapter ──────────────────────────────────────────────────────────────
-
-@app.get("/api/ip-adapter/status")
-async def ipa_status():
-    return {
-        "downloaded": ipa_is_downloaded(),
-        "loaded":     _ipa_loaded,
-    }
-
-
-@app.post("/api/ip-adapter/download")
-async def ipa_download_endpoint():
-    """SSE stream of download progress. Same pattern as batch upscale."""
-    if ipa_is_downloaded():
-        async def already_done():
-            yield f"data: {json.dumps({'type':'done','message':'Already downloaded'})}\n\n"
-        return StreamingResponse(already_done(), media_type="text/event-stream")
-
-    async def _stream():
-        queue: asyncio.Queue = asyncio.Queue()
-        loop = asyncio.get_event_loop()
-
-        def _progress(downloaded: int, total: int):
-            pct = int(downloaded / total * 100) if total else 0
-            dl_mb  = downloaded / 1024 / 1024
-            tot_mb = total      / 1024 / 1024
-            evt = {"type": "progress", "downloaded": downloaded, "total": total,
-                   "pct": pct, "message": f"Downloading… {dl_mb:.0f} / {tot_mb:.0f} MB ({pct}%)"}
-            loop.call_soon_threadsafe(queue.put_nowait, evt)
-
-        def _run():
-            try:
-                ipa_download(progress_cb=_progress)
-                loop.call_soon_threadsafe(queue.put_nowait, {"type": "done"})
-            except Exception as e:
-                loop.call_soon_threadsafe(queue.put_nowait, {"type": "error", "message": str(e)})
-
-        import concurrent.futures
-        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-        executor.submit(_run)
-        executor.shutdown(wait=False)
-
-        while True:
-            evt = await queue.get()
-            yield f"data: {json.dumps(evt)}\n\n"
-            if evt["type"] in ("done", "error"):
-                break
-
-    return StreamingResponse(_stream(), media_type="text/event-stream")
-
-
-@app.delete("/api/ip-adapter")
-async def ipa_delete():
-    """Unload from pipeline and delete weights."""
-    global _ipa_loaded
-    import app as _app_module
-    from core.ip_adapter_flux import IP_ADAPTER_FILE
-    if _ipa_loaded and _app_module.pipe is not None:
-        await asyncio.get_event_loop().run_in_executor(None, ipa_unload, _app_module.pipe)
-        _ipa_loaded = False
-    if IP_ADAPTER_FILE.exists():
-        IP_ADAPTER_FILE.unlink()
-    return {"status": "deleted"}
-
-
 @app.post("/api/upscale/upload")
 async def api_upload_upscale(file: UploadFile = File(...)):
     """Upload an upscale model (.pth/.safetensors/etc.) and return its saved path."""
@@ -845,9 +751,7 @@ def _fmt_bytes(n: int) -> str:
 
 @app.get("/api/models/extras")
 async def api_models_extras():
-    """Return info about non-HF-cache models: upscale files and IP-Adapter weights."""
-    from core.ip_adapter_flux import IP_ADAPTER_FILE
-
+    """Return info about non-HF-cache models: upscale files."""
     upscale_exts = {".pth", ".safetensors", ".ckpt", ".pt", ".bin"}
     upscale_dir  = ROOT / "upscale_models"
     upscale_list = []
@@ -855,12 +759,7 @@ async def api_models_extras():
         for f in sorted(upscale_dir.iterdir()):
             if f.is_file() and f.suffix.lower() in upscale_exts:
                 upscale_list.append({"name": f.name, "size": _fmt_bytes(f.stat().st_size)})
-
-    ipa: dict = {"downloaded": IP_ADAPTER_FILE.exists(), "size": None}
-    if IP_ADAPTER_FILE.exists():
-        ipa["size"] = _fmt_bytes(IP_ADAPTER_FILE.stat().st_size)
-
-    return {"upscale_models": upscale_list, "ip_adapter": ipa}
+    return {"upscale_models": upscale_list}
 
 
 @app.delete("/api/upscale/{filename:path}")
