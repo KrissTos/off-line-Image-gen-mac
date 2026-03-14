@@ -1,4 +1,13 @@
 {
   "upscaler_model_path": "/Users/cris/Documents/ComfyUI/models/upscale_models/4x-UltraSharp.pth",
-  "output_dir": "/Users/cris/Pictures/Image-gen"
+  "output_dir": "/Users/cris/Pictures/Image-gen",
+  "theme_colors": {
+    "bg": "#0a0a0a",
+    "surface": "#141414",
+    "card": "#1c1c1c",
+    "border": "#2a2a2a",
+    "accent": "#7c3aed",
+    "muted": "#d6d6d6",
+    "label": "#6b7280"
+  }
 }
