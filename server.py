@@ -293,7 +293,9 @@ async def api_models():
 
 @app.post("/api/models/load")
 async def api_load_model(req: LoadModelRequest):
+    global _ipa_loaded
     status = await _mgr().load_model(req.model_choice, req.device)
+    _ipa_loaded = False  # IP-Adapter must be re-injected into new pipeline
     return {"status": status}
 
 
@@ -442,8 +444,9 @@ async def api_generate(req: GenerateRequest):
     if req.ip_adapter_enabled and req.ip_adapter_image_ids:
         ip_adapter_images = [_load_pil(fid) for fid in req.ip_adapter_image_ids]
         global _ipa_loaded
-        if not _ipa_loaded and _mgr().pipe is not None:
-            ipa_load(_mgr().pipe)
+        import app as _app_module
+        if not _ipa_loaded and _app_module.pipe is not None:
+            await asyncio.get_event_loop().run_in_executor(None, ipa_load, _app_module.pipe)
             _ipa_loaded = True
 
     params = req.model_dump()
@@ -734,6 +737,7 @@ async def ipa_download_endpoint():
         import concurrent.futures
         executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         executor.submit(_run)
+        executor.shutdown(wait=False)
 
         while True:
             evt = await queue.get()
@@ -748,9 +752,10 @@ async def ipa_download_endpoint():
 async def ipa_delete():
     """Unload from pipeline and delete weights."""
     global _ipa_loaded
+    import app as _app_module
     from core.ip_adapter_flux import IP_ADAPTER_FILE
-    if _ipa_loaded and _mgr().pipe is not None:
-        ipa_unload(_mgr().pipe)
+    if _ipa_loaded and _app_module.pipe is not None:
+        await asyncio.get_event_loop().run_in_executor(None, ipa_unload, _app_module.pipe)
         _ipa_loaded = False
     if IP_ADAPTER_FILE.exists():
         IP_ADAPTER_FILE.unlink()
