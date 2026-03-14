@@ -41,8 +41,9 @@ def unload_ip_adapter(pipe) -> None:
     """Remove IP-Adapter from pipeline. Safe to call even if not loaded."""
     try:
         pipe.unload_ip_adapter()
-    except Exception:
-        pass
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning("unload_ip_adapter: %s", exc)
 
 
 def set_scale(pipe, scales: list[float]) -> None:
@@ -50,6 +51,8 @@ def set_scale(pipe, scales: list[float]) -> None:
     Set per-image IP-Adapter scale(s).
     Pass a list even for a single image — diffusers handles both forms.
     """
+    if not scales:
+        raise ValueError("scales must contain at least one value")
     pipe.set_ip_adapter_scale(scales if len(scales) > 1 else scales[0])
 
 
@@ -74,17 +77,21 @@ def download(progress_cb=None) -> None:
     dest = IP_ADAPTER_FILE
     tmp  = dest.with_suffix(".tmp")
 
-    with requests.get(url, headers=headers, stream=True, timeout=30) as r:
-        r.raise_for_status()
-        total      = int(r.headers.get("Content-Length", 0))
-        downloaded = 0
-        with open(tmp, "wb") as f:
-            for chunk in r.iter_content(chunk_size=1024 * 1024):  # 1 MB chunks
-                if chunk:
-                    f.write(chunk)
-                    downloaded += len(chunk)
-                    if progress_cb:
-                        progress_cb(downloaded, total)
+    try:
+        with requests.get(url, headers=headers, stream=True, timeout=(10, None)) as r:
+            r.raise_for_status()
+            total      = int(r.headers.get("Content-Length", 0))
+            downloaded = 0
+            with open(tmp, "wb") as f:
+                for chunk in r.iter_content(chunk_size=1024 * 1024):  # 1 MB chunks
+                    if chunk:
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        if progress_cb:
+                            progress_cb(downloaded, total)
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
 
     tmp.rename(dest)
 
