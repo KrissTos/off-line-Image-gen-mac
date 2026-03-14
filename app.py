@@ -687,8 +687,8 @@ def load_lora(lora_file, lora_strength: float, device: str):
     """Load or update LoRA adapter. Supports Z-Image Full and all FLUX.2-klein models."""
     global current_lora_path, pipe
 
-    is_flux   = current_model is not None and "FLUX" in str(current_model)
-    is_zimage = current_model is not None and "Full" in str(current_model) and "Z-Image" in str(current_model)
+    is_flux   = current_model is not None and current_model.startswith("flux2")
+    is_zimage = current_model is not None and current_model == "zimage-full"
 
     if not is_flux and not is_zimage:
         return "LoRA requires FLUX.2-klein or Z-Image Full model"
