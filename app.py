@@ -1099,9 +1099,8 @@ def generate_image(
                             and ref_full is not None):
                         preprocessed_flux_refs = preprocessed_flux_refs or [ref_full]
 
-                    # ── FLUX img2img (reference images, incl. masked-crop mode) ──
-                    if (not (has_mask and "Inpainting" in (mask_mode or ""))
-                            and preprocessed_flux_refs is not None):
+                    # ── FLUX img2img (reference images, incl. inpainting fall-through) ──
+                    if preprocessed_flux_refs is not None:
                         if hasattr(pipe, "vae") and hasattr(pipe.vae, "disable_tiling"):
                             pipe.vae.disable_tiling()
 
@@ -1125,8 +1124,7 @@ def generate_image(
                         video_frames = None
 
                     # ── FLUX txt2img (no reference) ──
-                    elif (not (has_mask and "Inpainting" in (mask_mode or ""))
-                            and preprocessed_flux_refs is None):
+                    else:
                         image = pipe(
                             prompt=prompt,
                             height=img_h,

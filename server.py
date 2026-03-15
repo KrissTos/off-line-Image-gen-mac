@@ -70,15 +70,21 @@ LOG_FILE  = LOGS_DIR / "server.log"
 _log_fh = open(LOG_FILE, "w", encoding="utf-8", buffering=1)  # 'w' = fresh each run
 
 
+import re as _re
+_ANSI_RE = _re.compile(r"\x1b\[[0-9;]*[A-Za-z]|\x1b\[K|\r")
+
+
 class _LogTee:
-    """Tee writes to both the original stream and the shared log file."""
+    """Tee writes to both the original stream and the shared log file (ANSI-stripped)."""
     def __init__(self, original: Any) -> None:
         self._orig = original
 
     def write(self, text: str) -> int:
         self._orig.write(text)
-        _log_fh.write(text)
-        _log_fh.flush()
+        clean = _ANSI_RE.sub("", text)
+        if clean:
+            _log_fh.write(clean)
+            _log_fh.flush()
         return len(text)
 
     def flush(self) -> None:
@@ -154,17 +160,26 @@ app.add_event_handler("startup", _startup_patch_access_log)
 
 _last_ping:          float = time.time()   # updated by POST /api/ping
 _auto_shutdown:      bool  = True          # set to False via --no-auto-shutdown
-_HEARTBEAT_TIMEOUT:  float = 15.0          # seconds of silence → shutdown
+_HEARTBEAT_TIMEOUT:  float = 60.0          # seconds of silence → shutdown (60 s handles background-tab throttling)
 _HEARTBEAT_INTERVAL: float = 5.0          # check interval
 
 
 async def _heartbeat_watcher() -> None:
-    """Shut down the server if no browser ping arrives within the timeout."""
+    """Shut down the server if no browser ping arrives within the timeout.
+    Never shuts down while a generation is actively running."""
     # Give the browser time to open on first launch
     await asyncio.sleep(_HEARTBEAT_TIMEOUT + 5)
     while True:
         await asyncio.sleep(_HEARTBEAT_INTERVAL)
         if time.time() - _last_ping > _HEARTBEAT_TIMEOUT:
+            # Don't kill the server mid-generation — the browser may just be throttled
+            try:
+                from pipeline import manager
+                if manager.is_busy:
+                    _last_ping_ref = time.time()  # reset so we don't re-check immediately
+                    continue
+            except Exception:
+                pass
             print("\n⏹  No browser heartbeat received — shutting down server.", flush=True)
             os.kill(os.getpid(), signal.SIGTERM)
             return
@@ -871,7 +886,7 @@ async def api_update_settings(req: UpdateSettingsRequest):
 # ── Routes: Storage ───────────────────────────────────────────────────────────
 
 @app.get("/api/storage")
-async def api_storage():
+def api_storage():
     a = _app()
     models, summary = a.scan_downloaded_models()
     normalized = [
@@ -921,16 +936,32 @@ class HFLoginRequest(BaseModel):
     token: str
 
 @app.get("/api/hf/status")
-async def api_hf_status():
+def api_hf_status():
+    # Sync def — FastAPI runs this in a thread pool so the blocking whoami()
+    # network call never freezes the event loop (and other /api/* requests).
     return {"status": _app().hf_get_status()}
 
 @app.post("/api/hf/login")
-async def api_hf_login(req: HFLoginRequest):
+def api_hf_login(req: HFLoginRequest):
     return {"status": _app().hf_login_token(req.token)}
 
 @app.post("/api/hf/logout")
-async def api_hf_logout():
+def api_hf_logout():
     return {"status": _app().hf_logout()}
+
+
+# ── Routes: Logs ──────────────────────────────────────────────────────────────
+
+@app.post("/api/logs/save")
+async def api_save_log():
+    """Save a timestamped snapshot of the current session log inside logs/."""
+    import datetime
+    if not LOG_FILE.exists():
+        raise HTTPException(404, "No log file found for this session")
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    snapshot = LOGS_DIR / f"server_log_{timestamp}.txt"
+    shutil.copy2(LOG_FILE, snapshot)
+    return {"saved_path": str(snapshot)}
 
 
 # ── Routes: SPA (MUST be last — wildcard would shadow /api/* if registered earlier) ──
@@ -951,22 +982,6 @@ async def spa_fallback(path: str):
     if index.exists():
         return FileResponse(str(index))
     raise HTTPException(404)
-
-
-# ── Routes: Logs ──────────────────────────────────────────────────────────────
-
-@app.get("/api/logs/download")
-async def api_download_log():
-    """Download the current server log as a text file."""
-    import datetime
-    if not LOG_FILE.exists():
-        raise HTTPException(404, "No log file found for this session")
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    return FileResponse(
-        str(LOG_FILE),
-        media_type="text/plain",
-        filename=f"server_log_{timestamp}.txt",
-    )
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────

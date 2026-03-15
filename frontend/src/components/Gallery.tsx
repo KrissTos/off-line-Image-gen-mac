@@ -34,7 +34,6 @@ export default function Gallery({ outputs, onSelect, onDelete, upscaleModelPath,
         {outputs.map((item) => (
           <div
             key={item.url}
-            title={[item.name, item.prompt].filter(Boolean).join('\n')}
             draggable={item.kind !== 'video'}
             onDragStart={e => {
               e.dataTransfer.setData('text/plain', item.url)
@@ -66,36 +65,16 @@ export default function Gallery({ outputs, onSelect, onDelete, upscaleModelPath,
             )}
 
             {/* Action buttons row — top-right */}
-            <div className="absolute top-1 right-1 flex gap-0.5 opacity-0 group-hover:opacity-100 transition-all z-10">
+            <div className="absolute top-1.5 right-1.5 flex gap-2 opacity-0 group-hover:opacity-100 transition-all z-10">
               {/* Info button */}
               {item.kind !== 'video' && (
-                <div className="relative">
-                  <button
-                    onClick={e => { e.stopPropagation(); setShowInfo(prev => prev === item.url ? null : item.url) }}
-                    aria-label="Image dimensions"
-                    className="bg-black/70 hover:bg-blue-600 rounded-full p-0.5"
-                  >
-                    <Info size={8} aria-hidden="true" />
-                  </button>
-                  {showInfo === item.url && imgDims[item.url] && (
-                    <div
-                      onClick={e => e.stopPropagation()}
-                      className="absolute right-0 bottom-full mb-1 bg-black/90 text-white text-[9px]
-                                 px-1.5 py-0.5 rounded whitespace-nowrap z-20 border border-white/10"
-                    >
-                      {imgDims[item.url].w} × {imgDims[item.url].h} px
-                    </div>
-                  )}
-                  {showInfo === item.url && !imgDims[item.url] && (
-                    <div
-                      onClick={e => e.stopPropagation()}
-                      className="absolute right-0 bottom-full mb-1 bg-black/90 text-muted text-[9px]
-                                 px-1.5 py-0.5 rounded whitespace-nowrap z-20 border border-white/10"
-                    >
-                      Loading…
-                    </div>
-                  )}
-                </div>
+                <button
+                  onClick={e => { e.stopPropagation(); setShowInfo(prev => prev === item.url ? null : item.url) }}
+                  aria-label="Image dimensions"
+                  className="bg-black/70 hover:bg-blue-600 rounded-full p-1.5 transition-colors"
+                >
+                  <Info size={16} aria-hidden="true" />
+                </button>
               )}
 
               {/* Upscale button */}
@@ -108,11 +87,11 @@ export default function Gallery({ outputs, onSelect, onDelete, upscaleModelPath,
                   }}
                   aria-label="Upscale image"
                   disabled={upscalingItem === item.url}
-                  className="bg-black/70 hover:bg-accent rounded-full p-0.5 disabled:opacity-60"
+                  className="bg-black/70 hover:bg-accent rounded-full p-1.5 transition-colors disabled:opacity-60"
                 >
                   {upscalingItem === item.url
-                    ? <Loader2 size={8} className="animate-spin" aria-hidden="true" />
-                    : <ArrowUpCircle size={8} aria-hidden="true" />
+                    ? <Loader2 size={16} className="animate-spin" aria-hidden="true" />
+                    : <ArrowUpCircle size={16} aria-hidden="true" />
                   }
                 </button>
               )}
@@ -121,11 +100,26 @@ export default function Gallery({ outputs, onSelect, onDelete, upscaleModelPath,
               <button
                 onClick={e => { e.stopPropagation(); onDelete(item.name) }}
                 aria-label="Delete image"
-                className="bg-black/70 hover:bg-red-600 rounded-full p-0.5"
+                className="bg-black/70 hover:bg-red-600 rounded-full p-1.5 transition-colors"
               >
-                <Trash2 size={8} aria-hidden="true" />
+                <Trash2 size={16} aria-hidden="true" />
               </button>
             </div>
+
+            {/* Dimensions overlay — shown inside the thumbnail to avoid overflow-hidden clipping */}
+            {showInfo === item.url && item.kind !== 'video' && (
+              <div
+                onClick={e => e.stopPropagation()}
+                className="absolute inset-0 flex items-center justify-center bg-black/60 z-20 pointer-events-none"
+              >
+                <span className="bg-black/90 text-white text-xs font-mono px-2 py-1 rounded border border-white/20">
+                  {imgDims[item.url]
+                    ? `${imgDims[item.url].w} × ${imgDims[item.url].h} px`
+                    : 'Loading…'
+                  }
+                </span>
+              </div>
+            )}
 
             {/* Prompt tooltip strip on hover */}
             {item.prompt && (

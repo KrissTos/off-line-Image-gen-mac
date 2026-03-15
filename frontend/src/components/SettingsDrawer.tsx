@@ -231,24 +231,20 @@ export default function SettingsDrawer({ open, onClose }: Props) {
     applyThemeColors(DEFAULT_THEME)
   }
 
+  const [logSavedPath, setLogSavedPath] = useState<string | null>(null)
+
   async function handleSaveLog() {
     setSavingLog(true)
+    setLogSavedPath(null)
     try {
-      const resp = await fetch('/api/logs/download')
+      const resp = await fetch('/api/logs/save', { method: 'POST' })
       if (!resp.ok) throw new Error('Log not available')
-      const blob = await resp.blob()
-      const url  = URL.createObjectURL(blob)
-      const a    = document.createElement('a')
-      a.href     = url
-      const now  = new Date()
-      const ts   = `${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}_${String(now.getHours()).padStart(2,'0')}${String(now.getMinutes()).padStart(2,'0')}`
-      a.download = `server_log_${ts}.txt`
-      a.click()
-      URL.revokeObjectURL(url)
+      const data = await resp.json()
       setLogSaved(true)
-      setTimeout(() => setLogSaved(false), 2000)
+      setLogSavedPath(data.saved_path)
+      setTimeout(() => setLogSaved(false), 3000)
     } catch (e: unknown) {
-      setStatusMsg(`Log download failed: ${(e as Error).message}`)
+      setStatusMsg(`Log save failed: ${(e as Error).message}`)
     } finally {
       setSavingLog(false)
     }
@@ -629,7 +625,7 @@ export default function SettingsDrawer({ open, onClose }: Props) {
               <FileDown size={13} /> Server Log
             </h3>
             <p className="text-[10px] text-muted/70 mb-3">
-              Download the current session log to share with AI for error analysis.
+              Save a snapshot of the current session log to <code className="text-accent">logs/</code> for error analysis.
             </p>
             <button
               onClick={handleSaveLog}
@@ -647,6 +643,11 @@ export default function SettingsDrawer({ open, onClose }: Props) {
                   : <><FileDown size={12} /> Save Session Log</>
               }
             </button>
+            {logSavedPath && (
+              <p className="text-[10px] text-green-400/80 font-mono mt-2 break-all leading-snug">
+                {logSavedPath}
+              </p>
+            )}
           </section>
 
         </div>
