@@ -868,7 +868,7 @@ export default function Sidebar({
   onWorkflowLoad, onWorkflowRefresh, onStatus,
 }: SidebarProps) {
   const isVideo    = params.model_choice.includes('LTX-Video')
-  const isFlux     = params.model_choice.startsWith('flux2')
+  const isFlux     = params.model_choice.startsWith('FLUX')
   const isZImageFull = params.model_choice.includes('Z-Image') && params.model_choice.includes('Full')
 
   function handleImportComfyUI(wf: Record<string, unknown>) {
@@ -995,7 +995,7 @@ export default function Sidebar({
 
       {/* Generate / Iterate / Stop — single button that adapts to context */}
       <div className="p-4 border-t border-border space-y-2">
-        {params.model_choice.startsWith('flux2') &&
+        {params.model_choice.startsWith('FLUX') &&
          params.mask_mode === 'Inpainting Pipeline (Quality)' && (
           <p className="text-[10px] text-amber-400/70 bg-amber-900/20 border border-amber-800/30
                         rounded px-2 py-1 leading-tight">
