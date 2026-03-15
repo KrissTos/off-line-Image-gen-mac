@@ -406,7 +406,7 @@ export default function App() {
 
   // ── Workflow ──────────────────────────────────────────────────────────────
 
-  const handleWorkflowLoad = useCallback((wf: Record<string, unknown>) => {
+  const handleWorkflowLoad = useCallback(async (wf: Record<string, unknown>) => {
     const p: Partial<GenerateParams> = {}
     if (wf.prompt)       p.prompt       = String(wf.prompt)
     if (wf.height)       p.height       = Number(wf.height)
@@ -417,7 +417,31 @@ export default function App() {
     if (wf.model_choice) p.model_choice = String(wf.model_choice)
     if (wf.device)       p.device       = String(wf.device)
     dispatch({ type: 'SET_PARAMS', params: p })
-  }, [dispatch])
+
+    const slots = wf.ref_slots as Array<{ imageUrl: string; maskUrl: string | null; strength: number }> | undefined
+    if (slots?.length) {
+      setStatusMsg(`Restoring ${slots.length} ref slot(s)…`)
+      dispatch({ type: 'CLEAR_ALL_SLOTS' })
+      for (let i = 0; i < slots.length; i++) {
+        const slot = slots[i]
+        const slotId = i + 1
+        try {
+          const { id, url } = await uploadFromUrl(slot.imageUrl)
+          dispatch({ type: 'ADD_REF_SLOT', imageId: id, imageUrl: url })
+          dispatch({ type: 'UPDATE_SLOT_STRENGTH', slotId, strength: slot.strength })
+          if (slot.maskUrl) {
+            const { id: mId, url: mUrl } = await uploadFromUrl(slot.maskUrl)
+            dispatch({ type: 'SET_SLOT_MASK', slotId, maskId: mId, maskUrl: mUrl })
+          }
+        } catch {
+          // skip slot on error, continue with others
+        }
+      }
+      setStatusMsg(`✓ Loaded workflow with ${slots.length} ref slot(s)`)
+    }
+    if (wf.mask_mode)      dispatch({ type: 'SET_PARAM', key: 'mask_mode',      value: wf.mask_mode as string })
+    if (wf.outpaint_align) dispatch({ type: 'SET_PARAM', key: 'outpaint_align', value: wf.outpaint_align as string })
+  }, [dispatch, setStatusMsg])
 
   // ── Render ────────────────────────────────────────────────────────────────
 
