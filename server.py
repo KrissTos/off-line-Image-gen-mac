@@ -261,6 +261,10 @@ class SaveWorkflowRequest(BaseModel):
     upscale_model_path: str   = ""
     num_frames:         int   = 25
     fps:                int   = 24
+    lora_file:          str        = ""
+    ref_slots:          list[dict] = []
+    mask_mode:          str        = ""
+    outpaint_align:     str        = ""
 
 
 class UpdateSettingsRequest(BaseModel):
@@ -631,34 +635,68 @@ async def api_list_workflows():
 
 @app.post("/api/workflows/save")
 async def api_save_workflow(req: SaveWorkflowRequest):
-    a    = _app()
-    data = req.model_dump()
-    name = data.pop("name")
-    try:
-        result = a.save_workflow(
-            data.get("prompt", ""),
-            data.get("height", 512),
-            data.get("width", 512),
-            data.get("steps", 20),
-            data.get("seed", -1),
-            data.get("guidance", 7.0),
-            data.get("device", "mps"),
-            data.get("model_choice", ""),
-            data.get("model_source", "Local"),
-            data.get("lora_strength", 1.0),
-            data.get("img_strength", 1.0),
-            data.get("repeat_count", 1),
-            data.get("upscale_enabled", False),
-            data.get("upscale_model_path", ""),
-            data.get("num_frames", 25),
-            data.get("fps", 24),
-            None,    # input_images not serialised here
-            name,
-        )
-        status_msg = result[0] if isinstance(result, (tuple, list)) else str(result)
-        return {"status": status_msg}
-    except Exception as e:
-        raise HTTPException(500, str(e))
+    from datetime import datetime
+    a = _app()
+    os.makedirs(a.WORKFLOWS_DIR, exist_ok=True)
+    timestamp   = datetime.now().strftime("%Y%m%d_%H%M%S")
+    custom      = (req.name or "").strip().replace(" ", "_")
+    slug        = "".join(c if c.isalnum() else "_" for c in (req.prompt or "")[:30]).strip("_")
+    folder_name = f"{timestamp}_{custom}" if custom else (f"{timestamp}_{slug}" if slug else timestamp)
+    wf_dir      = Path(a.WORKFLOWS_DIR) / folder_name
+    wf_dir.mkdir(parents=True, exist_ok=True)
+
+    saved_slots = []
+    for idx, slot in enumerate(req.ref_slots, start=1):
+        img_id = slot.get("imageId") or ""
+        if not img_id:
+            continue
+        img_src = TEMP_DIR / img_id
+        if not img_src.exists():
+            continue
+        img_dst = wf_dir / f"slot_{idx}_image.png"
+        shutil.copy2(img_src, img_dst)
+        mask_fname = None
+        mask_id = slot.get("maskId") or ""
+        if mask_id:
+            mask_src = TEMP_DIR / mask_id
+            if mask_src.exists():
+                mask_dst = wf_dir / f"slot_{idx}_mask.png"
+                shutil.copy2(mask_src, mask_dst)
+                mask_fname = f"slot_{idx}_mask.png"
+        saved_slots.append({
+            "image":    f"slot_{idx}_image.png",
+            "mask":     mask_fname,
+            "strength": float(slot.get("strength", 1.0)),
+        })
+
+    data = {
+        "name":               req.name or folder_name,
+        "timestamp":          timestamp,
+        "prompt":             req.prompt,
+        "height":             req.height,
+        "width":              req.width,
+        "steps":              req.steps,
+        "seed":               req.seed,
+        "guidance":           req.guidance,
+        "device":             req.device,
+        "model_choice":       req.model_choice,
+        "model_source":       req.model_source,
+        "lora_strength":      req.lora_strength,
+        "lora_file":          req.lora_file,
+        "img_strength":       req.img_strength,
+        "repeat_count":       req.repeat_count,
+        "upscale_enabled":    req.upscale_enabled,
+        "upscale_model_path": req.upscale_model_path,
+        "num_frames":         req.num_frames,
+        "fps":                req.fps,
+        "ref_slots":          saved_slots,
+        "mask_mode":          req.mask_mode,
+        "outpaint_align":     req.outpaint_align,
+    }
+    with open(wf_dir / "workflow.json", "w") as f:
+        json.dump(data, f, indent=2)
+
+    return {"status": f"✓ Saved: {folder_name}", "name": folder_name}
 
 
 @app.get("/api/workflows/{name:path}")
