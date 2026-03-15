@@ -8,9 +8,15 @@
 - **Update after every session** — reflect actual code state; stale docs are worse than no docs
 - **TOC comment** — keep the `<!-- TOC: … -->` line at the top updated with section anchors
 - **Dense format** — prefer tables, inline code, and one-liner bullets over prose paragraphs; avoid restating things the code makes obvious
+- **Proactive `/ukn` prompts** — after fixing a non-obvious bug, adding a significant architectural piece, or resolving a tricky gotcha, proactively suggest "worth running `/ukn` to save this" before context fills up
+
+## When to use superpowers vs direct implementation
+- **`quick:` prefix** — user signals direct implementation; skip brainstorm/plan/subagents entirely, just write the code
+- **1–2 files, clear requirements** → implement directly, no brainstorm/plan needed
+- **3+ files, or design is unclear** → full superpowers flow (brainstorm → spec → plan → subagent-driven-development)
 
 ## What this project is
-Fully offline AI image generation for Mac Silicon (MPS) and NVIDIA (CUDA). No cloud, no subscriptions. Supports FLUX.2 and Z-Image Turbo models with 4-bit/int8 quantization. Features: text-to-image, image-to-image editing, multi-slot reference images with per-slot rectangle-mask drawing, iterative multi-mask inpainting, LoRA support (Z-Image Full + FLUX.2-klein), gallery drag-and-drop into ref slots, inline HelpTip ⓘ tooltips, upscaling (single + batch folder), video generation (LTX-Video).
+Fully offline AI image generation for Mac Silicon (MPS). No cloud, no subscriptions. Supports FLUX.2 and Z-Image Turbo models with 4-bit/int8 quantization. Features: text-to-image, image-to-image editing, multi-slot reference images with per-slot rectangle-mask drawing, iterative multi-mask inpainting, LoRA support (Z-Image Full + FLUX.2-klein), gallery drag-and-drop into ref slots, inline HelpTip ⓘ tooltips, upscaling (single + batch folder), video generation (LTX-Video).
 
 **Renamed from** `ultra-fast-image-gen` → `off-line-Image-gen-mac`. Brand name in UI: **"Local AI Image Gen"** (TopBar + browser tab title).
 
@@ -34,7 +40,7 @@ python server.py --port 7860 --no-auto-shutdown
 cd frontend && npm run build  # rebuild after any frontend change
 ```
 
-**Browser heartbeat / auto-shutdown**: server shuts down 15 s after the last ping. Frontend sends `POST /api/ping` every 5 s. 20 s grace on first launch. Disable: `--no-auto-shutdown`.
+**Browser heartbeat / auto-shutdown**: server shuts down 60 s after the last ping (raised from 15 s; background tabs throttle `setInterval`). Watcher skips shutdown if `manager.is_busy` is True. Frontend sends `POST /api/ping` every 5 s. 20 s grace on first launch. Disable: `--no-auto-shutdown`.
 
 ## HuggingFace token
 Stored in `huggingface/token` (gitignored). Type: **Read** (fine-grained, gated repos). Login via Settings drawer in UI, or `python -c "from huggingface_hub import login; login()"`. Must also accept terms on each gated model page.
@@ -82,9 +88,9 @@ Key source files:
 
 **`Canvas.tsx`** — flex 5. Shows result image/video + generating overlay. Drag-and-drop ref image support. Generating overlay: 56px spinner with `pct`% number overlaid at center (when step/total available), progress message text, thin progress bar.
 
-**`Gallery.tsx`** — flex 1, horizontal scroll strip. `onSelect` injects prompt + model into sidebar. Hover shows prompt tooltip. Thumbnails: `draggable` + `onDragStart` sets `dataTransfer('text/plain', item.url)` for gallery→ref slot drag.
+**`Gallery.tsx`** — flex 1, horizontal scroll strip. `onSelect` injects prompt + model into sidebar. Thumbnails: `draggable` + `onDragStart` sets `dataTransfer('text/plain', item.url)` for gallery→ref slot drag. Hover shows 3 icon buttons (Info overlay with `W × H px`, Upscale ×4, Delete). Dimensions read from `img.naturalWidth/naturalHeight` on load into `imgDims` state. Info overlay is `position:absolute inset-0` inside the thumbnail (avoids `overflow-hidden` clipping). Do NOT use `title` attribute on the outer div — causes native browser tooltip showing the prompt everywhere.
 
-**`SettingsDrawer.tsx`** — `w-96` slide-in. Output folder (editable, saved via `POST /api/settings`), HF login, model list (✓ cached / ↓ not downloaded + per-model size + delete with confirm), upscale model list (delete), storage summary. Refresh button reloads all data.
+**`SettingsDrawer.tsx`** — `w-96` slide-in. Output folder (editable, saved via `POST /api/settings`), HF login, model list (✓ cached / ↓ not downloaded + per-model size + delete with confirm), upscale model list (delete), storage summary, **Server Log** section (Save Log → `POST /api/logs/save` → timestamped snapshot in `logs/`). Refresh button reloads all data.
 
 **`TopBar.tsx`** — "Local AI Image Gen" brand, model, device, VRAM, "generating…" pulse, settings gear.
 
@@ -116,6 +122,7 @@ Actions: `ADD_REF_SLOT` · `REMOVE_REF_SLOT` · `SET_SLOT_MASK` · `CLEAR_SLOT_M
 | GET | `/api/models/check-updates` | Query HF Hub for latest hashes; returns `{results:[{choice,status,local_hash,online_hash}]}` |
 | POST | `/api/models/update` | Download/update a model from HF Hub |
 | GET | `/api/open-folder-dialog` | Open native macOS folder picker (osascript); returns `{path, cancelled}` |
+| GET | `/api/open-workflow-folder-dialog` | Same but opens at WORKFLOWS_DIR via osascript `default location` |
 | GET | `/api/devices` | Available compute devices |
 | POST | `/api/generate` | SSE stream |
 | POST | `/api/upload` | Upload temp image → `{id, url}` |
@@ -123,8 +130,11 @@ Actions: `ADD_REF_SLOT` · `REMOVE_REF_SLOT` · `SET_SLOT_MASK` · `CLEAR_SLOT_M
 | GET | `/api/outputs` | Recent outputs (with sidecar data) |
 | GET | `/api/output/{file}` | Serve output file |
 | GET/POST | `/api/workflows` / `/api/workflows/{name}` / `/api/workflows/save` / `/api/workflows/import` | Workflow CRUD + ComfyUI import |
+| GET | `/api/workflow-assets/{name}/{filename}` | Serve saved ref slot images/masks; `path.is_relative_to()` traversal guard |
 | POST/DELETE | `/api/lora/upload` · `/api/lora/load` · `/api/lora` | LoRA management |
-| POST/POST | `/api/upscale/upload` · `/api/upscale/batch` | Upscale model + batch SSE |
+| POST/POST/POST | `/api/upscale/upload` · `/api/upscale/batch` · `/api/upscale/single` | Upscale: model upload, batch SSE, single image |
+| GET | `/api/open-file-dialog` | macOS image file picker (osascript) → `{path, cancelled}` |
+| POST | `/api/logs/save` | Copy `logs/server.log` → timestamped snapshot in `logs/`; returns `{saved_path}` |
 | GET/POST | `/api/settings` | App settings |
 | GET | `/api/storage` | Directory sizes |
 | GET/POST/POST | `/api/hf/status` · `/api/hf/login` · `/api/hf/logout` | HF auth |
@@ -205,3 +215,13 @@ Tailwind tokens: `bg:#0a0a0a` · `surface:#141414` · `card:#1c1c1c` · `border:
 - **"↕ ref size" button** in SizePanel — appears when slot #1 has dims; reads `refSlots[0].{w,h}` (populated via thumbnail `onLoad`), snaps to nearest 64, sets output width/height
 - **FLUX inpainting warnings** — amber note shown in RefImagesRow (below mask mode dropdown) AND Sidebar (above Generate button) when `model_choice.startsWith('FLUX')` + mask mode = "Inpainting Pipeline (Quality)"
 - LoRA files go in `lora_uploads/` (gitignored, create manually if missing)
+- **Workflow ref persistence**: `api_save_workflow` bypasses `a.save_workflow()` — owns full folder creation, copies slot images/masks as `slot_N_image.png`/`slot_N_mask.png`; `api_load_workflow` returns `ref_slots:[{imageUrl,maskUrl,strength}]`; `handleWorkflowLoad` is async + sequential (not `Promise.all`) — `ADD_REF_SLOT` assigns slotId from `state.refSlots.length+1` at dispatch time so order matters; `isRestoringWorkflow` useRef guards against double-click race
+- **`isFlux` in Sidebar**: use `params.model_choice.startsWith('flux2')` — `.toLowerCase().includes('flux')` was wrong (fixed 2026-03-15)
+- **Server log capture**: `server.py` tees stdout+stderr to `logs/server.log` via `_LogTee` class; ANSI escape codes stripped with `_ANSI_RE` before writing to file; log truncated on each server start
+- **HF auth endpoints must be sync `def`**: `api_hf_status/login/logout` and `api_storage` use blocking calls (`whoami()`, `os.walk`); must be `def` so FastAPI runs them in thread pool — `async def` blocks event loop causing all other requests to queue
+- **FastAPI route order**: SPA wildcard `/{path:path}` must be LAST — any route registered after it is unreachable (matched by wildcard first)
+- **FLUX inpainting `mode` crash**: FLUX + "Inpainting Pipeline (Quality)" + mask — the `if/elif` chain at the img2img path both guarded with `not (has_mask and "Inpainting" in mask_mode)`, so both branches skipped → `mode` never assigned → `UnboundLocalError`. Fixed: simplified to `if preprocessed_flux_refs is not None / else`
+- **`POST /api/upscale/single`**: resolves `source:'gallery'` → `output_dir/filename`, `source:'path'` → absolute path; saves as `stem_WxH.ext` next to original; scale ×2/×3 = run ×4 then resize down
+- **`SaveWorkflowRequest.lora_file`**: must be `str | None = None` — frontend sends `null` when no LoRA selected; plain `str` causes 422
+- **Workflow folder naming**: `yy-mm-dd_Name` (e.g. `26-03-15_My_Portrait`); `GET /api/workflows` returns `[:15]` newest only
+- **Workflow Open button**: `handleOpenFolder` in `WorkflowPanel` calls `openWorkflowFolderDialog()` → extracts `basename` → calls existing `loadWorkflow(name)`
