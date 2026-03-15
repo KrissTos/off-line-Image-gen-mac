@@ -712,7 +712,11 @@ async def api_save_workflow(req: SaveWorkflowRequest):
 
 @app.get("/api/workflows/{name:path}")
 async def api_load_workflow(name: str):
-    a = _app()
+    a         = _app()
+    wf_dir    = Path(a.WORKFLOWS_DIR) / name
+    json_path = wf_dir / "workflow.json"
+    if not json_path.exists():
+        raise HTTPException(404, f"Workflow not found: {name}")
     try:
         result = a.load_workflow(name)
         # result is an 18-tuple matching _wf_load_outputs; last element is status
@@ -720,9 +724,32 @@ async def api_load_workflow(name: str):
                 "device", "model_choice", "model_source", "lora_strength",
                 "img_strength", "repeat_count", "upscale_enabled",
                 "upscale_model_path", "num_frames", "fps", "input_images", "status"]
-        return dict(zip(keys, result))
+        d = dict(zip(keys, result))
     except Exception as e:
         raise HTTPException(500, str(e))
+    d.pop("input_images", None)
+
+    with open(json_path) as fh:
+        raw = json.load(fh)
+
+    ref_slots_out = []
+    for slot in raw.get("ref_slots", []):
+        img_file = slot.get("image")
+        if not img_file or not (wf_dir / img_file).exists():
+            continue
+        mask_url = None
+        if slot.get("mask") and (wf_dir / slot["mask"]).exists():
+            mask_url = f"/api/workflow-assets/{name}/{slot['mask']}"
+        ref_slots_out.append({
+            "imageUrl":  f"/api/workflow-assets/{name}/{img_file}",
+            "maskUrl":   mask_url,
+            "strength":  slot.get("strength", 1.0),
+        })
+
+    d["ref_slots"]      = ref_slots_out
+    d["mask_mode"]      = raw.get("mask_mode", "")
+    d["outpaint_align"] = raw.get("outpaint_align", "")
+    return d
 
 
 @app.post("/api/workflows/import")
@@ -1011,6 +1038,20 @@ async def api_save_log():
     snapshot = LOGS_DIR / f"server_log_{timestamp}.txt"
     shutil.copy2(LOG_FILE, snapshot)
     return {"saved_path": str(snapshot)}
+
+
+# ── Routes: Workflow assets ───────────────────────────────────────────────────
+
+@app.get("/api/workflow-assets/{name}/{filename}")
+async def api_workflow_asset(name: str, filename: str):
+    a    = _app()
+    base = Path(a.WORKFLOWS_DIR).resolve()
+    path = (base / name / filename).resolve()
+    if not str(path).startswith(str(base)):
+        raise HTTPException(400, "Invalid path")
+    if not path.exists():
+        raise HTTPException(404, "Asset not found")
+    return FileResponse(str(path))
 
 
 # ── Routes: SPA (MUST be last — wildcard would shadow /api/* if registered earlier) ──
