@@ -59,6 +59,8 @@ export const updateModel = (model_choice: string) =>
 
 export const openFolderDialog  = () =>
   get<{ path: string | null; cancelled: boolean }>('/api/open-folder-dialog')
+export const openWorkflowFolderDialog = () =>
+  get<{ path: string | null; cancelled: boolean }>('/api/open-workflow-folder-dialog')
 export const openFileDialog    = () =>
   get<{ path: string | null; cancelled: boolean }>('/api/open-file-dialog')
 export const openOutputFolder  = () =>

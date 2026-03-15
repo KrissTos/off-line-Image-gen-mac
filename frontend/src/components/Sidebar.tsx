@@ -5,7 +5,7 @@ import {
   Wand2, ArrowUpCircle, FolderInput, ListOrdered, FolderOpen, ImagePlus,
 } from 'lucide-react'
 import type { GenerateParams, RefImageSlot } from '../types'
-import { importComfyUI, loadWorkflow, saveWorkflow, uploadLora, uploadUpscaleModel, streamBatchUpscale, openFolderDialog, openFileDialog, upscaleSingleImage, updateSettings } from '../api'
+import { importComfyUI, loadWorkflow, saveWorkflow, uploadLora, uploadUpscaleModel, streamBatchUpscale, openFolderDialog, openFileDialog, upscaleSingleImage, updateSettings, openWorkflowFolderDialog } from '../api'
 import HelpTip from './HelpTip'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -726,6 +726,20 @@ function WorkflowPanel({ workflows, params, refSlots, onLoad, onRefresh, onImpor
     }
   }
 
+  async function handleOpenFolder() {
+    try {
+      const { path, cancelled } = await openWorkflowFolderDialog()
+      if (cancelled || !path) return
+      const name = path.split('/').filter(Boolean).pop() ?? ''
+      if (!name) return
+      const wf = await loadWorkflow(name)
+      await onLoad(wf)
+      setSelected(name)
+    } catch (e: unknown) {
+      onStatus(`Error loading workflow: ${(e as Error).message}`)
+    }
+  }
+
   async function handleSave() {
     if (!saveName.trim()) return
     try {
@@ -773,15 +787,20 @@ function WorkflowPanel({ workflows, params, refSlots, onLoad, onRefresh, onImpor
           <select
             value={selected}
             onChange={e => setSelected(e.target.value)}
-            className="flex-1 bg-card border border-border rounded-md px-2 py-1.5 text-sm text-white
+            className="w-0 flex-1 min-w-0 bg-card border border-border rounded-md px-2 py-1.5 text-xs text-white
                        focus:outline-none focus:border-accent"
           >
             <option value="">Select…</option>
-            {workflows.map(w => <option key={w} value={w}>{w}</option>)}
+            {workflows.slice(0, 15).map(w => <option key={w} value={w}>{w}</option>)}
           </select>
           <button onClick={handleLoad} disabled={!selected}
-            className="px-3 py-1.5 rounded-md bg-accent text-white text-xs font-medium disabled:opacity-40">
+            className="px-3 py-1.5 rounded-md bg-accent text-white text-xs font-medium disabled:opacity-40 shrink-0">
             Load
+          </button>
+          <button onClick={handleOpenFolder}
+            title="Browse for workflow folder in Finder"
+            className="px-2.5 py-1.5 rounded-md bg-card border border-border text-muted hover:text-white hover:border-accent transition-colors shrink-0">
+            <FolderOpen size={14} />
           </button>
         </div>
       </div>
