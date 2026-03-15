@@ -1,6 +1,6 @@
 # Local AI Image Gen
 
-> Fully offline AI image generation and editing for **Mac Silicon (MPS)** and **NVIDIA (CUDA)**.
+> Fully offline AI image generation and editing for **Mac Silicon (Apple MPS)**.
 > No cloud. No API keys. No subscriptions. Everything runs on your machine.
 
 ![Local AI Image Gen UI](docs/screenshot.png)
@@ -43,7 +43,6 @@ Models are downloaded automatically the first time you select them. They are cac
 | | Minimum |
 |---|---|
 | **Mac** | Apple Silicon (M1 or later) — macOS 13+ |
-| **NVIDIA** | CUDA-capable GPU, 8 GB VRAM |
 | **Python** | 3.11 or 3.12 |
 | **RAM** | 16 GB recommended (more = better) |
 | **Disk** | ~20 GB per model |
@@ -71,7 +70,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # Create venv and install deps
 uv venv
-source .venv/bin/activate    # Windows: .venv\Scripts\activate
+source .venv/bin/activate
 uv sync
 
 # Build the frontend
@@ -190,7 +189,6 @@ Open **Settings** (gear icon, top-right):
 |---|---|
 | M3 Max (36 GB) | ~11 s |
 | M2 Max (32 GB) | ~15 s |
-| RTX 3090 | ~3 s |
 
 ### Z-Image Turbo (Quantized) — 512×512, 4 steps
 
