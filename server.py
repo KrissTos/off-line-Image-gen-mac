@@ -715,6 +715,14 @@ async def api_load_workflow(name: str):
     a         = _app()
     wf_dir    = Path(a.WORKFLOWS_DIR) / name
     json_path = wf_dir / "workflow.json"
+    # Guard: ensure name doesn't escape WORKFLOWS_DIR
+    wf_base = Path(a.WORKFLOWS_DIR).resolve()
+    try:
+        wf_resolved = wf_dir.resolve()
+    except OSError:
+        raise HTTPException(400, "Invalid workflow name")
+    if not wf_resolved.is_relative_to(wf_base):
+        raise HTTPException(400, "Invalid workflow name")
     if not json_path.exists():
         raise HTTPException(404, f"Workflow not found: {name}")
     try:
@@ -729,17 +737,36 @@ async def api_load_workflow(name: str):
         raise HTTPException(500, str(e))
     d.pop("input_images", None)
 
-    with open(json_path) as fh:
-        raw = json.load(fh)
+    try:
+        with open(json_path) as fh:
+            raw = json.load(fh)
+    except Exception as e:
+        raise HTTPException(500, f"Failed to read workflow.json: {e}")
 
     ref_slots_out = []
+    wf_dir_resolved = wf_dir.resolve()
     for slot in raw.get("ref_slots", []):
         img_file = slot.get("image")
-        if not img_file or not (wf_dir / img_file).exists():
+        if not img_file:
             continue
+        # Guard against traversal in stored filenames
+        try:
+            img_resolved = (wf_dir / img_file).resolve()
+        except OSError:
+            continue
+        if not img_resolved.is_relative_to(wf_dir_resolved):
+            continue
+        if not img_resolved.exists():
+            continue
+        mask_name = slot.get("mask")
         mask_url = None
-        if slot.get("mask") and (wf_dir / slot["mask"]).exists():
-            mask_url = f"/api/workflow-assets/{name}/{slot['mask']}"
+        if mask_name:
+            try:
+                mask_resolved = (wf_dir / mask_name).resolve()
+            except OSError:
+                mask_resolved = None
+            if mask_resolved and mask_resolved.is_relative_to(wf_dir_resolved) and mask_resolved.exists():
+                mask_url = f"/api/workflow-assets/{name}/{mask_name}"
         ref_slots_out.append({
             "imageUrl":  f"/api/workflow-assets/{name}/{img_file}",
             "maskUrl":   mask_url,
@@ -1047,7 +1074,7 @@ async def api_workflow_asset(name: str, filename: str):
     a    = _app()
     base = Path(a.WORKFLOWS_DIR).resolve()
     path = (base / name / filename).resolve()
-    if not str(path).startswith(str(base)):
+    if not path.is_relative_to(base):
         raise HTTPException(400, "Invalid path")
     if not path.exists():
         raise HTTPException(404, "Asset not found")
