@@ -1,11 +1,11 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import {
   ChevronDown, ChevronRight, Play, Square,
   Layers, Sliders, Video, UploadCloud, X, Workflow, Cpu,
-  Wand2, ArrowUpCircle, FolderInput, ListOrdered, FolderOpen, ImagePlus,
+  Wand2, ArrowUpCircle, FolderInput, ListOrdered, FolderOpen, ImagePlus, Plus,
 } from 'lucide-react'
-import type { GenerateParams, RefImageSlot } from '../types'
-import { importComfyUI, loadWorkflow, saveWorkflow, uploadLora, uploadUpscaleModel, streamBatchUpscale, openFolderDialog, openFileDialog, upscaleSingleImage, updateSettings, openWorkflowFolderDialog } from '../api'
+import type { GenerateParams, RefImageSlot, LoraSlot } from '../types'
+import { importComfyUI, loadWorkflow, saveWorkflow, uploadLora, uploadUpscaleModel, streamBatchUpscale, openFolderDialog, openFileDialog, upscaleSingleImage, updateSettings, openWorkflowFolderDialog, listLoras } from '../api'
 import HelpTip from './HelpTip'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -270,63 +270,138 @@ function SizePanel({
 
 // ── LoRA panel ────────────────────────────────────────────────────────────────
 
-interface LoraPanelProps {
-  loraFile:   string | null
-  strength:   number
-  onChange:   (k: keyof GenerateParams, v: unknown) => void
-  onStatus:   (msg: string) => void
-}
-function LoraPanel({ loraFile, strength, onChange, onStatus }: LoraPanelProps) {
-  const [loading, setLoading] = useState(false)
-  const [loraName, setLoraName] = useState<string | null>(null)
-  const fileRef = useRef<HTMLInputElement>(null)
+const MAX_LORAS = 5
 
-  async function handleUpload(file: File) {
-    setLoading(true)
+interface LoraPanelProps {
+  loraFiles: LoraSlot[]
+  onChange:  (files: LoraSlot[]) => void
+  onStatus:  (msg: string) => void
+}
+function LoraPanel({ loraFiles, onChange, onStatus }: LoraPanelProps) {
+  const [library, setLibrary] = useState<Array<{ name: string; path: string }>>([])
+  const [uploading, setUploading] = useState<number | null>(null)  // slot index being uploaded
+  const fileRefs = useRef<(HTMLInputElement | null)[]>([])
+  // Stable keys for React reconciliation — index is unreliable when removing middle slots
+  const slotKeys = useRef<string[]>([])
+  const keyCounter = useRef(0)
+
+  function getKey(idx: number): string {
+    while (slotKeys.current.length <= idx) {
+      slotKeys.current.push(`lora-${keyCounter.current++}`)
+    }
+    return slotKeys.current[idx]
+  }
+
+  // Load library on mount and whenever a new file is uploaded
+  function refreshLibrary() {
+    listLoras().then(r => setLibrary(r.files)).catch(() => {})
+  }
+  useEffect(() => { refreshLibrary() }, [])
+
+  async function handleUpload(idx: number, file: File) {
+    setUploading(idx)
     try {
       const { path, name } = await uploadLora(file)
-      onChange('lora_file', path)
-      setLoraName(name)
-      onStatus(`✓ LoRA loaded: ${name}`)
+      refreshLibrary()
+      const updated = loraFiles.map((s, i) => i === idx ? { ...s, path } : s)
+      onChange(updated)
+      onStatus(`✓ LoRA uploaded: ${name}`)
     } catch (e: unknown) {
-      onStatus(`LoRA error: ${(e as Error).message}`)
+      onStatus(`LoRA upload error: ${(e as Error).message}`)
     } finally {
-      setLoading(false)
+      setUploading(null)
     }
   }
 
-  function handleClear() {
-    onChange('lora_file', null)
-    setLoraName(null)
-    onStatus('LoRA cleared')
+  function addSlot() {
+    if (loraFiles.length >= MAX_LORAS) return
+    onChange([...loraFiles, { path: '', strength: 1.0 }])
+  }
+
+  function removeSlot(idx: number) {
+    slotKeys.current.splice(idx, 1)
+    onChange(loraFiles.filter((_, i) => i !== idx))
+    onStatus(loraFiles.length === 1 ? 'LoRA cleared' : `LoRA slot ${idx + 1} removed`)
+  }
+
+  function setPath(idx: number, path: string) {
+    onChange(loraFiles.map((s, i) => i === idx ? { ...s, path } : s))
+  }
+
+  function setStrength(idx: number, strength: number) {
+    onChange(loraFiles.map((s, i) => i === idx ? { ...s, strength } : s))
   }
 
   return (
     <div className="space-y-3">
-      {loraFile ? (
-        <div className="flex items-center justify-between bg-card border border-border rounded-md px-3 py-2">
-          <span className="text-xs text-white truncate">{loraName ?? loraFile.split('/').pop()}</span>
-          <button onClick={handleClear} className="text-muted hover:text-white ml-2 shrink-0">
-            <X size={13} />
-          </button>
+      {loraFiles.map((slot, idx) => (
+        <div key={getKey(idx)} className="space-y-2 bg-card border border-border rounded-md p-2.5">
+          {/* Row: dropdown + upload button + remove */}
+          <div className="flex items-center gap-1.5">
+            <select
+              value={slot.path}
+              onChange={e => setPath(idx, e.target.value)}
+              className="flex-1 min-w-0 bg-bg border border-border rounded px-2 py-1 text-xs text-white truncate
+                         focus:outline-none focus:border-accent"
+            >
+              <option value="">— select a LoRA —</option>
+              {/* If current path isn't in library (manually picked), show it */}
+              {slot.path && !library.find(l => l.path === slot.path) && (
+                <option value={slot.path}>{slot.path.split('/').pop()}</option>
+              )}
+              {library.map(l => (
+                <option key={l.path} value={l.path}>{l.name}</option>
+              ))}
+            </select>
+
+            {/* Upload new file → auto-adds to library */}
+            <button
+              title="Upload .safetensors from disk"
+              onClick={() => fileRefs.current[idx]?.click()}
+              disabled={uploading === idx}
+              className="shrink-0 p-1.5 rounded border border-border text-muted hover:text-white hover:border-accent transition-colors disabled:opacity-40"
+            >
+              {uploading === idx ? <span className="text-[10px]">…</span> : <UploadCloud size={12} />}
+            </button>
+
+            <button
+              title="Remove this LoRA slot"
+              onClick={() => removeSlot(idx)}
+              className="shrink-0 p-1.5 rounded border border-border text-muted hover:text-white hover:border-red-500 transition-colors"
+            >
+              <X size={12} />
+            </button>
+
+            <input
+              ref={el => { fileRefs.current[idx] = el }}
+              type="file"
+              accept=".safetensors,.pt,.bin"
+              className="hidden"
+              onChange={e => { if (e.target.files?.[0]) handleUpload(idx, e.target.files[0]); if (e.target) e.target.value = '' }}
+            />
+          </div>
+
+          {/* Strength slider */}
+          <Slider
+            label={`Strength ${idx + 1}`}
+            value={slot.strength}
+            min={0} max={2} step={0.05}
+            onChange={v => setStrength(idx, v)}
+            helpTip={<HelpTip text="How strongly this LoRA is applied. 0 = no effect, 1 = full strength." />}
+          />
         </div>
-      ) : (
+      ))}
+
+      {loraFiles.length < MAX_LORAS && (
         <button
-          onClick={() => fileRef.current?.click()}
-          disabled={loading}
-          className="w-full border border-dashed border-border rounded-lg py-3 flex items-center justify-center gap-2
-                     text-muted hover:border-accent hover:text-white transition-colors text-xs disabled:opacity-50"
+          onClick={addSlot}
+          className="w-full border border-dashed border-border rounded-lg py-2 flex items-center justify-center gap-2
+                     text-muted hover:border-accent hover:text-white transition-colors text-xs"
         >
-          <UploadCloud size={14} />
-          {loading ? 'Uploading…' : 'Upload .safetensors'}
+          <Plus size={12} />
+          Add LoRA {loraFiles.length > 0 ? `(${loraFiles.length}/${MAX_LORAS})` : ''}
         </button>
       )}
-      <input ref={fileRef} type="file" accept=".safetensors,.pt,.bin" className="hidden"
-        onChange={e => { if (e.target.files?.[0]) handleUpload(e.target.files[0]) }} />
-
-      <Slider label="LoRA strength" value={strength} min={0} max={2} step={0.05}
-        onChange={v => onChange('lora_strength', v)}
-        helpTip={<HelpTip text="How strongly the LoRA style is applied. 0 = no effect, 1 = full strength. Values above 1 are possible but may cause artifacts." />} />
     </div>
   )
 }
@@ -745,6 +820,7 @@ function WorkflowPanel({ workflows, params, refSlots, onLoad, onRefresh, onImpor
     try {
       await saveWorkflow({
         ...params,
+        lora_files: params.lora_files.filter(s => s.path !== ''),
         name: saveName.trim(),
         ref_slots: refSlots.map(s => ({
           imageId:  s.imageId,
@@ -929,9 +1005,8 @@ export default function Sidebar({
       {(isZImageFull || isFlux) && (
         <Accordion label="LoRA" icon={<Wand2 size={13} />}>
           <LoraPanel
-            loraFile={params.lora_file}
-            strength={params.lora_strength}
-            onChange={onParamChange}
+            loraFiles={params.lora_files}
+            onChange={files => onParamChange('lora_files', files)}
             onStatus={onStatus}
           />
           {isFlux && !isZImageFull && (

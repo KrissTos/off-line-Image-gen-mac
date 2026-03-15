@@ -187,6 +187,7 @@ export async function importComfyUI(file: File) {
 export const loadLora  = (lora_path: string, strength: number, device: string) =>
   post<{ status: string }>('/api/lora/load', { lora_path, strength, device })
 export const clearLora = () => del<{ status: string }>('/api/lora')
+export const listLoras = () => get<{ files: Array<{ name: string; path: string }> }>('/api/lora/list')
 
 // ── Settings ──────────────────────────────────────────────────────────────────
 

@@ -1,5 +1,10 @@
 // ── Domain types ──────────────────────────────────────────────────────────────
 
+export interface LoraSlot {
+  path:     string   // absolute path on server (inside lora_uploads/)
+  strength: number   // 0–2
+}
+
 export interface AppStatus {
   model:   string | null
   device:  string | null
@@ -20,8 +25,7 @@ export interface GenerateParams {
   model_source:       string
   input_image_ids:    string[]
   mask_image_id:      string | null
-  lora_file:          string | null
-  lora_strength:      number
+  lora_files:         LoraSlot[]
   img_strength:       number
   repeat_count:       number
   auto_save:          boolean

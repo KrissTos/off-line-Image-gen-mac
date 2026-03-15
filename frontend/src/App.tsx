@@ -445,6 +445,7 @@ export default function App() {
       }
       if (wf.mask_mode)      dispatch({ type: 'SET_PARAM', key: 'mask_mode',      value: wf.mask_mode as string })
       if (wf.outpaint_align) dispatch({ type: 'SET_PARAM', key: 'outpaint_align', value: wf.outpaint_align as string })
+      if (Array.isArray(wf.lora_files)) dispatch({ type: 'SET_PARAM', key: 'lora_files', value: wf.lora_files })
     } finally {
       isRestoringWorkflow.current = false
     }

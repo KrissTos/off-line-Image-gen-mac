@@ -28,7 +28,8 @@ export default function Gallery({ outputs, onSelect, onDelete, upscaleModelPath,
     <div
       ref={scrollRef}
       onWheel={handleWheel}
-      className="h-full border-t border-border bg-surface px-4 py-2 overflow-x-auto overflow-y-hidden"
+      className="h-full border-t border-border bg-surface px-4 pt-2 overflow-x-auto overflow-y-hidden"
+      style={{ paddingBottom: 'max(8px, env(safe-area-inset-bottom))' }}
     >
       <div className="flex gap-2 h-full items-center">
         {outputs.map((item) => (
