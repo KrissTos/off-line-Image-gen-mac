@@ -71,7 +71,8 @@ function stepsForModel(model: string): number {
 
 export default function App() {
   const { state, dispatch } = useAppState()
-  const abortRef    = useRef<AbortController | null>(null)
+  const abortRef              = useRef<AbortController | null>(null)
+  const isRestoringWorkflow   = useRef(false)
   const [statusMsg, setStatusMsg] = useState('')
   const [upscalingGalleryUrl, setUpscalingGalleryUrl] = useState<string | null>(null)
   const centerRef   = useRef<HTMLDivElement>(null)
@@ -407,40 +408,46 @@ export default function App() {
   // ── Workflow ──────────────────────────────────────────────────────────────
 
   const handleWorkflowLoad = useCallback(async (wf: Record<string, unknown>) => {
-    const p: Partial<GenerateParams> = {}
-    if (wf.prompt)       p.prompt       = String(wf.prompt)
-    if (wf.height)       p.height       = Number(wf.height)
-    if (wf.width)        p.width        = Number(wf.width)
-    if (wf.steps)        p.steps        = Number(wf.steps)
-    if (wf.seed)         p.seed         = Number(wf.seed)
-    if (wf.guidance)     p.guidance     = Number(wf.guidance)
-    if (wf.model_choice) p.model_choice = String(wf.model_choice)
-    if (wf.device)       p.device       = String(wf.device)
-    dispatch({ type: 'SET_PARAMS', params: p })
+    if (isRestoringWorkflow.current) return
+    isRestoringWorkflow.current = true
+    try {
+      const p: Partial<GenerateParams> = {}
+      if (wf.prompt)       p.prompt       = String(wf.prompt)
+      if (wf.height)       p.height       = Number(wf.height)
+      if (wf.width)        p.width        = Number(wf.width)
+      if (wf.steps)        p.steps        = Number(wf.steps)
+      if (wf.seed)         p.seed         = Number(wf.seed)
+      if (wf.guidance)     p.guidance     = Number(wf.guidance)
+      if (wf.model_choice) p.model_choice = String(wf.model_choice)
+      if (wf.device)       p.device       = String(wf.device)
+      dispatch({ type: 'SET_PARAMS', params: p })
 
-    const slots = wf.ref_slots as Array<{ imageUrl: string; maskUrl: string | null; strength: number }> | undefined
-    if (slots?.length) {
-      setStatusMsg(`Restoring ${slots.length} ref slot(s)…`)
-      dispatch({ type: 'CLEAR_ALL_SLOTS' })
-      for (let i = 0; i < slots.length; i++) {
-        const slot = slots[i]
-        const slotId = i + 1
-        try {
-          const { id, url } = await uploadFromUrl(slot.imageUrl)
-          dispatch({ type: 'ADD_REF_SLOT', imageId: id, imageUrl: url })
-          dispatch({ type: 'UPDATE_SLOT_STRENGTH', slotId, strength: slot.strength })
-          if (slot.maskUrl) {
-            const { id: mId, url: mUrl } = await uploadFromUrl(slot.maskUrl)
-            dispatch({ type: 'SET_SLOT_MASK', slotId, maskId: mId, maskUrl: mUrl })
+      const slots = wf.ref_slots as Array<{ imageUrl: string; maskUrl: string | null; strength: number }> | undefined
+      if (slots?.length) {
+        setStatusMsg(`Restoring ${slots.length} ref slot(s)…`)
+        dispatch({ type: 'CLEAR_ALL_SLOTS' })
+        for (let i = 0; i < slots.length; i++) {
+          const slot = slots[i]
+          const slotId = i + 1
+          try {
+            const { id, url } = await uploadFromUrl(slot.imageUrl)
+            dispatch({ type: 'ADD_REF_SLOT', imageId: id, imageUrl: url })
+            dispatch({ type: 'UPDATE_SLOT_STRENGTH', slotId, strength: slot.strength })
+            if (slot.maskUrl) {
+              const { id: mId, url: mUrl } = await uploadFromUrl(slot.maskUrl)
+              dispatch({ type: 'SET_SLOT_MASK', slotId, maskId: mId, maskUrl: mUrl })
+            }
+          } catch (err) {
+            console.error(`Workflow restore: failed to upload slot ${slotId}`, err)
           }
-        } catch {
-          // skip slot on error, continue with others
         }
+        setStatusMsg(`✓ Loaded workflow with ${slots.length} ref slot(s)`)
       }
-      setStatusMsg(`✓ Loaded workflow with ${slots.length} ref slot(s)`)
+      if (wf.mask_mode)      dispatch({ type: 'SET_PARAM', key: 'mask_mode',      value: wf.mask_mode as string })
+      if (wf.outpaint_align) dispatch({ type: 'SET_PARAM', key: 'outpaint_align', value: wf.outpaint_align as string })
+    } finally {
+      isRestoringWorkflow.current = false
     }
-    if (wf.mask_mode)      dispatch({ type: 'SET_PARAM', key: 'mask_mode',      value: wf.mask_mode as string })
-    if (wf.outpaint_align) dispatch({ type: 'SET_PARAM', key: 'outpaint_align', value: wf.outpaint_align as string })
   }, [dispatch, setStatusMsg])
 
   // ── Render ────────────────────────────────────────────────────────────────

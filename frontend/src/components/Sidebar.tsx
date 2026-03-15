@@ -706,7 +706,7 @@ interface WorkflowPanelProps {
   workflows:    string[]
   params:       GenerateParams
   refSlots:     RefImageSlot[]
-  onLoad:       (wf: Record<string, unknown>) => void
+  onLoad:       (wf: Record<string, unknown>) => Promise<void>
   onRefresh:    () => void
   onImportComfyUI: (wf: Record<string, unknown>, notes: string) => void
   onStatus:     (msg: string) => void
@@ -720,10 +720,9 @@ function WorkflowPanel({ workflows, params, refSlots, onLoad, onRefresh, onImpor
     if (!selected) return
     try {
       const wf = await loadWorkflow(selected)
-      onLoad(wf)
-      onStatus(`✓ Loaded workflow: ${selected}`)
+      await onLoad(wf)
     } catch (e: unknown) {
-      onStatus(`Error: ${(e as Error).message}`)
+      onStatus(`Error loading workflow: ${(e as Error).message}`)
     }
   }
 
@@ -838,7 +837,7 @@ interface SidebarProps {
   onGenerate:           () => void
   onStop:               () => void
   onIterate:            () => void
-  onWorkflowLoad:       (wf: Record<string, unknown>) => void
+  onWorkflowLoad:       (wf: Record<string, unknown>) => Promise<void>
   onWorkflowRefresh:    () => void
   onStatus:             (msg: string) => void
 }
