@@ -2,10 +2,10 @@ import { useState, useRef } from 'react'
 import {
   ChevronDown, ChevronRight, Play, Square,
   Layers, Sliders, Video, UploadCloud, X, Workflow, Cpu,
-  Wand2, ArrowUpCircle, FolderInput, ListOrdered, FolderOpen,
+  Wand2, ArrowUpCircle, FolderInput, ListOrdered, FolderOpen, ImagePlus,
 } from 'lucide-react'
 import type { GenerateParams } from '../types'
-import { importComfyUI, loadWorkflow, saveWorkflow, uploadLora, uploadUpscaleModel, streamBatchUpscale, openFolderDialog, updateSettings } from '../api'
+import { importComfyUI, loadWorkflow, saveWorkflow, uploadLora, uploadUpscaleModel, streamBatchUpscale, openFolderDialog, openFileDialog, upscaleSingleImage, updateSettings } from '../api'
 import HelpTip from './HelpTip'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -586,6 +586,120 @@ function BatchUpscalePanel({ modelPath, onStatus }: BatchUpscalePanelProps) {
   )
 }
 
+// ── Single Upscale panel ──────────────────────────────────────────────────────
+
+interface SingleUpscalePanelProps {
+  modelPath: string
+  onStatus:  (msg: string) => void
+}
+function SingleUpscalePanel({ modelPath, onStatus }: SingleUpscalePanelProps) {
+  const [filePath,   setFilePath]   = useState('')
+  const [scale,      setScale]      = useState('×4')
+  const [running,    setRunning]    = useState(false)
+  const [resultPath, setResultPath] = useState<string | null>(null)
+  const [picking,    setPicking]    = useState(false)
+
+  async function handlePick() {
+    setPicking(true)
+    setResultPath(null)
+    try {
+      const data = await openFileDialog()
+      if (!data.cancelled && data.path) setFilePath(data.path)
+    } catch (e: unknown) {
+      onStatus(`File picker error: ${(e as Error).message}`)
+    } finally {
+      setPicking(false)
+    }
+  }
+
+  async function handleRun() {
+    if (!modelPath) { onStatus('⚠ Load an upscale model first'); return }
+    if (!filePath.trim()) { onStatus('⚠ Pick an image file first'); return }
+    setRunning(true)
+    setResultPath(null)
+    try {
+      const result = await upscaleSingleImage({
+        source:       'path',
+        file_path:    filePath.trim(),
+        model_path:   modelPath,
+        scale_choice: scale,
+      })
+      setResultPath(result.saved_path)
+      onStatus(`✓ Saved: ${result.filename} (${result.width}×${result.height})`)
+    } catch (e: unknown) {
+      onStatus(`Upscale error: ${(e as Error).message}`)
+    } finally {
+      setRunning(false)
+    }
+  }
+
+  return (
+    <div className="space-y-3">
+      {/* File picker */}
+      <div>
+        <label className="text-xs text-muted block mb-1">Image file</label>
+        <div className="flex gap-2">
+          <div className="flex-1 bg-card border border-border rounded-md px-3 py-1.5 text-xs text-white
+                          placeholder-muted truncate min-w-0">
+            {filePath ? filePath.split('/').pop() : <span className="text-muted">No file selected</span>}
+          </div>
+          <button
+            onClick={handlePick}
+            disabled={picking}
+            title="Browse for image"
+            aria-label="Browse for image"
+            className="px-2 py-1.5 rounded-md bg-card border border-border text-muted hover:text-white
+                       hover:border-accent transition-colors disabled:opacity-50 shrink-0"
+          >
+            {picking ? <span className="text-[10px]">…</span> : <ImagePlus size={13} aria-hidden="true" />}
+          </button>
+        </div>
+        {filePath && (
+          <p className="text-[10px] text-muted/60 mt-0.5 truncate font-mono" title={filePath}>{filePath}</p>
+        )}
+      </div>
+
+      {/* Scale selector */}
+      <div>
+        <label className="text-xs text-muted block mb-1">Scale</label>
+        <div className="flex gap-2">
+          {['×2', '×3', '×4'].map(s => (
+            <button
+              key={s}
+              onClick={() => setScale(s)}
+              className={`flex-1 py-1.5 rounded-md text-xs font-medium transition-colors
+                ${scale === s ? 'bg-accent text-white' : 'bg-card border border-border text-muted hover:text-white'}`}
+            >
+              {s}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {!modelPath && (
+        <p className="text-[10px] text-amber-400/80">⚠ Enable upscaling and upload a model above first.</p>
+      )}
+
+      <button
+        onClick={handleRun}
+        disabled={running || !filePath.trim() || !modelPath}
+        className="w-full py-2 rounded-lg bg-accent hover:bg-accent/80 text-white text-xs font-medium
+                   flex items-center justify-center gap-2 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+      >
+        <ArrowUpCircle size={13} />
+        {running ? 'Upscaling…' : 'Upscale Image'}
+      </button>
+
+      {resultPath && (
+        <div className="bg-bg border border-green-800/40 rounded-md px-2 py-1.5 text-[10px] text-green-400 font-mono
+                        break-all leading-snug">
+          Saved: {resultPath}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Workflow panel ────────────────────────────────────────────────────────────
 
 interface WorkflowPanelProps {
@@ -809,6 +923,13 @@ export default function Sidebar({
           onChange={onParamChange}
           onStatus={onStatus}
         />
+        <div className="border-t border-border pt-3 mt-1">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted mb-2">Single image</p>
+          <SingleUpscalePanel
+            modelPath={params.upscale_model_path}
+            onStatus={onStatus}
+          />
+        </div>
         <div className="border-t border-border pt-3 mt-1">
           <p className="text-[10px] font-semibold uppercase tracking-wider text-muted mb-2">Batch folder upscale</p>
           <BatchUpscalePanel

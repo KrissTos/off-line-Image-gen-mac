@@ -1,15 +1,20 @@
-import { useRef } from 'react'
-import { Film, Trash2 } from 'lucide-react'
+import { useRef, useState } from 'react'
+import { Film, Trash2, Info, ArrowUpCircle, Loader2 } from 'lucide-react'
 import type { OutputItem } from '../types'
 
 interface Props {
-  outputs:  OutputItem[]
-  onSelect: (item: OutputItem) => void
-  onDelete: (filename: string) => void
+  outputs:          OutputItem[]
+  onSelect:         (item: OutputItem) => void
+  onDelete:         (filename: string) => void
+  upscaleModelPath?: string
+  onUpscale?:        (item: OutputItem) => void
+  upscalingItem?:    string | null   // url of item currently being upscaled
 }
 
-export default function Gallery({ outputs, onSelect, onDelete }: Props) {
+export default function Gallery({ outputs, onSelect, onDelete, upscaleModelPath, onUpscale, upscalingItem }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null)
+  const [imgDims, setImgDims] = useState<Record<string, { w: number; h: number }>>({})
+  const [showInfo, setShowInfo] = useState<string | null>(null)   // url of item with visible info tooltip
 
   function handleWheel(e: React.WheelEvent) {
     if (!scrollRef.current) return
@@ -35,7 +40,7 @@ export default function Gallery({ outputs, onSelect, onDelete }: Props) {
               e.dataTransfer.setData('text/plain', item.url)
               e.dataTransfer.effectAllowed = 'copy'
             }}
-            onClick={() => onSelect(item)}
+            onClick={() => { setShowInfo(null); onSelect(item) }}
             role="button"
             tabIndex={0}
             onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') onSelect(item) }}
@@ -53,18 +58,74 @@ export default function Gallery({ outputs, onSelect, onDelete }: Props) {
                 alt={item.prompt ? item.prompt.slice(0, 120) : (item.name || 'Generated image')}
                 className="w-full h-full object-cover hover:opacity-80 transition-opacity"
                 draggable={false}
+                onLoad={e => {
+                  const img = e.currentTarget
+                  setImgDims(prev => ({ ...prev, [item.url]: { w: img.naturalWidth, h: img.naturalHeight } }))
+                }}
               />
             )}
 
-            {/* Delete button */}
-            <button
-              onClick={e => { e.stopPropagation(); onDelete(item.name) }}
-              aria-label="Delete image"
-              className="absolute top-1 right-1 bg-black/70 hover:bg-red-600 rounded-full p-0.5
-                         opacity-0 group-hover:opacity-100 transition-all z-10"
-            >
-              <Trash2 size={8} aria-hidden="true" />
-            </button>
+            {/* Action buttons row — top-right */}
+            <div className="absolute top-1 right-1 flex gap-0.5 opacity-0 group-hover:opacity-100 transition-all z-10">
+              {/* Info button */}
+              {item.kind !== 'video' && (
+                <div className="relative">
+                  <button
+                    onClick={e => { e.stopPropagation(); setShowInfo(prev => prev === item.url ? null : item.url) }}
+                    aria-label="Image dimensions"
+                    className="bg-black/70 hover:bg-blue-600 rounded-full p-0.5"
+                  >
+                    <Info size={8} aria-hidden="true" />
+                  </button>
+                  {showInfo === item.url && imgDims[item.url] && (
+                    <div
+                      onClick={e => e.stopPropagation()}
+                      className="absolute right-0 bottom-full mb-1 bg-black/90 text-white text-[9px]
+                                 px-1.5 py-0.5 rounded whitespace-nowrap z-20 border border-white/10"
+                    >
+                      {imgDims[item.url].w} × {imgDims[item.url].h} px
+                    </div>
+                  )}
+                  {showInfo === item.url && !imgDims[item.url] && (
+                    <div
+                      onClick={e => e.stopPropagation()}
+                      className="absolute right-0 bottom-full mb-1 bg-black/90 text-muted text-[9px]
+                                 px-1.5 py-0.5 rounded whitespace-nowrap z-20 border border-white/10"
+                    >
+                      Loading…
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Upscale button */}
+              {item.kind !== 'video' && onUpscale && (
+                <button
+                  onClick={e => {
+                    e.stopPropagation()
+                    if (!upscaleModelPath) { alert('Load an upscale model in the Upscale section first.'); return }
+                    onUpscale(item)
+                  }}
+                  aria-label="Upscale image"
+                  disabled={upscalingItem === item.url}
+                  className="bg-black/70 hover:bg-accent rounded-full p-0.5 disabled:opacity-60"
+                >
+                  {upscalingItem === item.url
+                    ? <Loader2 size={8} className="animate-spin" aria-hidden="true" />
+                    : <ArrowUpCircle size={8} aria-hidden="true" />
+                  }
+                </button>
+              )}
+
+              {/* Delete button */}
+              <button
+                onClick={e => { e.stopPropagation(); onDelete(item.name) }}
+                aria-label="Delete image"
+                className="bg-black/70 hover:bg-red-600 rounded-full p-0.5"
+              >
+                <Trash2 size={8} aria-hidden="true" />
+              </button>
+            </div>
 
             {/* Prompt tooltip strip on hover */}
             {item.prompt && (

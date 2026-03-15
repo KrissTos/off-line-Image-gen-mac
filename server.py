@@ -59,6 +59,41 @@ DIST    = ROOT / "frontend" / "dist"
 TEMP_DIR = ROOT / ".tmp_uploads"
 TEMP_DIR.mkdir(exist_ok=True)
 
+# ── Server log capture ────────────────────────────────────────────────────────
+# Tee stdout + stderr to logs/server.log so the Settings drawer can download it.
+# Overwrites on each server start so the log always reflects the current session.
+
+LOGS_DIR = ROOT / "logs"
+LOGS_DIR.mkdir(exist_ok=True)
+LOG_FILE  = LOGS_DIR / "server.log"
+
+_log_fh = open(LOG_FILE, "w", encoding="utf-8", buffering=1)  # 'w' = fresh each run
+
+
+class _LogTee:
+    """Tee writes to both the original stream and the shared log file."""
+    def __init__(self, original: Any) -> None:
+        self._orig = original
+
+    def write(self, text: str) -> int:
+        self._orig.write(text)
+        _log_fh.write(text)
+        _log_fh.flush()
+        return len(text)
+
+    def flush(self) -> None:
+        self._orig.flush()
+
+    def isatty(self) -> bool:
+        return getattr(self._orig, "isatty", lambda: False)()
+
+    def fileno(self) -> int:
+        return self._orig.fileno()
+
+
+sys.stdout = _LogTee(sys.__stdout__)  # type: ignore[assignment]
+sys.stderr = _LogTee(sys.__stderr__)  # type: ignore[assignment]
+
 # ── App ───────────────────────────────────────────────────────────────────────
 
 app = FastAPI(title="ultra-fast-image-gen API", version="1.0.0")
@@ -362,6 +397,38 @@ async def api_open_folder_dialog():
         if proc.returncode != 0:
             err = stderr.decode().strip()
             # "User cancelled" is normal — anything else is a real error worth surfacing
+            if err and "cancelled" not in err.lower() and "cancel" not in err.lower():
+                raise HTTPException(500, f"osascript error: {err}")
+            return {"path": None, "cancelled": True}
+        path = stdout.decode().strip().rstrip("/")
+        return {"path": path, "cancelled": False}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.get("/api/open-file-dialog")
+async def api_open_file_dialog():
+    """Open a native macOS file picker (image files) and return the selected path."""
+    import platform
+    if platform.system() != "Darwin":
+        raise HTTPException(400, "File picker only supported on macOS")
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "osascript", "-e",
+            'POSIX path of (choose file with prompt "Select an image to upscale"'
+            ' of type {"public.image"})',
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
+        except asyncio.TimeoutError:
+            proc.kill()
+            return {"path": None, "cancelled": True}
+        if proc.returncode != 0:
+            err = stderr.decode().strip()
             if err and "cancelled" not in err.lower() and "cancel" not in err.lower():
                 raise HTTPException(500, f"osascript error: {err}")
             return {"path": None, "cancelled": True}
@@ -713,6 +780,79 @@ async def api_batch_upscale(req: BatchUpscaleRequest):
     )
 
 
+class SingleUpscaleRequest(BaseModel):
+    source:       str        # "gallery" | "path"
+    filename:     str = ""   # for source="gallery": filename in output dir
+    file_path:    str = ""   # for source="path": absolute path on disk
+    model_path:   str
+    scale_choice: str = "×4"
+
+
+@app.post("/api/upscale/single")
+async def api_upscale_single(req: SingleUpscaleRequest):
+    """Upscale one image and save next to the original as <stem>_<W>x<H><ext>."""
+    from PIL import Image as PILImage
+
+    if not req.model_path:
+        raise HTTPException(400, "No upscale model — load one in the Upscale section first")
+
+    # Resolve source path
+    if req.source == "gallery":
+        if not req.filename:
+            raise HTTPException(400, "filename required for gallery source")
+        src_path = Path(_output_dir()) / Path(req.filename).name
+    elif req.source == "path":
+        if not req.file_path:
+            raise HTTPException(400, "file_path required for path source")
+        src_path = Path(req.file_path)
+    else:
+        raise HTTPException(400, f"Unknown source: {req.source!r}")
+
+    if not src_path.exists():
+        raise HTTPException(404, f"Image not found: {src_path}")
+
+    # Run upscale in thread (CPU/GPU-bound)
+    def _run() -> tuple:
+        a = _app()
+        device = a.get_available_devices()[0]
+        scale_map = {"×2": 2, "×3": 3, "×4": 4}
+        target = scale_map.get(req.scale_choice, 4)
+        img = PILImage.open(src_path).convert("RGB")
+        upscaled = a.upscale_image(img, req.model_path, device)
+        # Resize down if ×2 or ×3 (model outputs ×4)
+        if target < 4:
+            orig_w, orig_h = img.size
+            upscaled = upscaled.resize(
+                (orig_w * target, orig_h * target),
+                PILImage.LANCZOS,
+            )
+        w, h = upscaled.size
+        out_name = f"{src_path.stem}_{w}x{h}{src_path.suffix or '.png'}"
+        out_path = src_path.parent / out_name
+        upscaled.save(out_path)
+        return str(out_path), out_name, w, h
+
+    import asyncio as _aio
+    from concurrent.futures import ThreadPoolExecutor
+    loop = _aio.get_event_loop()
+    try:
+        saved_path, out_name, w, h = await loop.run_in_executor(
+            ThreadPoolExecutor(max_workers=1), _run
+        )
+    except Exception as e:
+        raise HTTPException(500, f"Upscale failed: {e}")
+
+    # Build URL if saved inside output dir
+    url: str | None = None
+    try:
+        rel = Path(saved_path).relative_to(Path(_output_dir()))
+        url = f"/api/output/{rel}"
+    except ValueError:
+        pass
+
+    return {"saved_path": saved_path, "filename": out_name, "url": url, "width": w, "height": h}
+
+
 # ── Routes: Settings ──────────────────────────────────────────────────────────
 
 @app.get("/api/settings")
@@ -811,6 +951,22 @@ async def spa_fallback(path: str):
     if index.exists():
         return FileResponse(str(index))
     raise HTTPException(404)
+
+
+# ── Routes: Logs ──────────────────────────────────────────────────────────────
+
+@app.get("/api/logs/download")
+async def api_download_log():
+    """Download the current server log as a text file."""
+    import datetime
+    if not LOG_FILE.exists():
+        raise HTTPException(404, "No log file found for this session")
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    return FileResponse(
+        str(LOG_FILE),
+        media_type="text/plain",
+        filename=f"server_log_{timestamp}.txt",
+    )
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────

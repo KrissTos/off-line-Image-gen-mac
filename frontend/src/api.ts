@@ -59,8 +59,26 @@ export const updateModel = (model_choice: string) =>
 
 export const openFolderDialog  = () =>
   get<{ path: string | null; cancelled: boolean }>('/api/open-folder-dialog')
+export const openFileDialog    = () =>
+  get<{ path: string | null; cancelled: boolean }>('/api/open-file-dialog')
 export const openOutputFolder  = () =>
   get<{ ok: boolean }>('/api/open-output-folder')
+
+export interface SingleUpscaleResult {
+  saved_path: string
+  filename:   string
+  url:        string | null
+  width:      number
+  height:     number
+}
+
+export const upscaleSingleImage = (params: {
+  source:       'gallery' | 'path'
+  filename?:    string
+  file_path?:   string
+  model_path:   string
+  scale_choice: string
+}) => post<SingleUpscaleResult>('/api/upscale/single', params)
 
 // ── Upload ────────────────────────────────────────────────────────────────────
 
@@ -197,16 +215,26 @@ export async function streamGenerate(
   onEvent: (e: SSEEvent) => void,
   signal?: AbortSignal,
 ): Promise<void> {
-  const r = await fetch('/api/generate', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(params),
-    signal,
-  })
+  let r: Response
+  try {
+    r = await fetch('/api/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+      signal,
+    })
+  } catch (err) {
+    const msg = (err as Error).message ?? 'network error'
+    throw new Error(`Cannot reach the generation server — is it still running? (${msg})`)
+  }
 
   if (!r.ok) {
-    const err = await r.json().catch(() => ({ detail: r.statusText }))
-    throw new Error(err.detail ?? `Generate failed: ${r.status}`)
+    let detail = r.statusText
+    try {
+      const body = await r.json()
+      detail = body.detail ?? body.message ?? detail
+    } catch { /* non-JSON body */ }
+    throw new Error(`Generation request failed (HTTP ${r.status}): ${detail}`)
   }
 
   const reader  = r.body!.getReader()

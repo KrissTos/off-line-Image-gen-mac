@@ -535,12 +535,6 @@ export default function RefImagesRow({
                 <option>Crop & Composite (Fast)</option>
                 <option>Inpainting Pipeline (Quality)</option>
               </select>
-              {slots.filter(s => s.maskUrl).length > 1 && (
-                <p className="text-[9px] text-teal-400/70 leading-tight mt-1">
-                  {slots.filter(s => s.maskUrl).length} masks → use<br />
-                  <strong>Iterate Masks</strong> button
-                </p>
-              )}
               {modelChoice.startsWith('FLUX') && maskMode === 'Inpainting Pipeline (Quality)' && (
                 <p className="text-[9px] text-amber-400/80 bg-amber-900/20 border border-amber-800/30
                               rounded px-1.5 py-1 leading-tight mt-1">

@@ -4,7 +4,7 @@ import type { GenerateParams, SSEEvent, OutputItem } from './types'
 import {
   fetchStatus, fetchModels, fetchDevices, fetchWorkflows,
   fetchOutputs, uploadImage, uploadFromUrl, streamGenerate, pingServer,
-  fetchSettings, deleteOutput,
+  fetchSettings, deleteOutput, upscaleSingleImage,
 } from './api'
 
 function hexToRgbVar(hex: string): string {
@@ -73,6 +73,7 @@ export default function App() {
   const { state, dispatch } = useAppState()
   const abortRef    = useRef<AbortController | null>(null)
   const [statusMsg, setStatusMsg] = useState('')
+  const [upscalingGalleryUrl, setUpscalingGalleryUrl] = useState<string | null>(null)
   const centerRef   = useRef<HTMLDivElement>(null)
   const [rowPcts, setRowPcts] = useState<[number, number, number]>([50, 36, 14])
 
@@ -372,6 +373,25 @@ export default function App() {
     }
   }, [state.resultUrl, dispatch, refreshOutputs])
 
+  // ── Gallery upscale ────────────────────────────────────────────────────────
+
+  const handleUpscaleGalleryItem = useCallback(async (item: OutputItem) => {
+    setUpscalingGalleryUrl(item.url)
+    try {
+      await upscaleSingleImage({
+        source:       'gallery',
+        filename:     item.name,
+        model_path:   state.params.upscale_model_path,
+        scale_choice: '×4',
+      })
+      await refreshOutputs()
+    } catch (err: unknown) {
+      dispatch({ type: 'SET_ERROR', message: (err as Error).message })
+    } finally {
+      setUpscalingGalleryUrl(null)
+    }
+  }, [state.params.upscale_model_path, dispatch, refreshOutputs])
+
   // ── Gallery select: load result + inject prompt/model ─────────────────────
 
   const handleSelectGallery = useCallback((item: OutputItem) => {
@@ -493,6 +513,9 @@ export default function App() {
               outputs={state.outputs}
               onSelect={handleSelectGallery}
               onDelete={handleDeleteOutput}
+              upscaleModelPath={state.params.upscale_model_path}
+              onUpscale={handleUpscaleGalleryItem}
+              upscalingItem={upscalingGalleryUrl}
             />
           </div>
 

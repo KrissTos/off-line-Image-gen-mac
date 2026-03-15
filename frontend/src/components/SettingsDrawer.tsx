@@ -1,6 +1,6 @@
 import {
   X, HardDrive, LogIn, LogOut, CheckCircle2, Download, Trash2,
-  RefreshCw, AlertCircle, FolderOpen, Save, CloudDownload, ArrowDownCircle, Palette,
+  RefreshCw, AlertCircle, FolderOpen, Save, CloudDownload, ArrowDownCircle, Palette, FileDown,
 } from 'lucide-react'
 import { useState, useEffect, useCallback } from 'react'
 import {
@@ -58,6 +58,9 @@ export default function SettingsDrawer({ open, onClose }: Props) {
   const [themeColors, setThemeColors] = useState<Record<string, string>>(DEFAULT_THEME)
   const [themeSaved, setThemeSaved]   = useState(false)
   const [themeSaving, setThemeSaving] = useState(false)
+  // Log download
+  const [savingLog, setSavingLog] = useState(false)
+  const [logSaved,  setLogSaved]  = useState(false)
 
   const loadData = useCallback(async () => {
     setRefreshing(true)
@@ -226,6 +229,29 @@ export default function SettingsDrawer({ open, onClose }: Props) {
   function handleResetTheme() {
     setThemeColors(DEFAULT_THEME)
     applyThemeColors(DEFAULT_THEME)
+  }
+
+  async function handleSaveLog() {
+    setSavingLog(true)
+    try {
+      const resp = await fetch('/api/logs/download')
+      if (!resp.ok) throw new Error('Log not available')
+      const blob = await resp.blob()
+      const url  = URL.createObjectURL(blob)
+      const a    = document.createElement('a')
+      a.href     = url
+      const now  = new Date()
+      const ts   = `${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}_${String(now.getHours()).padStart(2,'0')}${String(now.getMinutes()).padStart(2,'0')}`
+      a.download = `server_log_${ts}.txt`
+      a.click()
+      URL.revokeObjectURL(url)
+      setLogSaved(true)
+      setTimeout(() => setLogSaved(false), 2000)
+    } catch (e: unknown) {
+      setStatusMsg(`Log download failed: ${(e as Error).message}`)
+    } finally {
+      setSavingLog(false)
+    }
   }
 
   if (!open) return null
@@ -595,6 +621,32 @@ export default function SettingsDrawer({ open, onClose }: Props) {
             ) : (
               <p className="text-xs text-muted">Loading…</p>
             )}
+          </section>
+
+          {/* ── Server Log ── */}
+          <section>
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-label mb-2 flex items-center gap-1.5">
+              <FileDown size={13} /> Server Log
+            </h3>
+            <p className="text-[10px] text-muted/70 mb-3">
+              Download the current session log to share with AI for error analysis.
+            </p>
+            <button
+              onClick={handleSaveLog}
+              disabled={savingLog}
+              className={`w-full py-2 rounded-lg text-xs font-medium transition-colors flex items-center justify-center gap-2 disabled:opacity-40
+                ${logSaved
+                  ? 'bg-green-700/60 text-green-300 border border-green-700/50'
+                  : 'bg-card border border-border text-muted hover:text-white hover:border-accent'
+                }`}
+            >
+              {savingLog
+                ? <><RefreshCw size={12} className="animate-spin" /> Saving…</>
+                : logSaved
+                  ? <><CheckCircle2 size={12} /> Saved</>
+                  : <><FileDown size={12} /> Save Session Log</>
+              }
+            </button>
           </section>
 
         </div>
