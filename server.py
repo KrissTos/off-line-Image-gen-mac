@@ -23,6 +23,7 @@ import tempfile
 import time
 import uuid
 import warnings
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -635,9 +636,8 @@ async def api_list_workflows():
 
 @app.post("/api/workflows/save")
 async def api_save_workflow(req: SaveWorkflowRequest):
-    from datetime import datetime
     a = _app()
-    os.makedirs(a.WORKFLOWS_DIR, exist_ok=True)
+    Path(a.WORKFLOWS_DIR).mkdir(parents=True, exist_ok=True)
     timestamp   = datetime.now().strftime("%Y%m%d_%H%M%S")
     custom      = (req.name or "").strip().replace(" ", "_")
     slug        = "".join(c if c.isalnum() else "_" for c in (req.prompt or "")[:30]).strip("_")
@@ -651,6 +651,12 @@ async def api_save_workflow(req: SaveWorkflowRequest):
         if not img_id:
             continue
         img_src = TEMP_DIR / img_id
+        try:
+            img_src = img_src.resolve()
+        except OSError:
+            continue
+        if not img_src.is_relative_to(TEMP_DIR.resolve()):
+            continue
         if not img_src.exists():
             continue
         img_dst = wf_dir / f"slot_{idx}_image.png"
@@ -659,10 +665,15 @@ async def api_save_workflow(req: SaveWorkflowRequest):
         mask_id = slot.get("maskId") or ""
         if mask_id:
             mask_src = TEMP_DIR / mask_id
-            if mask_src.exists():
-                mask_dst = wf_dir / f"slot_{idx}_mask.png"
-                shutil.copy2(mask_src, mask_dst)
-                mask_fname = f"slot_{idx}_mask.png"
+            try:
+                mask_src = mask_src.resolve()
+            except OSError:
+                pass
+            else:
+                if mask_src.is_relative_to(TEMP_DIR.resolve()) and mask_src.exists():
+                    mask_dst = wf_dir / f"slot_{idx}_mask.png"
+                    shutil.copy2(mask_src, mask_dst)
+                    mask_fname = f"slot_{idx}_mask.png"
         saved_slots.append({
             "image":    f"slot_{idx}_image.png",
             "mask":     mask_fname,
