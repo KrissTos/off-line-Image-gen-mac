@@ -4,7 +4,7 @@ import {
   Layers, Sliders, Video, UploadCloud, X, Workflow, Cpu,
   Wand2, ArrowUpCircle, FolderInput, ListOrdered, FolderOpen, ImagePlus,
 } from 'lucide-react'
-import type { GenerateParams } from '../types'
+import type { GenerateParams, RefImageSlot } from '../types'
 import { importComfyUI, loadWorkflow, saveWorkflow, uploadLora, uploadUpscaleModel, streamBatchUpscale, openFolderDialog, openFileDialog, upscaleSingleImage, updateSettings } from '../api'
 import HelpTip from './HelpTip'
 
@@ -705,12 +705,13 @@ function SingleUpscalePanel({ modelPath, onStatus }: SingleUpscalePanelProps) {
 interface WorkflowPanelProps {
   workflows:    string[]
   params:       GenerateParams
+  refSlots:     RefImageSlot[]
   onLoad:       (wf: Record<string, unknown>) => void
   onRefresh:    () => void
   onImportComfyUI: (wf: Record<string, unknown>, notes: string) => void
   onStatus:     (msg: string) => void
 }
-function WorkflowPanel({ workflows, params, onLoad, onRefresh, onImportComfyUI, onStatus }: WorkflowPanelProps) {
+function WorkflowPanel({ workflows, params, refSlots, onLoad, onRefresh, onImportComfyUI, onStatus }: WorkflowPanelProps) {
   const [selected, setSelected] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
   const [saveName, setSaveName] = useState('')
@@ -729,7 +730,15 @@ function WorkflowPanel({ workflows, params, onLoad, onRefresh, onImportComfyUI, 
   async function handleSave() {
     if (!saveName.trim()) return
     try {
-      await saveWorkflow({ ...params, name: saveName.trim() })
+      await saveWorkflow({
+        ...params,
+        name: saveName.trim(),
+        ref_slots: refSlots.map(s => ({
+          imageId:  s.imageId,
+          maskId:   s.maskId ?? null,
+          strength: s.strength,
+        })),
+      })
       onStatus(`✓ Saved workflow: ${saveName}`)
       setSaveName('')
       onRefresh()
@@ -823,6 +832,7 @@ interface SidebarProps {
   hasIteratableMasks:   boolean                    // true when ≥1 ref slot has a mask → show Iterate button
   hasRefImage:          boolean                    // true when slot #1 has an image → show outpaint anchor
   refImageSize?:        { w: number; h: number }   // slot #1 natural dims for "Use ref size" button
+  refSlots:             RefImageSlot[]
   onParamChange:        (k: keyof GenerateParams, v: unknown) => void
   onParamsChange:       (p: Partial<GenerateParams>) => void
   onGenerate:           () => void
@@ -835,7 +845,7 @@ interface SidebarProps {
 
 export default function Sidebar({
   params, models, availableModels, devices, workflows, isGenerating,
-  hasIteratableMasks, hasRefImage, refImageSize,
+  hasIteratableMasks, hasRefImage, refImageSize, refSlots,
   onParamChange, onParamsChange, onGenerate, onStop, onIterate,
   onWorkflowLoad, onWorkflowRefresh, onStatus,
 }: SidebarProps) {
@@ -954,6 +964,7 @@ export default function Sidebar({
         <WorkflowPanel
           workflows={workflows}
           params={params}
+          refSlots={refSlots}
           onLoad={onWorkflowLoad}
           onRefresh={onWorkflowRefresh}
           onImportComfyUI={handleImportComfyUI}

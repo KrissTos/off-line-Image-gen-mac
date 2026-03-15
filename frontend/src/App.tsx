@@ -447,6 +447,7 @@ export default function App() {
               ? { w: state.refSlots[0].w, h: state.refSlots[0].h }
               : undefined
           }
+          refSlots={state.refSlots}
           onParamChange={(key, value) => {
             dispatch({ type: 'SET_PARAM', key, value })
             if (key === 'model_choice') {
