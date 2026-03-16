@@ -43,6 +43,14 @@ export const loadModel = (model_choice: string, device: string) =>
 export const deleteModel = (name: string) =>
   del<{ status: string }>(`/api/models/${encodeURIComponent(name)}`)
 
+export interface ModelSource {
+  id:          string
+  name:        string
+  url:         string
+  type:        'base' | 'lora' | 'upscaler'
+  description: string
+}
+
 export interface ModelUpdateResult {
   choice:       string
   repo_id:      string
@@ -268,5 +276,27 @@ export async function streamGenerate(
         }
       }
     }
+  }
+}
+
+// ── Model sources ─────────────────────────────────────────────────────────────
+
+export async function fetchModelSources(): Promise<ModelSource[]> {
+  const r = await fetch('/api/model-sources')
+  if (!r.ok) throw new Error(`Failed to fetch model sources: ${r.status}`)
+  const data = await r.json()
+  return data.sources as ModelSource[]
+}
+
+export async function saveModelSources(sources: ModelSource[]): Promise<void> {
+  const r = await fetch('/api/model-sources', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sources }),
+  })
+  if (!r.ok) {
+    let detail = `Failed to save model sources: ${r.status}`
+    try { const b = await r.json(); if (b?.detail) detail = b.detail } catch {}
+    throw new Error(detail)
   }
 }
