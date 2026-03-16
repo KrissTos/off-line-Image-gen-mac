@@ -1,7 +1,7 @@
 """
 Flux Image Generator - Gradio Web Interface
 
-Fast image generation on Apple Silicon and CUDA.
+Offline AI image generation for Mac Silicon (MPS).
 Supports multiple models:
 - Z-Image Turbo (quantized/full)
 - FLUX.2-klein-4B (int8 quantized)
@@ -16,12 +16,9 @@ os.environ["PYTORCH_MPS_HIGH_WATERMARK_RATIO"] = "0.0"   # let MPS use all avail
 os.environ["HF_HUB_CACHE"] = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
 
 import torch
-import gradio as gr
 from PIL import Image
 import json
-import atexit
 import shutil
-import tempfile
 from datetime import datetime
 
 DEFAULT_OUTPUT_DIR = os.path.join(os.path.expanduser("~"), "Pictures", "ultra-fast-image-gen")
@@ -46,24 +43,13 @@ def save_setting(key: str, value):
         pass
 
 
-def cleanup_gradio_cache():
-    gradio_temp = os.path.join(tempfile.gettempdir(), "gradio")
-    if os.path.exists(gradio_temp):
-        try:
-            shutil.rmtree(gradio_temp)
-            print("Cleaned up Gradio cache.")
-        except Exception:
-            pass
-
-atexit.register(cleanup_gradio_cache)
-
 # Global state
 pipe = None
 img2img_pipe = None   # cached ZImageImg2ImgPipeline — shared weights with pipe
 inpaint_pipe = None   # cached FluxInpaintPipeline / ZImageInpaintPipeline
 current_device = None
 current_model = None  # "zimage-quant", "zimage-full", "flux2-klein-int8"
-current_lora_path = None
+current_lora_paths: list = []  # [{path: str, strength: float}, ...]
 model_source = "local"  # "local" or "hf_cache"
 last_sync_status = ""
 online_version_cache = {}  # repo_id -> sha string, or None if error
@@ -89,8 +75,6 @@ def get_available_devices():
     devices = []
     if torch.backends.mps.is_available():
         devices.append("mps")
-    if torch.cuda.is_available():
-        devices.append("cuda")
     devices.append("cpu")
     return devices
 
@@ -326,7 +310,7 @@ def check_online_versions():
             online_version_cache[repo_id] = None
 
     table, updatable = _build_online_table()
-    return table, gr.update(choices=updatable, value=None)
+    return table, None
 
 
 def download_model_update(model_selection):
@@ -336,11 +320,11 @@ def download_model_update(model_selection):
     table, updatable = _build_online_table()   # default return values
 
     if not model_selection:
-        return "No model selected.", table, gr.update(choices=updatable, value=None)
+        return "No model selected.", table, None
 
     repo_id = next((rid for rid, dn in KNOWN_MODELS.items() if dn == model_selection), None)
     if not repo_id:
-        return f"Unknown model: {model_selection}", table, gr.update(choices=updatable, value=None)
+        return f"Unknown model: {model_selection}", table, None
 
     try:
         print(f"[Online update] Downloading {model_selection}...")
@@ -350,7 +334,7 @@ def download_model_update(model_selection):
         msg = f"⚠ {model_selection}: {e}"
 
     table, updatable = _build_online_table()   # refresh after download
-    return msg, table, gr.update(choices=updatable, value=None)
+    return msg, table, None
 
 
 def download_all_online_updates():
@@ -359,7 +343,7 @@ def download_all_online_updates():
 
     if not online_version_cache:
         table, updatable = _build_online_table()
-        return "Run 'Check Latest Versions Online' first.", table, gr.update(choices=updatable, value=None)
+        return "Run 'Check Latest Versions Online' first.", table, None
 
     msgs = []
     for repo_id, online_hash in online_version_cache.items():
@@ -378,8 +362,8 @@ def download_all_online_updates():
 
     table, updatable = _build_online_table()
     if not msgs:
-        return "All models are already up to date.", table, gr.update(choices=updatable, value=None)
-    return "\n".join(msgs), table, gr.update(choices=updatable, value=None)
+        return "All models are already up to date.", table, None
+    return "\n".join(msgs), table, None
 
 
 def _prepare_outpaint(ref_img, target_w, target_h, align="center"):
@@ -425,7 +409,7 @@ def load_zimage_pipeline(device="mps", use_full_model=False):
 
     if use_full_model:
         print(f"Loading Z-Image-Turbo (full precision) on {device}...")
-        dtype = torch.bfloat16 if device in ["mps", "cuda"] else torch.float32
+        dtype = torch.bfloat16 if device == "mps" else torch.float32
         pipe = ZImagePipeline.from_pretrained(
             "Tongyi-MAI/Z-Image-Turbo",
             torch_dtype=dtype,
@@ -434,7 +418,7 @@ def load_zimage_pipeline(device="mps", use_full_model=False):
         )
     else:
         print(f"Loading Z-Image-Turbo UINT4 (quantized) on {device}...")
-        dtype = torch.float16 if device == "cuda" else torch.float32
+        dtype = torch.float32
         pipe = ZImagePipeline.from_pretrained(
             "Disty0/Z-Image-Turbo-SDNQ-uint4-svd-r32",
             torch_dtype=dtype,
@@ -463,8 +447,6 @@ def get_memory_usage():
     """Get current memory usage in GB."""
     if torch.backends.mps.is_available():
         return torch.mps.current_allocated_memory() / 1024**3
-    elif torch.cuda.is_available():
-        return torch.cuda.memory_allocated() / 1024**3
     return 0
 
 def print_memory(label):
@@ -626,7 +608,7 @@ def load_flux2_klein_9b_sdnq_pipeline(device="mps"):
 
 
 def load_pipeline(model_choice: str, device: str = "mps"):
-    global pipe, img2img_pipe, inpaint_pipe, current_device, current_model, current_lora_path, last_sync_status
+    global pipe, img2img_pipe, inpaint_pipe, current_device, current_model, current_lora_paths, last_sync_status
 
     # If HF Cache mode, sync to local before loading (only when HF version is newer/missing locally)
     last_sync_status = ""
@@ -660,12 +642,10 @@ def load_pipeline(model_choice: str, device: str = "mps"):
             del inpaint_pipe
             inpaint_pipe = None
         del pipe
-        current_lora_path = None
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        current_lora_paths = []
         if torch.backends.mps.is_available():
             torch.mps.empty_cache()
-    
+
     if model_type == "flux2-klein-int8":
         pipe = load_flux2_klein_pipeline(device)
     elif model_type == "flux2-klein-sdnq":
@@ -683,9 +663,10 @@ def load_pipeline(model_choice: str, device: str = "mps"):
     return pipe
 
 
-def load_lora(lora_file, lora_strength: float, device: str):
-    """Load or update LoRA adapter. Supports Z-Image Full and all FLUX.2-klein models."""
-    global current_lora_path, pipe
+def load_loras(loras: list, device: str) -> str:
+    """Load one or more LoRA adapters. loras = [{path, strength}, ...]
+    Supports Z-Image Full and all FLUX.2-klein models."""
+    global current_lora_paths, pipe
 
     is_flux   = current_model is not None and current_model.startswith("flux2")
     is_zimage = current_model is not None and current_model == "zimage-full"
@@ -693,56 +674,51 @@ def load_lora(lora_file, lora_strength: float, device: str):
     if not is_flux and not is_zimage:
         return "LoRA requires FLUX.2-klein or Z-Image Full model"
 
-    if lora_file is None or lora_file == "":
-        if current_lora_path is not None:
-            if is_flux:
-                from core.lora_flux2 import unload_lora as _flux_unload
-                _flux_unload(pipe)
-            else:
-                pipe.unload_lora_weights()
-            current_lora_path = None
-        return "No LoRA loaded"
+    # Filter valid entries
+    valid = [l for l in (loras or []) if l.get("path") and os.path.exists(l["path"])]
 
-    lora_path = lora_file if isinstance(lora_file, str) else lora_file.name
+    if not valid:
+        try:
+            pipe.unload_lora_weights()
+        except Exception:
+            pass
+        current_lora_paths = []
+        return "No LoRAs loaded"
 
-    if not os.path.exists(lora_path):
-        return f"LoRA file not found: {lora_path}"
-
-    if not lora_path.endswith('.safetensors'):
-        return "Only .safetensors LoRA files are supported"
+    # Unload previous adapters before reloading
+    try:
+        pipe.unload_lora_weights()
+    except Exception:
+        pass
 
     if is_flux:
-        from core.lora_flux2 import load_lora as _flux_load_lora
+        from core.lora_flux2 import load_loras as _flux_load_loras
         try:
-            status = _flux_load_lora(pipe, lora_path, lora_strength)
-            current_lora_path = lora_path
+            status = _flux_load_loras(pipe, valid)
+            current_lora_paths = valid
             return status
         except RuntimeError as e:
             return f"LoRA error: {e}"
     else:
-        # Original Z-Image path
-        if current_lora_path == lora_path:
-            pipe.set_adapters(["default"], adapter_weights=[lora_strength])
-            return f"Updated LoRA strength to {lora_strength}"
-        if current_lora_path is not None:
-            pipe.unload_lora_weights()
-        lora_name = os.path.basename(lora_path)
-        pipe.load_lora_weights(lora_path, adapter_name="default")
-        pipe.set_adapters(["default"], adapter_weights=[lora_strength])
-        current_lora_path = lora_path
-        return f"Loaded LoRA: {lora_name} (strength {lora_strength})"
+        # Z-Image Full — diffusers native multi-adapter
+        adapter_names   = []
+        adapter_weights = []
+        for i, lora in enumerate(valid):
+            name = f"lora_{i}"
+            pipe.load_lora_weights(lora["path"], adapter_name=name)
+            adapter_names.append(name)
+            adapter_weights.append(float(lora.get("strength", 1.0)))
+        pipe.set_adapters(adapter_names, adapter_weights=adapter_weights)
+        current_lora_paths = valid
+        names = [os.path.basename(l["path"]) for l in valid]
+        return f"Loaded {len(valid)} LoRA(s): {', '.join(names)}"
 
 
-def update_lora_strength(strength: float):
-    """Update the LoRA strength without reloading."""
-    global pipe, current_lora_path
-    if current_lora_path is not None and pipe is not None:
-        try:
-            pipe.set_adapters(["default"], adapter_weights=[strength])
-            return f"LoRA strength updated to {strength}"
-        except Exception as e:
-            return f"Error updating strength: {str(e)}"
-    return "No LoRA loaded"
+def load_lora(lora_file, lora_strength: float, device: str):
+    """Legacy single-LoRA wrapper — kept for Gradio UI compatibility."""
+    if lora_file:
+        return load_loras([{"path": lora_file, "strength": lora_strength}], device)
+    return load_loras([], device)
 
 
 # =============================================================================
@@ -756,7 +732,7 @@ def load_ltx_pipeline(device="mps"):
     cache_dir = get_active_cache_dir()
     print(f"Loading LTX-Video on {device}...")
     print_memory("Before loading")
-    dtype = torch.bfloat16 if device in ["mps", "cuda"] else torch.float32
+    dtype = torch.bfloat16 if device == "mps" else torch.float32
     p = LTXPipeline.from_pretrained(
         "Lightricks/LTX-Video",
         torch_dtype=dtype,
@@ -911,11 +887,19 @@ def generate_image(
     fps_val,
     mask_image=None,
     mask_mode="Crop & Composite (Fast)",
-    progress=gr.Progress(track_tqdm=True),
+    progress=None,
     step_callback=None,
     outpaint_align="center",
+    lora_files=None,       # list of {path, strength} — multi-LoRA; takes precedence over lora_file/lora_strength
 ):
     global pipe, img2img_pipe, inpaint_pipe, video_pipe, current_video_device, model_source
+
+    # Merge legacy lora_file/lora_strength into lora_files list
+    # Also handles lora_files=[] sent by pipeline.py when no new-style LoRAs are set
+    if not lora_files and lora_file:
+        lora_files = [{"path": lora_file, "strength": lora_strength}]
+    elif lora_files is None:
+        lora_files = []
 
     # Apply model source selection before loading
     model_source = "hf_cache" if "HF Cache" in model_source_choice else "local"
@@ -954,12 +938,12 @@ def generate_image(
                 torch.mps.empty_cache()
             gc.collect()
 
-        if "Z-Image" in model_choice and lora_file is not None and lora_file != "":
+        if "Z-Image" in model_choice and lora_files:
             model_choice = "Z-Image Turbo (Full - LoRA support)"
         pipe = load_pipeline(model_choice, device)
 
-    if not is_video_model and current_model == "zimage-full" and lora_file:
-        load_lora(lora_file, lora_strength, device)
+    if not is_video_model and (current_model == "zimage-full" or (current_model and current_model.startswith("flux2"))) and lora_files:
+        load_loras(lora_files, device)
 
     # Pre-process reference images once — same size/mode for every iteration
     img_w, img_h = int(width), int(height)
@@ -1060,9 +1044,7 @@ def generate_image(
         else:
             current_seed = base_seed + i
 
-        if device == "cuda":
-            generator = torch.Generator("cuda").manual_seed(current_seed)
-        elif device == "mps":
+        if device == "mps":
             generator = torch.Generator("mps").manual_seed(current_seed)
         else:
             generator = torch.Generator().manual_seed(current_seed)
@@ -1236,8 +1218,6 @@ def generate_image(
             gc.collect()
             if torch.backends.mps.is_available():
                 torch.mps.empty_cache()
-            elif torch.cuda.is_available():
-                torch.cuda.empty_cache()
             if "out of memory" in str(e).lower():
                 tips = "Try: lower resolution, fewer frames, or close other apps to free RAM."
                 yield None, None, f"Out of memory — {tips}"
@@ -1264,14 +1244,13 @@ def generate_image(
         if torch.backends.mps.is_available():
             torch.mps.empty_cache()
             torch.mps.synchronize()
-        elif torch.cuda.is_available():
-            torch.cuda.empty_cache()
-            torch.cuda.synchronize()
-
         print_memory("After cache clear")
 
-        lora_name  = os.path.basename(lora_file) if lora_file else None
-        lora_info  = f" | LoRA: {lora_name} ({lora_strength})" if lora_name else ""
+        if lora_files:
+            lora_parts = [f"{os.path.basename(l['path'])}({l.get('strength', 1.0):.2f})" for l in lora_files]
+            lora_info  = f" | LoRA: {', '.join(lora_parts)}"
+        else:
+            lora_info  = ""
         cfg_info   = f" | CFG: {guidance}" if guidance > 0 else ""
         sync_note  = f" | Sync: {last_sync_status}" if last_sync_status else ""
         time_info  = f" | Time: {_elapsed:.1f}s"
@@ -1324,11 +1303,14 @@ def generate_image(
 
 
 def clear_lora():
-    """Clear the current LoRA."""
-    global current_lora_path, pipe
-    if current_lora_path is not None and pipe is not None:
-        pipe.unload_lora_weights()
-        current_lora_path = None
+    """Clear all loaded LoRAs."""
+    global current_lora_paths, pipe
+    if pipe is not None:
+        try:
+            pipe.unload_lora_weights()
+        except Exception:
+            pass
+    current_lora_paths = []
     return None, "LoRA cleared"
 
 
@@ -1410,8 +1392,7 @@ def batch_upscale_folder(input_folder, output_folder, scale_choice, model_path):
     scale_map = {"×2": 2, "×3": 3, "×4": 4}
     target_scale = scale_map.get(scale_choice, 4)
 
-    device = "mps" if torch.backends.mps.is_available() else \
-             "cuda" if torch.cuda.is_available() else "cpu"
+    device = "mps" if torch.backends.mps.is_available() else "cpu"
 
     log = f"Starting batch upscale — {len(files)} image(s) → {scale_choice}  |  device: {device}\n"
     yield log
@@ -1660,11 +1641,9 @@ def delete_model(model_selection):
             del pipe
             pipe = None
             current_model = None
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
             if torch.backends.mps.is_available():
                 torch.mps.empty_cache()
-    
+
     try:
         shutil.rmtree(target['path'])
         msg = f"Deleted: {target['display_name']} ({target['size_str']} freed)"
@@ -1678,8 +1657,8 @@ def delete_model(model_selection):
 
 def delete_all_models():
     """Delete all downloaded models."""
-    global pipe, current_model, current_lora_path
-    
+    global pipe, current_model, current_lora_paths
+
     models, total = scan_downloaded_models()
     
     if not models:
@@ -1689,12 +1668,10 @@ def delete_all_models():
         del pipe
         pipe = None
         current_model = None
-        current_lora_path = None
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        current_lora_paths = []
         if torch.backends.mps.is_available():
             torch.mps.empty_cache()
-    
+
     deleted = []
     errors = []
     
@@ -1777,8 +1754,7 @@ def save_workflow(wf_name, prompt, height, width, steps, seed, guidance,
     with open(os.path.join(wf_dir, "workflow.json"), "w") as f:
         json.dump(data, f, indent=2)
 
-    choices = list_saved_workflows()
-    return f"✓ Saved: {folder_name}", gr.update(choices=choices, value=folder_name)
+    return f"✓ Saved: {folder_name}"
 
 
 def load_workflow(workflow_name):
@@ -1786,13 +1762,12 @@ def load_workflow(workflow_name):
     Load a workflow and return values for all UI components.
     Returns 18 values: scalar params × 16 + input_images + status_str.
     """
-    _no_op = gr.update()
     if not workflow_name:
-        return (_no_op,) * 17 + ("No workflow selected",)
+        return (None,) * 17 + ("No workflow selected",)
     wf_dir    = os.path.join(WORKFLOWS_DIR, workflow_name)
     json_path = os.path.join(wf_dir, "workflow.json")
     if not os.path.exists(json_path):
-        return (_no_op,) * 17 + (f"Not found: {workflow_name}",)
+        return (None,) * 17 + (f"Not found: {workflow_name}",)
 
     with open(json_path) as f:
         d = json.load(f)
@@ -1861,37 +1836,6 @@ def calculate_dimensions_from_ratio(width: int, height: int, target_resolution: 
     return new_width, new_height
 
 
-def on_image_upload(images, current_preset):
-    if images is None or len(images) == 0:
-        return gr.update(visible=True), gr.update(visible=True), gr.update(visible=False, value="~1024px")
-    
-    try:
-        first_image = images[0][0] if isinstance(images[0], tuple) else images[0]
-        img_width, img_height = first_image.size
-    except Exception:
-        return gr.update(visible=True), gr.update(visible=True), gr.update(visible=False, value="~1024px")
-    
-    preset = current_preset if current_preset in ["~512px", "~1024px", "~1280px", "~1536px (32GB+)"] else "~1024px"
-    new_width, new_height = calculate_dimensions_from_ratio(img_width, img_height, preset)
-    
-    return (
-        gr.update(visible=False, value=new_width),
-        gr.update(visible=False, value=new_height),
-        gr.update(visible=True, value=preset),
-    )
-
-
-def on_resolution_preset_change(preset, images):
-    if images is None or len(images) == 0:
-        return gr.update(), gr.update()
-    
-    first_image = images[0][0] if isinstance(images[0], tuple) else images[0]
-    img_width, img_height = first_image.size
-    new_width, new_height = calculate_dimensions_from_ratio(img_width, img_height, preset)
-    
-    return gr.update(value=new_width), gr.update(value=new_height)
-
-
 def import_comfyui_workflow(json_file_path):
     """
     Parse a ComfyUI workflow JSON and populate all UI fields.
@@ -1903,17 +1847,16 @@ def import_comfyui_workflow(json_file_path):
       - Unknown checkpoint names: fuzzy-matched against locally downloaded
         models; falls back to the first available local model.
     """
-    _no_op = gr.update()
     if not json_file_path:
-        return (_no_op,) * 17 + ("No file selected",)
+        return (None,) * 17 + ("No file selected",)
     try:
         from core.workflow_utils import load_any_workflow, get_locally_available_models
         wf = load_any_workflow(json_file_path)
     except Exception as e:
-        return (_no_op,) * 17 + (f"Error reading file: {e}",)
+        return (None,) * 17 + (f"Error reading file: {e}",)
 
     if wf.get("_source") != "comfyui":
-        return (_no_op,) * 17 + (
+        return (None,) * 17 + (
             "This appears to be a native app workflow — use the 'Load' button instead.",
         )
 
@@ -2001,601 +1944,6 @@ def import_comfyui_workflow(json_file_path):
     )
 
 
-def update_ui_for_model(model_choice):
-    """Update UI visibility and defaults based on model selection."""
-    is_flux        = "FLUX" in model_choice
-    is_zimage_full = "Full" in model_choice
-    is_video       = "LTX-Video" in model_choice
-    is_zimage      = "Z-Image" in model_choice
-    is_img2img_capable = is_flux or is_zimage_full or is_video
-    # Mask is only useful for still-image img2img (not video)
-    is_mask_capable = (is_flux or is_zimage_full) and not is_video
-
-    guidance_default = 3.5 if is_flux else (3.0 if is_video else 0.0)
-    steps_default    = 25  if is_video else 4
-
-    # Z-Image Turbo native resolution is 512×512; FLUX and video work best at 1024
-    size_default = 512 if is_zimage else 1024
-
-    return (
-        gr.update(visible=is_img2img_capable),  # input_images
-        gr.update(visible=False),               # resolution_preset
-        gr.update(visible=is_zimage_full),      # lora_file
-        gr.update(visible=is_zimage_full),      # lora_strength
-        gr.update(visible=is_zimage_full),      # clear_lora_btn
-        gr.update(value=guidance_default),      # guidance_scale
-        gr.update(visible=is_zimage_full),      # img_strength
-        gr.update(visible=is_video),            # video_params_row
-        gr.update(visible=not is_video),        # output_image
-        gr.update(visible=is_video),            # output_video
-        gr.update(value=steps_default),         # steps
-        gr.update(value=size_default),          # height
-        gr.update(value=size_default),          # width
-        gr.update(visible=is_mask_capable),     # mask_row
-    )
-
-
 # Get available devices at startup
 available_devices = get_available_devices()
 default_device = available_devices[0] if available_devices else "cpu"
-
-# Create Gradio interface
-_css = """
-/* ── Reference gallery: images fill the 400px container proportionally ── */
-#ref_gallery .grid-wrap          { height: 400px !important; overflow: hidden; }
-#ref_gallery .thumbnail-item     { height: 400px !important; }
-#ref_gallery .thumbnail-item img { object-fit: contain !important;
-                                    height: 100% !important;
-                                    max-height: 400px !important; }
-
-/* ── Hide Gradio's built-in elapsed-time badge on output components ── */
-.eta-bar, .generating { display: none !important; }
-
-
-/* ── Iterations number-input spinner arrows → white ── */
-#iter_count input[type=number]::-webkit-inner-spin-button,
-#iter_count input[type=number]::-webkit-outer-spin-button {
-    filter: invert(1);
-    opacity: 1;
-}
-
-/* ── All text inputs / textareas: vertically resizable by the user ── */
-.gradio-container textarea,
-.gradio-container input[type="text"] {
-    resize: vertical !important;
-    overflow: auto !important;
-    min-height: 38px;
-}
-"""
-
-_settings = load_settings()
-
-with gr.Blocks(title="Ultra Fast Image Gen", css=_css) as demo:
-    gr.Markdown("## Ultra Fast Image Gen")
-
-    with gr.Row():
-        # ── Left column: all controls ────────────────────────────────────────
-        with gr.Column(scale=1):
-
-            # Model + Device on one row
-            with gr.Row():
-                model_choice = gr.Dropdown(
-                    choices=MODEL_CHOICES,
-                    value=MODEL_CHOICES[0],
-                    label="Model",
-                    scale=3,
-                )
-                device = gr.Dropdown(
-                    choices=available_devices,
-                    value=default_device,
-                    label="Device",
-                    scale=1,
-                )
-
-            # Source + status on one row
-            with gr.Row():
-                model_source_radio = gr.Radio(
-                    choices=["Local", "HF Cache (sync if newer)"],
-                    value="Local",
-                    label="Source",
-                    scale=1,
-                )
-                model_source_status = gr.Textbox(
-                    label="",
-                    interactive=False,
-                    value="",
-                    scale=2,
-                    show_label=False,
-                    container=False,
-                )
-
-            prompt = gr.Textbox(
-                label="Prompt",
-                placeholder="Describe the image...",
-                lines=2,
-            )
-
-            # Reference image input — visible for FLUX + Z-Image Full
-            input_images = gr.Gallery(
-                label="Reference images (optional) — FLUX: up to 6 · Z-Image Full: 1st only",
-                type="pil",
-                visible=True,
-                columns=4,
-                height=400,
-                object_fit="contain",
-                interactive=True,
-                elem_id="ref_gallery",
-            )
-            # Mask controls — visible when img2img model is active and ref is loaded
-            with gr.Row(visible=False) as mask_row:
-                mask_image = gr.Image(
-                    label="Mask  (white = regenerate · black = keep)",
-                    type="pil",
-                    image_mode="L",
-                    sources=["upload", "clipboard"],
-                    scale=2,
-                    height=200,
-                )
-                mask_mode = gr.Radio(
-                    choices=[
-                        "Crop & Composite (Fast)",
-                        "Inpainting Pipeline (Quality)",
-                    ],
-                    value="Crop & Composite (Fast)",
-                    label="Mask mode",
-                    scale=1,
-                )
-
-            resolution_preset = gr.Radio(
-                choices=["~512px", "~1024px", "~1280px", "~1536px (32GB+)"],
-                value="~1024px",
-                label="Output size (longest side, keeps aspect ratio)",
-                visible=False,
-            )
-
-            # Generation settings collapsed by default
-            with gr.Accordion("Generation settings", open=False):
-                with gr.Row():
-                    steps = gr.Slider(1, 50, value=4, step=1, label="Steps")
-                    seed = gr.Number(value=-1, label="Seed  (−1 = random)")
-                with gr.Row():
-                    height = gr.Slider(256, 2048, value=1024, step=64, label="Height")
-                    width  = gr.Slider(256, 2048, value=1024, step=64, label="Width")
-                guidance_scale = gr.Slider(
-                    0.0, 10.0, value=3.5, step=0.5,
-                    label="Guidance scale  (FLUX: 3.5 · Z-Image: 0)",
-                )
-
-            # LoRA + image strength — Z-Image Full only
-            with gr.Row():
-                lora_file = gr.File(
-                    label="LoRA  (.safetensors)",
-                    file_types=[".safetensors"],
-                    file_count="single",
-                    type="filepath",
-                    visible=False,
-                    scale=3,
-                )
-                clear_lora_btn = gr.Button("✕ LoRA", scale=0, min_width=80, visible=False)
-            with gr.Row():
-                lora_strength = gr.Slider(
-                    0.0, 2.0, value=1.0, step=0.05,
-                    label="LoRA strength",
-                    visible=False,
-                    scale=1,
-                )
-                img_strength = gr.Slider(
-                    0.0, 1.0, value=0.6, step=0.05,
-                    label="Image strength  (0 = keep ref · 1 = ignore ref)",
-                    visible=False,
-                    scale=1,
-                )
-
-            # Video parameters — only visible when LTX-Video is selected
-            with gr.Row(visible=False) as video_params_row:
-                num_frames = gr.Slider(9, 121, value=25, step=8, label="Frames  (9 · 17 · 25 … 121)")
-                fps_slider = gr.Slider(8, 30, value=24, step=1, label="FPS")
-
-            with gr.Row(equal_height=True):
-                generate_btn  = gr.Button("Generate", variant="primary", size="lg", scale=2)
-                with gr.Column(scale=1, min_width=150):
-                    with gr.Row(equal_height=True):
-                        gr.HTML('<div style="display:flex;align-items:center;justify-content:flex-end;font-weight:bold;white-space:nowrap;padding-right:8px;color:var(--body-text-color,#fff);flex:1">Iterations</div>')
-                        repeat_count  = gr.Number(value=1, minimum=1, maximum=100, step=1, show_label=False, precision=0, container=False, min_width=80, elem_id="iter_count")
-            seed_info = gr.Textbox(label="Info", interactive=False, lines=1)
-
-            with gr.Accordion("Workflows", open=False):
-                wf_name_input = gr.Textbox(
-                    label="Name (optional)",
-                    placeholder="My Portrait Style",
-                )
-                with gr.Row():
-                    save_wf_btn = gr.Button("Save workflow", scale=1)
-                    wf_save_status = gr.Textbox(
-                        label="", interactive=False,
-                        show_label=False, container=False, scale=2,
-                    )
-                with gr.Row():
-                    wf_dropdown = gr.Dropdown(
-                        choices=list_saved_workflows(),
-                        label="Load saved workflow",
-                        scale=3,
-                    )
-                    load_wf_btn  = gr.Button("Load", variant="primary", scale=1)
-                    refresh_wf_btn = gr.Button("↺", scale=0, min_width=40)
-                wf_load_status = gr.Textbox(label="", interactive=False, show_label=False, container=False)
-
-                gr.Markdown("**Import ComfyUI workflow**")
-                with gr.Row():
-                    comfyui_file = gr.File(
-                        label="ComfyUI workflow.json",
-                        file_types=[".json"],
-                        file_count="single",
-                        type="filepath",
-                        scale=3,
-                    )
-                    import_comfyui_btn = gr.Button("Import", variant="secondary", scale=1)
-                comfyui_import_status = gr.Textbox(
-                    label="", interactive=False, show_label=False, container=False,
-                )
-
-        # ── Right column: output ─────────────────────────────────────────────
-        with gr.Column(scale=1):
-            output_image = gr.Image(label="Output", type="pil", interactive=False)
-            output_video = gr.Video(label="Output Video", visible=False)
-            with gr.Row():
-                save_btn        = gr.Button("Save image", scale=2)
-                open_folder_btn = gr.Button("Open folder", scale=1)
-                auto_save       = gr.Checkbox(label="Auto-save", value=True, scale=0)
-            save_status = gr.Textbox(
-                label="", interactive=False, lines=1,
-                show_label=False, container=False,
-            )
-            with gr.Row():
-                output_dir = gr.Textbox(
-                    label="Output folder",
-                    value=_settings.get("output_dir", DEFAULT_OUTPUT_DIR),
-                    scale=4,
-                )
-                browse_btn = gr.Button("📂", scale=0, min_width=48)
-
-            with gr.Row():
-                upscale_enabled = gr.Checkbox(label="4× Upscale", value=False, scale=0, min_width=100)
-                upscale_model_path = gr.Textbox(
-                    label="Upscaler model path  (.pth or .safetensors)",
-                    placeholder="e.g. /path/to/4x-UltraSharp.pth",
-                    value=_settings.get("upscaler_model_path", ""),
-                    scale=4,
-                )
-                browse_upscaler_btn = gr.Button("📂", scale=0, min_width=48)
-
-            with gr.Accordion("Batch Upscaler", open=False):
-                with gr.Row():
-                    batch_input_folder = gr.Textbox(
-                        label="Input folder (low-res images)",
-                        placeholder="/path/to/lowres/",
-                        scale=4,
-                    )
-                    browse_batch_input_btn = gr.Button("📂", scale=0, min_width=48)
-                with gr.Row():
-                    batch_output_folder = gr.Textbox(
-                        label="Output folder (leave blank = save next to originals)",
-                        placeholder="/path/to/output/  (optional)",
-                        scale=4,
-                    )
-                    browse_batch_output_btn = gr.Button("📂", scale=0, min_width=48)
-                with gr.Row():
-                    batch_scale_radio = gr.Radio(
-                        choices=["×2", "×3", "×4"],
-                        value="×4",
-                        label="Scale factor",
-                        scale=1,
-                    )
-                    run_batch_upscale_btn = gr.Button("Run Batch Upscale", variant="primary", scale=2)
-                batch_upscale_log = gr.Textbox(
-                    label="Progress",
-                    interactive=False,
-                    lines=6,
-                    max_lines=20,
-                )
-
-            with gr.Accordion("Storage & Updates", open=False):
-                with gr.Tabs():
-                    with gr.Tab("Local"):
-                        storage_display = gr.Markdown(value=get_storage_display())
-                        with gr.Row():
-                            model_dropdown = gr.Dropdown(
-                                choices=get_model_choices_for_deletion(),
-                                label="Select model to delete",
-                                scale=3,
-                            )
-                            delete_btn = gr.Button("Delete", variant="secondary", scale=1)
-                        with gr.Row():
-                            refresh_btn    = gr.Button("Refresh", scale=1)
-                            delete_all_btn = gr.Button("Delete ALL", variant="stop", scale=1)
-                        storage_status = gr.Textbox(label="Status", interactive=False, lines=1)
-
-                    with gr.Tab("HF Sync"):
-                        versions_display = gr.Markdown(value=get_versions_display())
-                        with gr.Row():
-                            check_versions_btn = gr.Button("Refresh", scale=1)
-                            sync_all_btn       = gr.Button("Sync newer → local", variant="primary", scale=1)
-                        sync_status = gr.Textbox(label="Sync status", interactive=False, lines=1)
-
-                    with gr.Tab("Online"):
-                        online_versions_display = gr.Markdown(value="_Click **Check** to see results._")
-                        with gr.Row():
-                            check_online_btn        = gr.Button("Check", scale=1)
-                            download_all_online_btn = gr.Button("Download all", variant="secondary", scale=1)
-                        with gr.Row():
-                            update_model_dropdown  = gr.Dropdown(
-                                choices=[], label="Select to download / update", scale=3,
-                            )
-                            download_selected_btn  = gr.Button("Download", variant="primary", scale=1)
-                        online_update_status = gr.Textbox(label="Status", interactive=False, lines=1)
-
-                    with gr.Tab("HF Account"):
-                        hf_status_display = gr.Markdown(value=hf_get_status())
-                        with gr.Row():
-                            hf_token_input = gr.Textbox(
-                                label="HuggingFace token",
-                                placeholder="hf_...",
-                                type="password",
-                                scale=4,
-                            )
-                            hf_login_btn  = gr.Button("Login",  variant="primary",   scale=1)
-                            hf_logout_btn = gr.Button("Logout", variant="secondary",  scale=1)
-                        gr.Markdown(
-                            "_Get your token at [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens) "
-                            "(needs **Read** permission). Required for gated models like FLUX.2-klein-9B._"
-                        )
-                        hf_account_status = gr.Textbox(label="Result", interactive=False, lines=1)
-
-    # ── Examples ─────────────────────────────────────────────────────────────
-    gr.Examples(
-        examples=[
-            ["A majestic mountain landscape at sunset, dramatic lighting, cinematic"],
-            ["Portrait of a young woman, soft studio lighting, professional photography"],
-            ["Cyberpunk city street at night, neon lights, rain reflections"],
-            ["A cute cat wearing a tiny hat, studio photo, soft lighting"],
-            ["Abstract art, vibrant colors, fluid shapes, modern design"],
-        ],
-        inputs=[prompt],
-    )
-
-    # ── Event handlers ───────────────────────────────────────────────────────
-    _ui_model_outputs = [
-        input_images, resolution_preset,
-        lora_file, lora_strength, clear_lora_btn,
-        guidance_scale, img_strength,
-        video_params_row, output_image, output_video, steps,
-        height, width,
-        mask_row,          # new: show mask controls for img2img-capable still models
-    ]
-
-    model_choice.change(
-        fn=update_ui_for_model,
-        inputs=[model_choice],
-        outputs=_ui_model_outputs,
-    )
-    model_choice.change(
-        fn=check_model_source_status,
-        inputs=[model_choice, model_source_radio],
-        outputs=[model_source_status],
-    )
-    model_source_radio.change(
-        fn=check_model_source_status,
-        inputs=[model_choice, model_source_radio],
-        outputs=[model_source_status],
-    )
-
-    input_images.change(
-        fn=on_image_upload,
-        inputs=[input_images, resolution_preset],
-        outputs=[width, height, resolution_preset],
-    )
-    resolution_preset.change(
-        fn=on_resolution_preset_change,
-        inputs=[resolution_preset, input_images],
-        outputs=[width, height],
-    )
-
-    generate_btn.click(
-        fn=generate_image,
-        inputs=[
-            prompt, height, width, steps, seed, guidance_scale, device,
-            model_choice, model_source_radio, input_images,
-            lora_file, lora_strength, img_strength,
-            repeat_count, auto_save, output_dir,
-            upscale_enabled, upscale_model_path,
-            num_frames, fps_slider,
-            mask_image, mask_mode,
-        ],
-        outputs=[output_image, output_video, seed_info],
-    )
-
-    def manual_save(image, out_dir, prompt_text):
-        if image is None:
-            return "No image to save"
-        return save_image(image, out_dir, prompt_text)
-
-    save_btn.click(
-        fn=manual_save,
-        inputs=[output_image, output_dir, prompt],
-        outputs=[save_status],
-    )
-
-    def open_output_folder(out_dir):
-        import subprocess
-        folder = get_output_dir(out_dir)
-        subprocess.run(["open", folder])
-        return f"Opened: {folder}"
-
-    open_folder_btn.click(
-        fn=open_output_folder,
-        inputs=[output_dir],
-        outputs=[save_status],
-    )
-
-    browse_btn.click(
-        fn=browse_output_folder,
-        inputs=[output_dir],
-        outputs=[output_dir],
-        show_progress="hidden",
-    )
-
-    browse_upscaler_btn.click(
-        fn=browse_upscaler_file,
-        inputs=[upscale_model_path],
-        outputs=[upscale_model_path],
-        show_progress="hidden",
-    )
-
-    output_dir.change(fn=lambda v: save_setting("output_dir", v), inputs=[output_dir])
-    upscale_model_path.change(fn=lambda v: save_setting("upscaler_model_path", v), inputs=[upscale_model_path])
-
-    browse_batch_input_btn.click(
-        fn=browse_input_folder,
-        inputs=[batch_input_folder],
-        outputs=[batch_input_folder],
-        show_progress="hidden",
-    )
-
-    browse_batch_output_btn.click(
-        fn=browse_output_folder,
-        inputs=[batch_output_folder],
-        outputs=[batch_output_folder],
-        show_progress="hidden",
-    )
-
-    run_batch_upscale_btn.click(
-        fn=batch_upscale_folder,
-        inputs=[batch_input_folder, batch_output_folder, batch_scale_radio, upscale_model_path],
-        outputs=[batch_upscale_log],
-    )
-
-    clear_lora_btn.click(fn=clear_lora, outputs=[lora_file, seed_info])
-    lora_strength.change(fn=update_lora_strength, inputs=[lora_strength], outputs=[seed_info])
-
-    def refresh_storage():
-        new_choices = get_model_choices_for_deletion()
-        return get_storage_display(), gr.update(choices=new_choices, value=None), "", get_versions_display()
-
-    refresh_btn.click(
-        fn=refresh_storage,
-        outputs=[storage_display, model_dropdown, storage_status, versions_display],
-    )
-    delete_btn.click(
-        fn=delete_model,
-        inputs=[model_dropdown],
-        outputs=[storage_display, model_dropdown, storage_status],
-    )
-    delete_all_btn.click(
-        fn=delete_all_models,
-        outputs=[storage_display, model_dropdown, storage_status],
-    )
-    check_versions_btn.click(fn=get_versions_display, outputs=[versions_display])
-
-    def do_sync_all():
-        msg = sync_all_newer_from_hf()
-        new_choices = get_model_choices_for_deletion()
-        return get_versions_display(), get_storage_display(), gr.update(choices=new_choices, value=None), msg
-
-    sync_all_btn.click(
-        fn=do_sync_all,
-        outputs=[versions_display, storage_display, model_dropdown, sync_status],
-    )
-    check_online_btn.click(
-        fn=check_online_versions,
-        outputs=[online_versions_display, update_model_dropdown],
-    )
-    download_selected_btn.click(
-        fn=download_model_update,
-        inputs=[update_model_dropdown],
-        outputs=[online_update_status, online_versions_display, update_model_dropdown],
-    )
-    download_all_online_btn.click(
-        fn=download_all_online_updates,
-        outputs=[online_update_status, online_versions_display, update_model_dropdown],
-    )
-
-    # ── HF Account handlers ───────────────────────────────────────────────────
-    hf_login_btn.click(
-        fn=hf_login_token,
-        inputs=[hf_token_input],
-        outputs=[hf_account_status],
-    ).then(
-        fn=hf_get_status,
-        outputs=[hf_status_display],
-    )
-    hf_logout_btn.click(
-        fn=hf_logout,
-        outputs=[hf_account_status],
-    ).then(
-        fn=hf_get_status,
-        outputs=[hf_status_display],
-    )
-
-    # ── Workflow handlers ─────────────────────────────────────────────────────
-    _wf_load_outputs = [
-        prompt, height, width, steps, seed, guidance_scale, device,
-        model_choice, model_source_radio,
-        lora_strength, img_strength, repeat_count,
-        upscale_enabled, upscale_model_path,
-        num_frames, fps_slider,
-        input_images,
-        wf_load_status,
-    ]
-
-    save_wf_btn.click(
-        fn=save_workflow,
-        inputs=[
-            wf_name_input, prompt, height, width, steps, seed, guidance_scale,
-            device, model_choice, model_source_radio,
-            lora_file, lora_strength, img_strength, repeat_count,
-            upscale_enabled, upscale_model_path, num_frames, fps_slider,
-            input_images,
-        ],
-        outputs=[wf_save_status, wf_dropdown],
-    )
-
-    load_wf_btn.click(
-        fn=load_workflow,
-        inputs=[wf_dropdown],
-        outputs=_wf_load_outputs,
-    )
-
-    refresh_wf_btn.click(
-        fn=lambda: gr.update(choices=list_saved_workflows(), value=None),
-        outputs=[wf_dropdown],
-        show_progress="hidden",
-    )
-
-    # ComfyUI import: reuses the same output list, writing to wf_load_status
-    _wf_comfyui_outputs = [
-        prompt, height, width, steps, seed, guidance_scale, device,
-        model_choice, model_source_radio,
-        lora_strength, img_strength, repeat_count,
-        upscale_enabled, upscale_model_path,
-        num_frames, fps_slider,
-        input_images,
-        comfyui_import_status,
-    ]
-
-    import_comfyui_btn.click(
-        fn=import_comfyui_workflow,
-        inputs=[comfyui_file],
-        outputs=_wf_comfyui_outputs,
-    )
-
-    # Show mask row whenever reference images are loaded (and model supports it)
-    input_images.change(
-        fn=lambda imgs: gr.update(visible=imgs is not None and len(imgs) > 0),
-        inputs=[input_images],
-        outputs=[mask_row],
-        show_progress="hidden",
-    )
-
-
-if __name__ == "__main__":
-    demo.launch(theme=gr.themes.Soft())
