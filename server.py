@@ -47,7 +47,7 @@ warnings.filterwarnings(
 )
 
 import uvicorn
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import Body, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -59,6 +59,46 @@ ROOT    = Path(__file__).parent
 DIST    = ROOT / "frontend" / "dist"
 TEMP_DIR = ROOT / ".tmp_uploads"
 TEMP_DIR.mkdir(exist_ok=True)
+
+# ── Model Sources Registry ─────────────────────────────────────────────────
+MODEL_SOURCES_FILE = ROOT / "model_sources.json"
+
+DEFAULT_SOURCES: list[dict] = [
+    # Base models — name must match KNOWN_MODELS display name in app.py for Download to work
+    {"id": "src-001", "name": "FLUX.2-klein-4B (4bit SDNQ)",  "url": "https://huggingface.co/Disty0/FLUX.2-klein-4B-SDNQ-4bit-dynamic",           "type": "base",     "description": "~8 GB VRAM · MPS optimized · recommended for 16 GB Mac"},
+    {"id": "src-002", "name": "FLUX.2-klein-9B (4bit SDNQ)",  "url": "https://huggingface.co/Disty0/FLUX.2-klein-9B-SDNQ-4bit-dynamic-svd-r32",   "type": "base",     "description": "~12 GB VRAM · high quality"},
+    {"id": "src-003", "name": "FLUX.2-klein-4B (Int8)",        "url": "https://huggingface.co/aydin99/FLUX.2-klein-4B-int8",                        "type": "base",     "description": "~16 GB VRAM · MPS explicit · 4B int8"},
+    {"id": "src-004", "name": "FLUX.2-klein-9B FP8",           "url": "https://huggingface.co/black-forest-labs/FLUX.2-klein-9b-fp8",               "type": "base",     "description": "Official BFL FP8 · not yet loadable in-app"},
+    {"id": "src-005", "name": "Z-Image Turbo (Full)",           "url": "https://huggingface.co/Tongyi-MAI/Z-Image-Turbo",                           "type": "base",     "description": "~24 GB VRAM · LoRA support"},
+    {"id": "src-006", "name": "Z-Image Turbo (Quantized)",      "url": "https://huggingface.co/Disty0/Z-Image-Turbo-SDNQ-uint4-svd-r32",            "type": "base",     "description": "~6 GB VRAM · fast"},
+    {"id": "src-007", "name": "LTX-Video",                      "url": "https://huggingface.co/Lightricks/LTX-Video",                               "type": "base",     "description": "Official video generation model"},
+    # LoRAs
+    {"id": "src-008", "name": "Outpaint LoRA (klein 4B)",       "url": "https://huggingface.co/fal/flux-2-klein-4B-outpaint-lora",                  "type": "lora",     "description": "Outpainting — add green border to image"},
+    {"id": "src-009", "name": "Zoom LoRA (klein 4B)",            "url": "https://huggingface.co/fal/flux-2-klein-4B-zoom-lora",                     "type": "lora",     "description": "Zoom into red-highlighted region"},
+    {"id": "src-010", "name": "Spritesheet LoRA (klein 4B)",     "url": "https://huggingface.co/fal/flux-2-klein-4b-spritesheet-lora",              "type": "lora",     "description": "Single object → 2×2 sprite sheet"},
+    {"id": "src-011", "name": "Virtual Try-on (klein 9B)",       "url": "https://huggingface.co/fal/flux-klein-9b-virtual-tryon-lora",              "type": "lora",     "description": "Clothing swap with reference images"},
+    {"id": "src-012", "name": "360 Outpaint (klein 4B)",         "url": "https://huggingface.co/nomadoor/flux-2-klein-4B-360-erp-outpaint-lora",    "type": "lora",     "description": "Equirectangular panorama outpainting"},
+    {"id": "src-013", "name": "360 Outpaint (klein 9B)",         "url": "https://huggingface.co/nomadoor/flux-2-klein-9B-360-erp-outpaint-lora",    "type": "lora",     "description": "Equirectangular panorama outpainting 9B"},
+    {"id": "src-014", "name": "Style Pack (klein 9B)",           "url": "https://huggingface.co/DeverStyle/Flux.2-Klein-Loras",                     "type": "lora",     "description": "Arcane, DMC, flat-vector styles"},
+    {"id": "src-015", "name": "Anime→Real (klein)",              "url": "https://huggingface.co/WarmBloodAban/Flux2_Klein_Anything_to_Real_Characters", "type": "lora", "description": "Anime to photorealistic conversion"},
+    {"id": "src-016", "name": "Relight (klein 9B)",              "url": "https://huggingface.co/linoyts/Flux2-Klein-Delight-LoRA",                  "type": "lora",     "description": "Remove and replace lighting"},
+    {"id": "src-017", "name": "Consistency (klein 9B)",          "url": "https://huggingface.co/dx8152/Flux2-Klein-9B-Consistency",                 "type": "lora",     "description": "Improve edit coherence"},
+    {"id": "src-018", "name": "Enhanced Details (klein 9B)",     "url": "https://huggingface.co/dx8152/Flux2-Klein-9B-Enhanced-Details",            "type": "lora",     "description": "Realism and texture boost"},
+    {"id": "src-019", "name": "Distillation LoRA (klein 9B)",   "url": "https://huggingface.co/vafipas663/flux2-klein-base-9b-distill-lora",        "type": "lora",     "description": "Better CFG handling + fine detail"},
+    {"id": "src-020", "name": "AC Style (klein)",                "url": "https://huggingface.co/valiantcat/FLUX.2-klein-AC-Style-LORA",             "type": "lora",     "description": "Comics and cyber neon style"},
+    {"id": "src-021", "name": "Unified Reward (klein 9B)",       "url": "https://huggingface.co/CodeGoat24/FLUX.2-klein-base-9B-UnifiedReward-Flex-lora", "type": "lora", "description": "Quality preference alignment"},
+    # Upscalers
+    {"id": "src-022", "name": "Real-ESRGAN x4",                  "url": "https://huggingface.co/Comfy-Org/Real-ESRGAN_repackaged",                  "type": "upscaler", "description": "Safetensors · general purpose"},
+    {"id": "src-023", "name": "4xNomosWebPhoto RealPLKSR",        "url": "https://huggingface.co/Phips/4xNomosWebPhoto_RealPLKSR",                  "type": "upscaler", "description": "Best for web / JPEG photos"},
+    {"id": "src-024", "name": "4xNomosWebPhoto ATD",              "url": "https://huggingface.co/Phips/4xNomosWebPhoto_atd",                        "type": "upscaler", "description": "ATD architecture · web photos"},
+    {"id": "src-025", "name": "4xRealWebPhoto v4 DRCT-L",         "url": "https://huggingface.co/Phips/4xRealWebPhoto_v4_drct-l",                   "type": "upscaler", "description": "Latest DRCT · real photos"},
+    {"id": "src-026", "name": "4x-UltraSharp",                    "url": "https://huggingface.co/Kim2091/UltraSharp",                               "type": "upscaler", "description": "JPEG artifact recovery · detail"},
+    {"id": "src-027", "name": "4x-Remacri",                       "url": "https://huggingface.co/OzzyGT/4xRemacri",                                 "type": "upscaler", "description": "Safetensors · general use"},
+    {"id": "src-028", "name": "gyre upscalers (SwinIR + HAT)",    "url": "https://huggingface.co/halffried/gyre_upscalers",                         "type": "upscaler", "description": "SwinIR + HAT in safetensors format"},
+    {"id": "src-029", "name": "SwinIR collection",                 "url": "https://huggingface.co/GraydientPlatformAPI/safetensor-upscalers",        "type": "upscaler", "description": "SwinIR-L and SwinIR-M safetensors"},
+    {"id": "src-030", "name": "uwg upscaler collection",           "url": "https://huggingface.co/uwg/upscaler",                                    "type": "upscaler", "description": "Large multi-architecture collection"},
+    {"id": "src-031", "name": "OpenModelDB",                       "url": "https://openmodeldb.info",                                               "type": "upscaler", "description": "Browse all community upscale models"},
+]
 
 # ── Server log capture ────────────────────────────────────────────────────────
 # Tee stdout + stderr to logs/server.log so the Settings drawer can download it.
@@ -1056,6 +1096,34 @@ async def api_update_settings(req: UpdateSettingsRequest):
     for key, val in req.settings.items():
         a.save_setting(key, val)
     return {"status": "ok", "settings": a.load_settings()}
+
+
+# ── Routes: Model Sources ──────────────────────────────────────────────────────
+
+@app.get("/api/model-sources")
+def api_get_model_sources():
+    """Return the model sources list. Seeds from DEFAULT_SOURCES if file missing."""
+    if MODEL_SOURCES_FILE.exists():
+        try:
+            data = json.loads(MODEL_SOURCES_FILE.read_text())
+            return {"sources": data.get("sources", DEFAULT_SOURCES)}
+        except Exception:
+            pass
+    return {"sources": DEFAULT_SOURCES}
+
+
+@app.post("/api/model-sources")
+def api_save_model_sources(payload: dict = Body(...)):
+    """Save the model sources list."""
+    sources = payload.get("sources", [])
+    valid_types = {"base", "lora", "upscaler"}
+    for s in sources:
+        if not s.get("name") or not s.get("url"):
+            raise HTTPException(400, "Each source must have a non-empty name and url.")
+        if s.get("type") not in valid_types:
+            raise HTTPException(400, f"Invalid type '{s.get('type')}'. Must be base, lora, or upscaler.")
+    MODEL_SOURCES_FILE.write_text(json.dumps({"version": 1, "sources": sources}, indent=2))
+    return {"ok": True}
 
 
 # ── Routes: Storage ───────────────────────────────────────────────────────────

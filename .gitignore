@@ -19,3 +19,4 @@ huggingface/
 *.env
 .env*
 .worktrees/
+model_sources.json
