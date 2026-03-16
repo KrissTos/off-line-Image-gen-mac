@@ -29,7 +29,7 @@ def load_pipeline(device="mps"):
     print(f"PyTorch version: {torch.__version__}")
 
     # Use bfloat16 for better quality
-    dtype = torch.bfloat16 if device in ["mps", "cuda"] else torch.float32
+    dtype = torch.bfloat16 if device == "mps" else torch.float32
 
     pipe = ZImagePipeline.from_pretrained(
         "Tongyi-MAI/Z-Image-Turbo",
@@ -76,9 +76,7 @@ def generate(
     print(f"Generating with seed {seed}...")
 
     # Use appropriate generator for device
-    if device == "cuda":
-        generator = torch.Generator("cuda").manual_seed(seed)
-    elif device == "mps":
+    if device == "mps":
         generator = torch.Generator("mps").manual_seed(seed)
     else:
         generator = torch.Generator().manual_seed(seed)
@@ -128,7 +126,7 @@ Examples:
     parser.add_argument("--steps",  type=int, default=None, help="Inference steps (default from workflow or 5)")
     parser.add_argument("--seed",   type=int, default=None, help="Random seed (default from workflow or random)")
     parser.add_argument("--output", type=str, default="output.png", help="Output path (default: output.png)")
-    parser.add_argument("--device", type=str, default=None,  help="Device: mps, cuda, cpu (auto-detected if omitted)")
+    parser.add_argument("--device", type=str, default=None,  help="Device: mps, cpu (auto-detected if omitted)")
 
     # LoRA arguments
     parser.add_argument("--lora",          type=str,   default=None, help="Path to LoRA .safetensors file")
@@ -175,15 +173,10 @@ Examples:
     if device is None:
         if torch.backends.mps.is_available():
             device = "mps"
-        elif torch.cuda.is_available():
-            device = "cuda"
         else:
             device = "cpu"
     elif device == "mps" and not torch.backends.mps.is_available():
         print("MPS not available, falling back to CPU")
-        device = "cpu"
-    elif device == "cuda" and not torch.cuda.is_available():
-        print("CUDA not available, falling back to CPU")
         device = "cpu"
 
     # Validate prompt

@@ -1,7 +1,7 @@
 [project]
 name = "off-line-image-gen-mac"
 version = "0.1.0"
-description = "Offline AI image generation for Mac Silicon and CUDA — FLUX, Z-Image Turbo, video generation, LoRA support"
+description = "Offline AI image generation for Mac Silicon (MPS) — FLUX.2-klein, Z-Image Turbo, LTX-Video, LoRA support"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
