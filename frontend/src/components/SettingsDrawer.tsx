@@ -698,9 +698,13 @@ export default function SettingsDrawer({ open, onClose }: Props) {
                     src.type === 'lora'     ? 'Download from HuggingFace, then upload via the LoRA panel' :
                     src.type === 'upscaler' ? 'Download from HuggingFace, then upload via the Upscale panel' :
                     !KNOWN_MODELS_NAMES.has(src.name) ? 'Open HuggingFace page to download manually' : ''
+                  const isLocal =
+                    src.type === 'base'     ? availableModels.includes(src.name) :
+                    src.type === 'upscaler' ? (extras?.upscale_models.some(m => m.name === src.name) ?? false) :
+                    false
 
                   return (
-                    <div key={src.id} className="flex items-start gap-2 p-2 rounded-lg bg-card border border-border group">
+                    <div key={src.id} className={`flex items-start gap-2 p-2 rounded-lg bg-card border group ${isLocal ? 'border-green-500/60' : 'border-border'}`}>
                       <span className={`shrink-0 mt-0.5 text-[9px] font-semibold px-1.5 py-0.5 rounded border uppercase tracking-wide ${typeBadgeClass}`}>
                         {src.type}
                       </span>

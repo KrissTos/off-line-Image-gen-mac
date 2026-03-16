@@ -285,8 +285,9 @@ function LoraPanel({ loraFiles, onChange, onStatus, modelChoice }: LoraPanelProp
   const compatibleType = modelChoice.startsWith('FLUX') ? 'flux'
     : (modelChoice.includes('Z-Image') && modelChoice.includes('Full')) ? 'zimage'
     : null
+  // Show compatible LoRAs + unknowns (undetectable type); hide only positively incompatible ones
   const filteredLibrary = compatibleType
-    ? library.filter(l => l.model_type === compatibleType)
+    ? library.filter(l => l.model_type === compatibleType || l.model_type === 'unknown')
     : library
   const [uploading, setUploading] = useState<number | null>(null)  // slot index being uploaded
   const fileRefs = useRef<(HTMLInputElement | null)[]>([])
