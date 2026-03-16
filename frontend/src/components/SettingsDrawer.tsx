@@ -1,15 +1,27 @@
 import {
   X, HardDrive, LogIn, LogOut, CheckCircle2, Download, Trash2,
   RefreshCw, AlertCircle, FolderOpen, Save, CloudDownload, ArrowDownCircle, Palette, FileDown,
+  ExternalLink, Globe, Plus,
 } from 'lucide-react'
 import { useState, useEffect, useCallback } from 'react'
 import {
   fetchStorage, fetchSettings, updateSettings, fetchModels, deleteModel,
   checkModelUpdates, updateModel, openFolderDialog, openOutputFolder,
   fetchModelExtras, deleteUpscaleModel,
-  type ModelUpdateResult, type ModelExtras,
+  fetchModelSources, saveModelSources,
+  type ModelUpdateResult, type ModelExtras, type ModelSource,
 } from '../api'
 import { applyThemeColors } from '../App'
+
+// Names that match KNOWN_MODELS in app.py — these get an active Download button
+const KNOWN_MODELS_NAMES = new Set([
+  'FLUX.2-klein-4B (4bit SDNQ)',
+  'FLUX.2-klein-9B (4bit SDNQ)',
+  'FLUX.2-klein-4B (Int8)',
+  'Z-Image Turbo (Full)',
+  'Z-Image Turbo (Quantized)',
+  'LTX-Video',
+])
 
 interface Props {
   open:    boolean
@@ -61,6 +73,14 @@ export default function SettingsDrawer({ open, onClose }: Props) {
   // Log download
   const [savingLog, setSavingLog] = useState(false)
   const [logSaved,  setLogSaved]  = useState(false)
+  // Model Sources
+  const [sources, setSources]             = useState<ModelSource[]>([])
+  const [sourcesLoaded, setSourcesLoaded] = useState(false)
+  const [addingSource, setAddingSource]   = useState(false)
+  const [newSource, setNewSource]         = useState<Omit<ModelSource, 'id'>>({
+    name: '', url: '', type: 'base', description: ''
+  })
+  const [downloadingSource, setDownloadingSource] = useState<string | null>(null)
 
   const loadData = useCallback(async () => {
     setRefreshing(true)
@@ -93,6 +113,7 @@ export default function SettingsDrawer({ open, onClose }: Props) {
     if (!open) return
     loadData()
     setUpdateResults(null)
+    fetchModelSources().then(setSources).catch(() => {}).finally(() => setSourcesLoaded(true))
   }, [open, loadData])
 
   // ── HF login/logout ──────────────────────────────────────────────────────
@@ -247,6 +268,41 @@ export default function SettingsDrawer({ open, onClose }: Props) {
       setStatusMsg(`Log save failed: ${(e as Error).message}`)
     } finally {
       setSavingLog(false)
+    }
+  }
+
+  async function handleDeleteSource(id: string) {
+    const next = sources.filter(s => s.id !== id)
+    setSources(next)
+    await saveModelSources(next).catch(() => {})
+  }
+
+  async function handleAddSource() {
+    if (!newSource.name.trim() || !newSource.url.trim()) return
+    const entry: ModelSource = {
+      ...newSource,
+      id: crypto.randomUUID(),
+      name: newSource.name.trim(),
+      url: newSource.url.trim(),
+      description: newSource.description.trim(),
+    }
+    const next = [...sources, entry]
+    setSources(next)
+    await saveModelSources(next).catch(() => {})
+    setNewSource({ name: '', url: '', type: 'base', description: '' })
+    setAddingSource(false)
+  }
+
+  async function handleDownloadSource(source: ModelSource) {
+    if (source.type !== 'base') return
+    setDownloadingSource(source.id)
+    try {
+      await updateModel(source.name)
+      setStatusMsg(`Downloading ${source.name}…`)
+    } catch (e: any) {
+      setStatusMsg(e.message || 'Download failed')
+    } finally {
+      setDownloadingSource(null)
     }
   }
 
@@ -616,6 +672,136 @@ export default function SettingsDrawer({ open, onClose }: Props) {
               </div>
             ) : (
               <p className="text-xs text-muted">Loading…</p>
+            )}
+          </section>
+
+          {/* ── Model Sources ── */}
+          <section>
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-label mb-3 flex items-center gap-1.5">
+              <Globe size={13} /> Model Sources
+            </h3>
+            <p className="text-[10px] text-muted/70 mb-3">
+              Curated Mac Silicon models. User-editable — add your own sources.
+            </p>
+
+            {!sourcesLoaded ? (
+              <p className="text-xs text-muted">Loading…</p>
+            ) : (
+              <div className="space-y-2">
+                {sources.map(src => {
+                  const typeBadgeClass =
+                    src.type === 'base'     ? 'bg-blue-900/50 text-blue-300 border-blue-700/50' :
+                    src.type === 'lora'     ? 'bg-accent/20 text-accent border-accent/30' :
+                                              'bg-teal-900/50 text-teal-300 border-teal-700/50'
+                  const canDownload = src.type === 'base' && KNOWN_MODELS_NAMES.has(src.name)
+                  const downloadTooltip =
+                    src.type === 'lora'     ? 'Download from HuggingFace, then upload via the LoRA panel' :
+                    src.type === 'upscaler' ? 'Download from HuggingFace, then upload via the Upscale panel' :
+                    !KNOWN_MODELS_NAMES.has(src.name) ? 'Open HuggingFace page to download manually' : ''
+
+                  return (
+                    <div key={src.id} className="flex items-start gap-2 p-2 rounded-lg bg-card border border-border group">
+                      <span className={`shrink-0 mt-0.5 text-[9px] font-semibold px-1.5 py-0.5 rounded border uppercase tracking-wide ${typeBadgeClass}`}>
+                        {src.type}
+                      </span>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-xs text-white truncate">{src.name}</div>
+                        {src.description && (
+                          <div className="text-[10px] text-muted/70 truncate mt-0.5">{src.description}</div>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button
+                          onClick={() => window.open(src.url, '_blank')}
+                          title="Open HuggingFace page"
+                          className="p-1 rounded text-muted hover:text-white hover:bg-white/10 transition-colors"
+                        >
+                          <ExternalLink size={12} />
+                        </button>
+                        <button
+                          onClick={() => canDownload && handleDownloadSource(src)}
+                          disabled={!canDownload || downloadingSource === src.id}
+                          title={downloadTooltip || `Download ${src.name}`}
+                          className={`p-1 rounded transition-colors ${
+                            canDownload
+                              ? 'text-muted hover:text-white hover:bg-white/10'
+                              : 'text-muted/30 cursor-not-allowed'
+                          }`}
+                        >
+                          {downloadingSource === src.id
+                            ? <RefreshCw size={12} className="animate-spin" />
+                            : <Download size={12} />
+                          }
+                        </button>
+                        <button
+                          onClick={() => handleDeleteSource(src.id)}
+                          title="Remove from list"
+                          className="p-1 rounded text-muted/40 hover:text-red-400 hover:bg-red-900/20 transition-colors opacity-0 group-hover:opacity-100"
+                        >
+                          <Trash2 size={11} />
+                        </button>
+                      </div>
+                    </div>
+                  )
+                })}
+
+                {/* Add new source */}
+                {addingSource ? (
+                  <div className="p-2 rounded-lg bg-card border border-accent/40 space-y-2">
+                    <input
+                      type="text"
+                      placeholder="Name"
+                      value={newSource.name}
+                      onChange={e => setNewSource(s => ({ ...s, name: e.target.value }))}
+                      className="w-full bg-surface border border-border rounded px-2 py-1 text-xs text-white placeholder-muted focus:outline-none focus:border-accent"
+                    />
+                    <input
+                      type="url"
+                      placeholder="https://huggingface.co/..."
+                      value={newSource.url}
+                      onChange={e => setNewSource(s => ({ ...s, url: e.target.value }))}
+                      className="w-full bg-surface border border-border rounded px-2 py-1 text-xs text-white placeholder-muted focus:outline-none focus:border-accent"
+                    />
+                    <input
+                      type="text"
+                      placeholder="Description (optional)"
+                      value={newSource.description}
+                      onChange={e => setNewSource(s => ({ ...s, description: e.target.value }))}
+                      className="w-full bg-surface border border-border rounded px-2 py-1 text-xs text-white placeholder-muted focus:outline-none focus:border-accent"
+                    />
+                    <select
+                      value={newSource.type}
+                      onChange={e => setNewSource(s => ({ ...s, type: e.target.value as ModelSource['type'] }))}
+                      className="w-full bg-surface border border-border rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-accent"
+                    >
+                      <option value="base">Base model</option>
+                      <option value="lora">LoRA</option>
+                      <option value="upscaler">Upscaler</option>
+                    </select>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={handleAddSource}
+                        className="flex-1 py-1 rounded text-xs font-medium bg-accent/80 hover:bg-accent text-white transition-colors"
+                      >
+                        Add
+                      </button>
+                      <button
+                        onClick={() => { setAddingSource(false); setNewSource({ name: '', url: '', type: 'base', description: '' }) }}
+                        className="flex-1 py-1 rounded text-xs font-medium bg-card border border-border text-muted hover:text-white transition-colors"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => setAddingSource(true)}
+                    className="w-full py-1.5 rounded-lg text-xs text-muted hover:text-white border border-dashed border-border hover:border-accent/50 transition-colors flex items-center justify-center gap-1.5"
+                  >
+                    <Plus size={11} /> Add source
+                  </button>
+                )}
+              </div>
             )}
           </section>
 
