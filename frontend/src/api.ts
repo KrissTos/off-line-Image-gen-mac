@@ -108,7 +108,14 @@ export async function uploadLora(file: File): Promise<{ path: string; name: stri
   const fd = new FormData()
   fd.append('file', file)
   const r = await fetch('/api/lora/upload', { method: 'POST', body: fd })
-  if (!r.ok) throw new Error(`LoRA upload failed: ${r.status}`)
+  if (!r.ok) {
+    let detail = `LoRA upload failed: ${r.status}`
+    try {
+      const body = await r.json()
+      if (body?.detail) detail = body.detail
+    } catch { /* ignore parse errors */ }
+    throw new Error(detail)
+  }
   return r.json()
 }
 
