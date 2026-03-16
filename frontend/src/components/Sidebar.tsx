@@ -273,12 +273,21 @@ function SizePanel({
 const MAX_LORAS = 5
 
 interface LoraPanelProps {
-  loraFiles: LoraSlot[]
-  onChange:  (files: LoraSlot[]) => void
-  onStatus:  (msg: string) => void
+  loraFiles:   LoraSlot[]
+  onChange:    (files: LoraSlot[]) => void
+  onStatus:    (msg: string) => void
+  modelChoice: string
 }
-function LoraPanel({ loraFiles, onChange, onStatus }: LoraPanelProps) {
-  const [library, setLibrary] = useState<Array<{ name: string; path: string }>>([])
+function LoraPanel({ loraFiles, onChange, onStatus, modelChoice }: LoraPanelProps) {
+  const [library, setLibrary] = useState<Array<{ name: string; path: string; model_type: string }>>([])
+
+  // Which LoRA type is compatible with the current model?
+  const compatibleType = modelChoice.startsWith('FLUX') ? 'flux'
+    : (modelChoice.includes('Z-Image') && modelChoice.includes('Full')) ? 'zimage'
+    : null
+  const filteredLibrary = compatibleType
+    ? library.filter(l => l.model_type === compatibleType)
+    : library
   const [uploading, setUploading] = useState<number | null>(null)  // slot index being uploaded
   const fileRefs = useRef<(HTMLInputElement | null)[]>([])
   // Stable keys for React reconciliation — index is unreliable when removing middle slots
@@ -345,11 +354,11 @@ function LoraPanel({ loraFiles, onChange, onStatus }: LoraPanelProps) {
                          focus:outline-none focus:border-accent"
             >
               <option value="">— select a LoRA —</option>
-              {/* If current path isn't in library (manually picked), show it */}
-              {slot.path && !library.find(l => l.path === slot.path) && (
+              {/* If current path isn't in the filtered library (manually picked), show it */}
+              {slot.path && !filteredLibrary.find(l => l.path === slot.path) && (
                 <option value={slot.path}>{slot.path.split('/').pop()}</option>
               )}
-              {library.map(l => (
+              {filteredLibrary.map(l => (
                 <option key={l.path} value={l.path}>{l.name}</option>
               ))}
             </select>
@@ -1008,6 +1017,7 @@ export default function Sidebar({
             loraFiles={params.lora_files}
             onChange={files => onParamChange('lora_files', files)}
             onStatus={onStatus}
+            modelChoice={params.model_choice}
           />
           {isFlux && !isZImageFull && (
             <p className="text-[11px] text-[var(--color-muted)] flex items-start gap-1 mt-1">
