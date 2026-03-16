@@ -220,8 +220,9 @@ class GenerateRequest(BaseModel):
     model_source:       str   = "Local"
     input_image_ids:    list[str] = Field(default_factory=list)  # temp file IDs
     mask_image_id:      str | None = None
-    lora_file:          str | None = None
-    lora_strength:      float = 1.0
+    lora_files:         list[dict] = Field(default_factory=list)  # [{path, strength}, ...]
+    lora_file:          str | None = None   # legacy single-LoRA (backward compat)
+    lora_strength:      float = 1.0         # legacy single-LoRA strength
     img_strength:       float = 1.0
     repeat_count:       int   = 1
     auto_save:          bool  = True
@@ -255,14 +256,15 @@ class SaveWorkflowRequest(BaseModel):
     device:             str   = "mps"
     model_choice:       str   = ""
     model_source:       str   = "Local"
-    lora_strength:      float = 1.0
+    lora_files:         list[dict] = []     # [{path, strength}, ...]
+    lora_file:          str | None = None   # legacy single-LoRA
+    lora_strength:      float = 1.0         # legacy single-LoRA strength
     img_strength:       float = 1.0
     repeat_count:       int   = 1
     upscale_enabled:    bool  = False
     upscale_model_path: str   = ""
     num_frames:         int   = 25
     fps:                int   = 24
-    lora_file:          str        = ""
     ref_slots:          list[dict] = []
     mask_mode:          str        = ""
     outpaint_align:     str        = ""
@@ -630,18 +632,53 @@ async def api_list_outputs(limit: int = 20):
 @app.get("/api/workflows")
 async def api_list_workflows():
     a = _app()
-    names = a.list_saved_workflows() or []
+    names = (a.list_saved_workflows() or [])[:15]
     return {"workflows": names}
+
+
+@app.get("/api/open-workflow-folder-dialog")
+async def api_open_workflow_folder_dialog():
+    """Open a native macOS folder picker starting at WORKFLOWS_DIR."""
+    import platform
+    if platform.system() != "Darwin":
+        raise HTTPException(400, "Folder picker only supported on macOS")
+    a        = _app()
+    wf_dir   = str(Path(a.WORKFLOWS_DIR).resolve())
+    script   = (
+        f'POSIX path of (choose folder with prompt "Select workflow folder"'
+        f' default location POSIX file "{wf_dir}")'
+    )
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "osascript", "-e", script,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
+        except asyncio.TimeoutError:
+            proc.kill()
+            return {"path": None, "cancelled": True}
+        if proc.returncode != 0:
+            err = stderr.decode().strip()
+            if err and "cancelled" not in err.lower() and "cancel" not in err.lower():
+                raise HTTPException(500, f"osascript error: {err}")
+            return {"path": None, "cancelled": True}
+        path = stdout.decode().strip().rstrip("/")
+        return {"path": path, "cancelled": False}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, str(e))
 
 
 @app.post("/api/workflows/save")
 async def api_save_workflow(req: SaveWorkflowRequest):
     a = _app()
     Path(a.WORKFLOWS_DIR).mkdir(parents=True, exist_ok=True)
-    timestamp   = datetime.now().strftime("%Y%m%d_%H%M%S")
+    date_str    = datetime.now().strftime("%y-%m-%d")
     custom      = (req.name or "").strip().replace(" ", "_")
-    slug        = "".join(c if c.isalnum() else "_" for c in (req.prompt or "")[:30]).strip("_")
-    folder_name = f"{timestamp}_{custom}" if custom else (f"{timestamp}_{slug}" if slug else timestamp)
+    folder_name = f"{date_str}_{custom}" if custom else date_str
     wf_dir      = Path(a.WORKFLOWS_DIR) / folder_name
     wf_dir.mkdir(parents=True, exist_ok=True)
 
@@ -692,8 +729,9 @@ async def api_save_workflow(req: SaveWorkflowRequest):
         "device":             req.device,
         "model_choice":       req.model_choice,
         "model_source":       req.model_source,
+        "lora_files":         req.lora_files,
+        "lora_file":          req.lora_file,   # legacy fallback
         "lora_strength":      req.lora_strength,
-        "lora_file":          req.lora_file,
         "img_strength":       req.img_strength,
         "repeat_count":       req.repeat_count,
         "upscale_enabled":    req.upscale_enabled,
@@ -776,6 +814,13 @@ async def api_load_workflow(name: str):
     d["ref_slots"]      = ref_slots_out
     d["mask_mode"]      = raw.get("mask_mode", "")
     d["outpaint_align"] = raw.get("outpaint_align", "")
+    # Multi-LoRA: prefer lora_files array; fall back to legacy lora_file/lora_strength
+    if raw.get("lora_files"):
+        d["lora_files"] = raw["lora_files"]
+    elif raw.get("lora_file"):
+        d["lora_files"] = [{"path": raw["lora_file"], "strength": raw.get("lora_strength", 1.0)}]
+    else:
+        d["lora_files"] = []
     return d
 
 
@@ -831,6 +876,20 @@ async def api_import_comfyui(file: UploadFile = File(...)):
 
 # ── Routes: LoRA ──────────────────────────────────────────────────────────────
 
+@app.get("/api/lora/list")
+async def api_list_loras():
+    """Return all .safetensors/.pt/.bin files in lora_uploads/."""
+    lora_dir = ROOT / "lora_uploads"
+    if not lora_dir.exists():
+        return {"files": []}
+    files = [
+        {"name": f.name, "path": str(f)}
+        for f in sorted(lora_dir.iterdir(), key=lambda f: f.stat().st_mtime, reverse=True)
+        if f.suffix in (".safetensors", ".pt", ".bin") and f.is_file()
+    ]
+    return {"files": files}
+
+
 @app.post("/api/lora/load")
 async def api_load_lora(req: LoadLoraRequest):
     status = await _mgr().load_lora(req.lora_path, req.strength, req.device)
@@ -844,12 +903,25 @@ async def api_clear_lora():
 
 @app.post("/api/lora/upload")
 async def api_upload_lora(file: UploadFile = File(...)):
-    """Upload a LoRA .safetensors file and return its saved path."""
+    """Upload a LoRA .safetensors file. Rejects files incompatible with FLUX.2-klein."""
+    from core.lora_flux2 import check_lora_compatibility
+
     fname = Path(file.filename or "lora.safetensors").name
     dest  = ROOT / "lora_uploads" / fname
+    tmp   = ROOT / "lora_uploads" / f".tmp_{fname}"
     dest.parent.mkdir(exist_ok=True)
-    with open(dest, "wb") as fh:
+
+    # Write to temp path first so we can delete on validation failure
+    with open(tmp, "wb") as fh:
         shutil.copyfileobj(file.file, fh)
+
+    try:
+        check_lora_compatibility(str(tmp))
+    except RuntimeError as e:
+        tmp.unlink(missing_ok=True)
+        raise HTTPException(status_code=422, detail=str(e))
+
+    tmp.rename(dest)
     return {"path": str(dest), "name": fname}
 
 
