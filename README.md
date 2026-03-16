@@ -15,7 +15,7 @@
 - **Multi-slot reference images** — up to 6 reference images, each with its own mask and strength slider
 - **Iterative multi-mask inpainting** — chain multiple mask passes automatically (one per slot)
 - **Video generation** — text-to-video and image-to-video with LTX-Video
-- **LoRA support** — load `.safetensors` LoRA adapters for Z-Image Full and FLUX.2-klein
+- **Multi-LoRA stacking** — load up to 5 `.safetensors` LoRA adapters simultaneously, each with its own strength slider; the dropdown is filtered to only show LoRAs compatible with the active model
 - **Upscaling** — 4× single image or batch-folder upscale with any Spandrel-compatible model
 - **Workflow save/load** — save your full setup (model, params, reference images, masks) and reload it later
 - **Gallery** — browse recent outputs, drag them into reference slots, upscale or delete
@@ -123,7 +123,7 @@ Open `http://localhost:7860` in your browser.
 | **Model** | Pick and load a model |
 | **Parameters** | Steps, guidance scale, seed, repeat count |
 | **Size** | Output resolution — presets change per model |
-| **LoRA** | Upload and apply a LoRA adapter |
+| **LoRA** | Stack up to 5 LoRA adapters, each with its own strength; filtered by active model |
 | **Upscale** | 4× single image or batch folder |
 | **Video** | LTX-Video settings (only visible with LTX model) |
 | **Workflows** | Save / load your full setup |
@@ -177,6 +177,7 @@ Open **Settings** (gear icon, top-right):
 | HuggingFace token | Required for gated models |
 | Models | See which models are cached, download, delete |
 | Upscale models | Manage upscaler weights |
+| Model Sources | Curated list of base models, LoRAs, and upscalers — open HF page or download |
 | Server log | View and save the current session log |
 
 ---

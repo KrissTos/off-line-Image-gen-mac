@@ -178,6 +178,7 @@ class PipelineManager:
                 model_choice      = params.get("model_choice", _app.MODEL_CHOICES[0]),
                 model_source_choice = params.get("model_source", "Local"),
                 input_images      = params.get("input_images"),     # list[PIL] or None
+                lora_files        = params.get("lora_files") or [],
                 lora_file         = params.get("lora_file"),
                 lora_strength     = float(params.get("lora_strength", 1.0)),
                 img_strength      = float(params.get("img_strength", 1.0)),

@@ -207,11 +207,25 @@ _HEARTBEAT_INTERVAL: float = 5.0          # check interval
 
 async def _heartbeat_watcher() -> None:
     """Shut down the server if no browser ping arrives within the timeout.
-    Never shuts down while a generation is actively running."""
+    Never shuts down while a generation is actively running.
+    Detects Mac sleep/wake by measuring wall-clock jumps: if the event loop
+    was frozen for longer than the timeout (i.e. system sleep), reset the
+    ping timer so a brief wake doesn't immediately trigger shutdown."""
     # Give the browser time to open on first launch
     await asyncio.sleep(_HEARTBEAT_TIMEOUT + 5)
+    _last_tick = time.time()
     while True:
         await asyncio.sleep(_HEARTBEAT_INTERVAL)
+        now = time.time()
+        elapsed_since_tick = now - _last_tick
+        _last_tick = now
+        # If the event loop was suspended for longer than the timeout, it's
+        # almost certainly a system sleep/wake cycle — reset the ping clock.
+        if elapsed_since_tick > _HEARTBEAT_TIMEOUT:
+            global _last_ping
+            _last_ping = now
+            print(f"⏸  System sleep detected ({elapsed_since_tick:.0f}s gap) — heartbeat timer reset.", flush=True)
+            continue
         if time.time() - _last_ping > _HEARTBEAT_TIMEOUT:
             # Don't kill the server mid-generation — the browser may just be throttled
             try:
@@ -916,14 +930,32 @@ async def api_import_comfyui(file: UploadFile = File(...)):
 
 # ── Routes: LoRA ──────────────────────────────────────────────────────────────
 
+def _detect_lora_type(path: str) -> str:
+    """
+    Detect model compatibility of a LoRA file by inspecting its header only.
+    Returns: "flux" | "zimage" | "unknown"
+    """
+    try:
+        from core.lora_flux2 import check_lora_compatibility
+        check_lora_compatibility(path)
+        return "flux"
+    except RuntimeError as e:
+        if "No FLUX LoRA keys found" in str(e):
+            return "zimage"
+        # Block-count exceeded → full FLUX.1, not compatible with klein
+        return "unknown"
+    except Exception:
+        return "unknown"
+
+
 @app.get("/api/lora/list")
 async def api_list_loras():
-    """Return all .safetensors/.pt/.bin files in lora_uploads/."""
+    """Return all .safetensors/.pt/.bin files in lora_uploads/ with model_type tag."""
     lora_dir = ROOT / "lora_uploads"
     if not lora_dir.exists():
         return {"files": []}
     files = [
-        {"name": f.name, "path": str(f)}
+        {"name": f.name, "path": str(f), "model_type": _detect_lora_type(str(f))}
         for f in sorted(lora_dir.iterdir(), key=lambda f: f.stat().st_mtime, reverse=True)
         if f.suffix in (".safetensors", ".pt", ".bin") and f.is_file()
     ]

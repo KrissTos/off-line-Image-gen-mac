@@ -9,5 +9,6 @@
     "accent": "#7c3aed",
     "muted": "#d6d6d6",
     "label": "#aaaaaa"
-  }
+  },
+  "upscale_model_path": ""
 }

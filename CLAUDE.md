@@ -130,7 +130,7 @@ Actions: `ADD_REF_SLOT` · `REMOVE_REF_SLOT` · `SET_SLOT_MASK` · `CLEAR_SLOT_M
 | GET | `/api/output/{file}` | Serve output file |
 | GET/POST | `/api/workflows` / `/api/workflows/{name}` / `/api/workflows/save` / `/api/workflows/import` | Workflow CRUD + ComfyUI import |
 | GET | `/api/workflow-assets/{name}/{filename}` | Serve saved ref slot images/masks; `path.is_relative_to()` traversal guard |
-| GET | `/api/lora/list` | Scan `lora_uploads/` sorted by mtime desc → `{files:[{name,path}]}` |
+| GET | `/api/lora/list` | Scan `lora_uploads/` sorted by mtime desc → `{files:[{name,path,model_type}]}` (`model_type`: `"flux"\|"zimage"\|"unknown"`) |
 | POST/DELETE | `/api/lora/upload` · `/api/lora/load` · `/api/lora` | LoRA management |
 | POST/POST/POST | `/api/upscale/upload` · `/api/upscale/batch` · `/api/upscale/single` | Upscale: model upload, batch SSE, single image |
 | GET | `/api/open-file-dialog` | macOS image file picker (osascript) → `{path, cancelled}` |
@@ -176,6 +176,7 @@ PYTORCH_MPS_HIGH_WATERMARK_RATIO = "0.0"
 HF_HUB_CACHE = "./models"
 ```
 Package manager: **`uv`** (not pip). Lock: `uv.lock`. Metadata: `pyproject.toml`.
+- **`[tool.uv] dev-dependencies`** deprecated — use `[dependency-groups] dev = []` instead (fixed in session 6)
 Key deps: `torch`, `transformers`, `diffusers` (git), `sdnq` (git), `peft>=0.17`, `optimum-quanto>=0.2.7`, `fastapi>=0.115`, `uvicorn[standard]>=0.30`, `python-multipart>=0.0.12`, `aiofiles>=24.0`, `spandrel>=0.4.0` (upscaler)
 
 Tailwind tokens: `bg:#0a0a0a` · `surface:#141414` · `card:#1c1c1c` · `border:#2a2a2a` · `accent:#7c3aed` · `muted:#6b7280` · `label:#6b7280`
@@ -197,40 +198,23 @@ Tailwind tokens: `bg:#0a0a0a` · `surface:#141414` · `card:#1c1c1c` · `border:
 `guidanceForModel(model)` and `stepsForModel(model)` helpers in `App.tsx` auto-set on model change and bootstrap.
 
 ## Implementation notes
-- `_save_output_image` uses `%H%M%S_%f` (ms precision) — prevents repeat-count filename collisions
-- `DELETE /api/output/{filename:path}` — deletes file + `.json` sidecar
-- `GET /api/open-output-folder` — reveals output folder in Finder via `open <path>`
-- `GET /api/open-folder-dialog` — macOS folder picker via `asyncio.create_subprocess_exec` + osascript (async, not blocking)
-- `upscale_model_path` saved to `app_settings.json` on upload/clear; restored into params on bootstrap; handles old key `upscaler_model_path` too
-- `upscale_image()` tries requested device, falls back to CPU if MPS unsupported by spandrel; errors surfaced in info bar
-- **Upscale broken root cause**: `spandrel` was missing from `pyproject.toml` → `ModuleNotFoundError` silently caught; fixed by adding `spandrel>=0.4.0` dep
-- **GitHub Actions**: `.github/workflows/claude.yml` installed — `@claude` mentions in PRs/issues trigger Claude Code bot
-- Step progress: `generate_image()` `step_callback(step,total)` → diffusers `callback_on_step_end` on all 8 pipe calls → SSE `{step,total}` → Canvas `%` + bar
-- Auto-outpaint: `_prepare_outpaint(ref, w, h, align)` fires when ref dims ≠ output size and no explicit mask; `outpaint_align` param (9-pos); 3×3 picker in SizePanel when `hasRefImage`
-- Model-aware size presets: `presetsForModel()` in Sidebar; FLUX=6, Z-Image=3, LTX=4; 3-col grid with label+dims
-- **FLUX LoRA detection**: `current_model` stores internal strings (`"flux2-klein-int8"`, `"flux2-klein-sdnq"`, `"zimage-full"`), NOT display names. Use `current_model.startswith("flux2")` — never check for `"FLUX"` in the string.
+- `DELETE /api/output/{filename:path}` — deletes file + `.json` sidecar; `upscale_image()` falls back to CPU if MPS unsupported by spandrel
+- `upscale_model_path` saved to `app_settings.json` on upload/clear; restored on bootstrap; handles old key `upscaler_model_path`
+- Auto-outpaint: `_prepare_outpaint(ref, w, h, align)` fires when ref dims ≠ output size and no explicit mask; 9-pos `outpaint_align`; 3×3 picker in SizePanel
+- **FLUX LoRA detection**: `current_model` (internal key) uses `startswith("flux2")`; `model_choice` (display name, e.g. `"FLUX.2-klein-4B…"`) uses `startsWith('FLUX')` — never mix
 - **diffusers git main required** for FLUX.2-klein LoRA — stable release had hardcoded block count (48 vs actual 20)
-- `requests>=2.32` added to `pyproject.toml` (needed for potential future downloads)
-- **FluxInpaintPipeline incompatible with Flux2Klein** — uses different transformer/vae types; `app.py` now skips the attempt and falls straight to img2img for masked FLUX.2-klein generations
-- **"↕ ref size" button** in SizePanel — appears when slot #1 has dims; reads `refSlots[0].{w,h}` (populated via thumbnail `onLoad`), snaps to nearest 64, sets output width/height
-- **FLUX inpainting warnings** — amber note shown in RefImagesRow (below mask mode dropdown) AND Sidebar (above Generate button) when `model_choice.startsWith('FLUX')` + mask mode = "Inpainting Pipeline (Quality)"
-- LoRA files go in `lora_uploads/` (gitignored, create manually if missing)
-- **Workflow ref persistence**: `api_save_workflow` bypasses `a.save_workflow()` — owns full folder creation, copies slot images/masks as `slot_N_image.png`/`slot_N_mask.png`; `api_load_workflow` returns `ref_slots:[{imageUrl,maskUrl,strength}]`; `handleWorkflowLoad` is async + sequential (not `Promise.all`) — `ADD_REF_SLOT` assigns slotId from `state.refSlots.length+1` at dispatch time so order matters; `isRestoringWorkflow` useRef guards against double-click race
-- **`isFlux` in Sidebar**: use `params.model_choice.startsWith('FLUX')` — `model_choice` holds the display name (e.g. `"FLUX.2-klein-4B …"`), NOT the internal key; `startsWith('flux2')` was wrong
-- **Server log capture**: `server.py` tees stdout+stderr to `logs/server.log` via `_LogTee` class; ANSI escape codes stripped with `_ANSI_RE` before writing to file; log truncated on each server start
-- **HF auth endpoints must be sync `def`**: `api_hf_status/login/logout` and `api_storage` use blocking calls (`whoami()`, `os.walk`); must be `def` so FastAPI runs them in thread pool — `async def` blocks event loop causing all other requests to queue
-- **FastAPI route order**: SPA wildcard `/{path:path}` must be LAST — any route registered after it is unreachable (matched by wildcard first)
-- **FLUX inpainting `mode` crash**: FLUX + "Inpainting Pipeline (Quality)" + mask — the `if/elif` chain at the img2img path both guarded with `not (has_mask and "Inpainting" in mask_mode)`, so both branches skipped → `mode` never assigned → `UnboundLocalError`. Fixed: simplified to `if preprocessed_flux_refs is not None / else`
-- **`POST /api/upscale/single`**: resolves `source:'gallery'` → `output_dir/filename`, `source:'path'` → absolute path; saves as `stem_WxH.ext` next to original; scale ×2/×3 = run ×4 then resize down
-- **`SaveWorkflowRequest.lora_file`**: must be `str | None = None` — frontend sends `null` when no LoRA selected; plain `str` causes 422
-- **Workflow folder naming**: `yy-mm-dd_Name` (e.g. `26-03-15_My_Portrait`); `GET /api/workflows` returns `[:15]` newest only
-- **Workflow Open button**: `handleOpenFolder` in `WorkflowPanel` calls `openWorkflowFolderDialog()` → extracts `basename` → calls existing `loadWorkflow(name)`
-- **Multi-LoRA stacking**: `GenerateParams.lora_files: LoraSlot[]` (up to 5). Each `LoraSlot = {path: string, strength: number}`. Sidebar `LoraPanel` has dynamic slots: dropdown from `GET /api/lora/list` + disk file picker + strength slider + remove. `key` stability via `useRef` counter + `slotKeys` array — splice on removal.
-- **Partial FLUX LoRA load cleanup**: `core/lora_flux2.py` `load_loras()` wraps adapter loop in try/except; on failure calls `pipe.unload_lora_weights()` before re-raising — prevents pipeline dirty state.
-- **`lora_files` merge logic**: `if not lora_files and lora_file` (not `lora_files is None`) — empty list `[]` must also fall back to legacy single-LoRA args.
-- **Empty-path LoRA slots filtered at save**: `params.lora_files.filter(s => s.path !== '')` in `handleSave` prevents blank entries in workflow JSON.
-- **Safari Gallery padding**: `index.html` viewport `viewport-fit=cover`; `Gallery.tsx` uses `pt-2` + `style={{ paddingBottom: 'max(8px, env(safe-area-inset-bottom))' }}`.
-- **LoRA compatibility check on upload**: `check_lora_compatibility(path)` in `core/lora_flux2.py` reads only the safetensors header (no tensor data) and rejects LoRAs trained for full FLUX (single_blocks ≥20 or double_blocks ≥19). `api_upload_lora` saves to `.tmp_<name>`, checks, then renames on success or deletes on failure — returns HTTP 422 with `detail` message. `uploadLora()` in `api.ts` parses 422 JSON body to surface the message.
-- **`isinstance(e, KeyError)` fix**: `"KeyError" in str(e)` never matched (`str(KeyError("key"))` = `"'key'"`). Fixed in both `load_lora` and `load_loras`.
-- **CUDA fully removed**: all `torch.cuda.*` branches deleted from `app.py` and `generate.py`. Generator now uses `torch.Generator("cpu").manual_seed(seed)` (correct for MPS). Z-Image quantized dtype is always `torch.float32`.
-- **Model Sources registry**: `GET/POST /api/model-sources` in `server.py` read/write `model_sources.json` (gitignored). Seeded from `DEFAULT_SOURCES` (31 entries: 7 base, 14 LoRA, 10 upscaler). `SettingsDrawer.tsx` shows collapsible section with type badges, Open (↗) and Download (↓) buttons. Download active only for `base` type with name matching `KNOWN_MODELS_NAMES`. `POST /api/model-sources` requires `Body(...)` — bare `dict` param rejected by FastAPI.
+- **FluxInpaintPipeline incompatible with Flux2Klein** — `app.py` skips it; falls to img2img for masked FLUX.2-klein generations
+- **FLUX inpainting `mode` crash** — fixed by simplifying to `if preprocessed_flux_refs is not None / else` (was double-guarded if/elif, `mode` never assigned → `UnboundLocalError`)
+- **FastAPI route order**: SPA wildcard `/{path:path}` must be LAST — routes after it are unreachable
+- **HF auth endpoints must be sync `def`**: blocking calls (`whoami()`, `os.walk`) — `async def` blocks event loop
+- **Multi-LoRA stacking**: `lora_files: LoraSlot[]` (up to 5); named adapters in `load_loras()`; partial-load cleanup via `unload_lora_weights()` before re-raise; `if not lora_files` (not `is None`) for legacy fallback; stable slot keys via `useRef` counter
+- **LoRA dropdown filtered by model**: `GET /api/lora/list` returns `model_type: "flux"|"zimage"|"unknown"` (safetensors header check); `LoraPanel` in Sidebar filters to show only compatible entries for active model
+- **LoRA compat check on upload**: `check_lora_compatibility()` rejects single_blocks≥20 or double_blocks≥19; `api_upload_lora` uses `.tmp_<name>` temp → HTTP 422 on failure; `uploadLora()` in `api.ts` surfaces the `detail` message
+- **`SaveWorkflowRequest.lora_file`**: `str | None = None` — frontend sends `null`; plain `str` causes 422
+- **Workflow ref persistence**: `api_save_workflow` copies slot images/masks as `slot_N_image/mask.png`; `handleWorkflowLoad` is async + sequential — `ADD_REF_SLOT` assigns slotId at dispatch time so order matters
+- **Workflow folder naming**: `yy-mm-dd_Name`; `GET /api/workflows` returns `[:15]` newest only
+- **Server log**: `_LogTee` tees stdout+stderr to `logs/server.log`; ANSI stripped; truncated on server start
+- **CUDA fully removed**: MPS-only; `torch.Generator("cpu").manual_seed(seed)`; Z-Image dtype always `torch.float32`
+- **Model Sources registry**: `GET/POST /api/model-sources` → `model_sources.json`; 31 DEFAULT_SOURCES; `Body(...)` required for dict POST
+- **Sleep/wake auto-shutdown**: `_heartbeat_watcher` tracks wall-clock between ticks; jump > 60 s = Mac sleep → resets `_last_ping` instead of shutting down
+- **Safari Gallery padding**: `viewport-fit=cover` in `index.html`; `paddingBottom: 'max(8px, env(safe-area-inset-bottom))'` in Gallery
