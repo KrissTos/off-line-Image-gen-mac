@@ -178,6 +178,9 @@ Examples:
     elif device == "mps" and not torch.backends.mps.is_available():
         print("MPS not available, falling back to CPU")
         device = "cpu"
+    elif device not in ("mps", "cpu"):
+        print(f"ERROR: Invalid device '{device}'. Use: mps, cpu")
+        sys.exit(1)
 
     # Validate prompt
     if not prompt:
