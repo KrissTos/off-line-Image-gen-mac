@@ -208,7 +208,8 @@ Tailwind tokens: `bg:#0a0a0a` · `surface:#141414` · `card:#1c1c1c` · `border:
 - **FastAPI route order**: SPA wildcard `/{path:path}` must be LAST — routes after it are unreachable
 - **HF auth endpoints must be sync `def`**: blocking calls (`whoami()`, `os.walk`) — `async def` blocks event loop
 - **Multi-LoRA stacking**: `lora_files: LoraSlot[]` (up to 5); named adapters in `load_loras()`; partial-load cleanup via `unload_lora_weights()` before re-raise; `if not lora_files` (not `is None`) for legacy fallback; stable slot keys via `useRef` counter
-- **LoRA dropdown filtered by model**: `GET /api/lora/list` returns `model_type: "flux"|"zimage"|"unknown"` (safetensors header check); `LoraPanel` in Sidebar filters to show only compatible entries for active model
+- **LoRA dropdown filtered by model**: `GET /api/lora/list` returns `model_type: "flux"|"zimage"|"unknown"` (safetensors header check); `LoraPanel` shows compatible + `unknown` entries (hide only positively incompatible); `_detect_lora_type()` in `server.py`
+- **Model Sources local highlight**: `isLocal` = `availableModels.includes(src.name)` (base) or `extras?.upscale_models.some(m => m.name === src.name)` (upscaler); card gets `border-green-500/60` when cached locally
 - **LoRA compat check on upload**: `check_lora_compatibility()` rejects single_blocks≥20 or double_blocks≥19; `api_upload_lora` uses `.tmp_<name>` temp → HTTP 422 on failure; `uploadLora()` in `api.ts` surfaces the `detail` message
 - **`SaveWorkflowRequest.lora_file`**: `str | None = None` — frontend sends `null`; plain `str` causes 422
 - **Workflow ref persistence**: `api_save_workflow` copies slot images/masks as `slot_N_image/mask.png`; `handleWorkflowLoad` is async + sequential — `ADD_REF_SLOT` assigns slotId at dispatch time so order matters

@@ -177,7 +177,7 @@ Open **Settings** (gear icon, top-right):
 | HuggingFace token | Required for gated models |
 | Models | See which models are cached, download, delete |
 | Upscale models | Manage upscaler weights |
-| Model Sources | Curated list of base models, LoRAs, and upscalers — open HF page or download |
+| Model Sources | Curated list of base models, LoRAs, and upscalers — open HF page or download; locally cached entries highlighted with a green border |
 | Server log | View and save the current session log |
 
 ---

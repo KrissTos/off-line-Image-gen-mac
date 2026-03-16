@@ -247,6 +247,12 @@ class PipelineManager:
                     loop,
                 )
                 asyncio.run_coroutine_threadsafe(queue.put(None), loop)
+            finally:
+                import gc
+                import torch
+                gc.collect()
+                if torch.backends.mps.is_available():
+                    torch.mps.empty_cache()
 
         future = loop.run_in_executor(self._executor, _thread)
 
