@@ -58,13 +58,30 @@ export type SSEEvent =
   | { type: 'error';    message: string }
 
 export interface OutputItem {
-  name:          string
-  url:           string
-  mtime:         number
-  kind:          'image' | 'video'
-  /** Filled from sidecar JSON written at generation time */
-  prompt?:       string
-  model_choice?: string
+  name:               string
+  url:                string
+  mtime:              number
+  kind:               'image' | 'video'
+  /** All fields below come from the sidecar JSON saved at generation time */
+  prompt?:            string
+  model_choice?:      string
+  model_source?:      string
+  width?:             number
+  height?:            number
+  steps?:             number
+  guidance?:          number
+  seed?:              number
+  img_strength?:      number
+  mask_mode?:         string
+  outpaint_align?:    string
+  lora_files?:        { path: string; strength: number }[]
+  upscale_enabled?:   boolean
+  upscale_model_path?: string
+  num_frames?:        number
+  fps?:               number
+  device?:            string
+  ref_image_count?:   number
+  has_mask?:          boolean
 }
 
 export interface Workflow {

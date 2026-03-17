@@ -44,11 +44,12 @@ export const deleteModel = (name: string) =>
   del<{ status: string }>(`/api/models/${encodeURIComponent(name)}`)
 
 export interface ModelSource {
-  id:          string
-  name:        string
-  url:         string
-  type:        'base' | 'lora' | 'upscaler'
-  description: string
+  id:           string
+  name:         string
+  url:          string
+  type:         'base' | 'lora' | 'upscaler'
+  description:  string
+  model_choice?: string   // exact MODEL_CHOICES string for local-cache detection (base type only)
 }
 
 export interface ModelUpdateResult {

@@ -699,7 +699,7 @@ export default function SettingsDrawer({ open, onClose }: Props) {
                     src.type === 'upscaler' ? 'Download from HuggingFace, then upload via the Upscale panel' :
                     !KNOWN_MODELS_NAMES.has(src.name) ? 'Open HuggingFace page to download manually' : ''
                   const isLocal =
-                    src.type === 'base'     ? availableModels.includes(src.name) :
+                    src.type === 'base'     ? availableModels.includes(src.model_choice || src.name) :
                     src.type === 'upscaler' ? (extras?.upscale_models.some(m => m.name === src.name) ?? false) :
                     false
 

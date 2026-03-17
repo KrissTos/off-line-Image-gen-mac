@@ -451,6 +451,65 @@ export default function App() {
     }
   }, [dispatch, setStatusMsg])
 
+  // ── Load params from gallery image ────────────────────────────────────────
+
+  const handleLoadParams = useCallback(async (item: OutputItem) => {
+    if (isRestoringWorkflow.current) return
+    isRestoringWorkflow.current = true
+    try {
+      // Restore scalar params from sidecar fields
+      const p: Partial<GenerateParams> = {}
+      if (item.prompt        != null) p.prompt        = item.prompt
+      if (item.model_choice  != null) p.model_choice  = item.model_choice
+      if (item.model_source  != null) p.model_source  = item.model_source
+      if (item.width         != null) p.width         = item.width
+      if (item.height        != null) p.height        = item.height
+      if (item.steps         != null) p.steps         = item.steps
+      if (item.guidance      != null) p.guidance      = item.guidance
+      if (item.seed          != null) p.seed          = item.seed
+      if (item.img_strength  != null) p.img_strength  = item.img_strength
+      if (item.mask_mode     != null) p.mask_mode     = item.mask_mode
+      if (item.outpaint_align!= null) p.outpaint_align= item.outpaint_align
+      if (item.lora_files    != null) p.lora_files    = item.lora_files
+      if (item.num_frames    != null) p.num_frames    = item.num_frames
+      if (item.fps           != null) p.fps           = item.fps
+      dispatch({ type: 'SET_PARAMS', params: p })
+
+      // Restore ref images + mask from companion folder
+      const stem = item.name.replace(/\.[^.]+$/, '')
+      const refCount = item.ref_image_count ?? 0
+      if (refCount > 0 || item.has_mask) {
+        setStatusMsg(`Restoring ${refCount} ref image(s)…`)
+        dispatch({ type: 'CLEAR_ALL_SLOTS' })
+        for (let i = 0; i < refCount; i++) {
+          const refUrl = `/api/output/${stem}/ref_slot_${i + 1}.png`
+          const slotId = i + 1
+          try {
+            const { id, url } = await uploadFromUrl(refUrl)
+            dispatch({ type: 'ADD_REF_SLOT', imageId: id, imageUrl: url })
+            if (i === 0 && item.img_strength != null) {
+              dispatch({ type: 'UPDATE_SLOT_STRENGTH', slotId, strength: item.img_strength })
+            }
+            if (i === 0 && item.has_mask) {
+              const maskUrl = `/api/output/${stem}/mask.png`
+              try {
+                const { id: mId, url: mUrl } = await uploadFromUrl(maskUrl)
+                dispatch({ type: 'SET_SLOT_MASK', slotId, maskId: mId, maskUrl: mUrl })
+              } catch { /* mask may not exist */ }
+            }
+          } catch (err) {
+            console.error(`Load params: failed to upload ref slot ${slotId}`, err)
+          }
+        }
+        setStatusMsg(`✓ Params loaded from ${item.name}`)
+      } else {
+        setStatusMsg(`✓ Params loaded from ${item.name}`)
+      }
+    } finally {
+      isRestoringWorkflow.current = false
+    }
+  }, [dispatch, setStatusMsg])
+
   // ── Render ────────────────────────────────────────────────────────────────
 
   return (
@@ -546,6 +605,7 @@ export default function App() {
               outputs={state.outputs}
               onSelect={handleSelectGallery}
               onDelete={handleDeleteOutput}
+              onLoadParams={handleLoadParams}
               upscaleModelPath={state.params.upscale_model_path}
               onUpscale={handleUpscaleGalleryItem}
               upscalingItem={upscalingGalleryUrl}
