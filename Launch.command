@@ -5,8 +5,9 @@
 #
 # Usage:
 #   ./Launch.command               — build React UI (if needed) + start FastAPI server
-#   ./Launch.command --gradio      — start legacy Gradio UI on :7860
 #   ./Launch.command --dev         — start FastAPI :7861 + Vite dev server :5173
+#   ./Launch.command --debug       — production server with verbose debug logging
+#   ./Launch-Debug.command         — same as --debug (double-click shortcut)
 
 cd "$(dirname "$0")"
 
@@ -41,13 +42,22 @@ echo ""
 
 # ── Modes ─────────────────────────────────────────────────────────────────────
 
-if [[ "$1" == "--gradio" ]]; then
-    # ── Legacy Gradio UI ───────────────────────────────────────────────────
-    echo "Starting Gradio UI on http://127.0.0.1:7860"
+if [[ "$1" == "--debug" ]]; then
+    # ── Debug mode: production server with verbose logging ─────────────────
+    echo "Debug mode: FastAPI + React UI on http://127.0.0.1:7860 (verbose logging)"
+    echo "tail -f logs/server.log   to watch live"
     echo "(Press Ctrl+C to stop)"
     echo ""
-    (sleep 6 && open http://127.0.0.1:7860) &
-    UV_PROJECT_ENVIRONMENT=venv "$UV" run python app.py
+
+    DIST="frontend/dist/index.html"
+    if [ ! -f "$DIST" ]; then
+        echo "Frontend not built — building now..."
+        (cd frontend && npm install && npm run build)
+    fi
+
+    (sleep 5 && open http://127.0.0.1:7860) &
+    UV_PROJECT_ENVIRONMENT=venv "$UV" run python server.py --port 7860 --debug --no-auto-shutdown
+    osascript -e 'tell application "Terminal" to close front window' 2>/dev/null; exit
 
 elif [[ "$1" == "--dev" ]]; then
     # ── Dev mode: FastAPI backend + Vite frontend ──────────────────────────
@@ -66,6 +76,7 @@ elif [[ "$1" == "--dev" ]]; then
 
     # Cleanup
     kill "$BACKEND_PID" 2>/dev/null
+    osascript -e 'tell application "Terminal" to close front window' 2>/dev/null
     exit $DEV_EXIT
 
 else
@@ -86,7 +97,6 @@ else
         if ! command -v node &>/dev/null; then
             echo "ERROR: Node.js is required to build the frontend."
             echo "Install Node.js from https://nodejs.org/ and try again."
-            echo "Or run with --gradio to use the legacy Gradio UI."
             read -rp "Press Enter to exit..."
             exit 1
         fi
@@ -113,4 +123,5 @@ else
 
     (sleep 5 && open http://127.0.0.1:7860) &
     UV_PROJECT_ENVIRONMENT=venv "$UV" run python server.py --port 7860
+    osascript -e 'tell application "Terminal" to close front window' 2>/dev/null
 fi

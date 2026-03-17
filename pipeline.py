@@ -18,8 +18,16 @@ import concurrent.futures
 import io
 import json
 import os
+import threading
 import time
 from typing import Any, AsyncGenerator
+
+# Set by server.py before any generation runs.
+DEBUG: bool = False
+
+
+class _GenerationStopped(Exception):
+    """Raised inside the generation thread when the user requests a stop."""
 
 # ── No-op progress shim ───────────────────────────────────────────────────────
 # generate_image() expects a gr.Progress-compatible object as its last arg.
@@ -49,10 +57,15 @@ def _save_output_image(img, output_dir: str, prompt: str, seed: int) -> str:
     """Save PIL image to output_dir, return the file path."""
     import re, datetime
     os.makedirs(output_dir, exist_ok=True)
-    slug = re.sub(r"[^\w\s-]", "", (prompt or "image"))[:40].strip().replace(" ", "_")
-    # Use millisecond precision so repeat-count images within the same second get unique names
-    ts   = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:19]   # …_mmm
-    filename = f"{ts}_{seed}_{slug}.png"
+    slug = re.sub(r"[^\w\s-]", "", (prompt or "image"))[:40].strip().replace(" ", "_") or "image"
+    date = datetime.datetime.now().strftime("%Y%m%d")
+    base = f"{date}_{slug}"
+    # Avoid collisions: append _2, _3, … if the file already exists
+    filename = f"{base}.png"
+    counter = 2
+    while os.path.exists(os.path.join(output_dir, filename)):
+        filename = f"{base}_{counter}.png"
+        counter += 1
     path = os.path.join(output_dir, filename)
     img.save(path, "PNG")
     return path
@@ -73,6 +86,25 @@ class PipelineManager:
         self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=1,
                                                                 thread_name_prefix="pipeline")
         self.is_busy   = False
+        self._stop_event = threading.Event()
+
+    def request_stop(self):
+        """Signal the running generation thread to stop at the next step boundary."""
+        self._stop_event.set()
+
+    def _make_step_callback(self, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop):
+        """Return a step callback that reports progress and raises on stop."""
+        stop_event = self._stop_event
+
+        def _cb(s: int, t: int):
+            if stop_event.is_set():
+                raise _GenerationStopped()
+            asyncio.run_coroutine_threadsafe(
+                queue.put({"type": "progress", "message": f"Step {s}/{t}", "step": s, "total": t}),
+                loop,
+            )
+
+        return _cb
 
     # ── status ────────────────────────────────────────────────────────────────
 
@@ -162,6 +194,8 @@ class PipelineManager:
         loop    = asyncio.get_event_loop()
         queue: asyncio.Queue[dict | None] = asyncio.Queue()
 
+        self._stop_event.clear()
+
         def _thread():
             """Runs in the thread executor.  Pushes events onto the asyncio Queue."""
             import app as _app
@@ -193,11 +227,38 @@ class PipelineManager:
                 mask_mode         = params.get("mask_mode", "Crop & Composite (Fast)"),
                 outpaint_align    = params.get("outpaint_align", "center"),
                 progress          = _NoOpProgress(track_tqdm=True),
-                step_callback     = lambda s, t: asyncio.run_coroutine_threadsafe(
-                    queue.put({"type": "progress", "message": f"Step {s}/{t}", "step": s, "total": t}),
-                    loop,
-                ),
+                step_callback     = self._make_step_callback(queue, loop),
             )
+
+            if DEBUG:
+                import pprint as _pp
+                # Omit legacy single-LoRA fields when the multi-LoRA list is in use
+                _skip = {"progress", "step_callback"}
+                if kwargs.get("lora_files"):
+                    _skip |= {"lora_file", "lora_strength"}
+                safe = {k: (v if not hasattr(v, "size") else f"<PIL {v.size}>")
+                        for k, v in kwargs.items()
+                        if k not in _skip}
+                # Summarise input_images / mask_image without printing PIL objects
+                if safe.get("input_images"):
+                    imgs = kwargs["input_images"]
+                    safe["input_images"] = [
+                        f"<PIL {(i[0] if isinstance(i, tuple) else i).size}>"
+                        for i in imgs
+                    ]
+                if kwargs.get("mask_image"):
+                    safe["mask_image"] = f"<PIL {kwargs['mask_image'].size}>"
+                print("\n[DEBUG] ── generation params ─────────────────────────")
+                _pp.pprint(safe, width=80, sort_dicts=False)
+                print(f"[DEBUG] current_model={_app.current_model!r}  "
+                      f"current_device={_app.current_device!r}")
+                lora_paths = getattr(_app, "current_lora_paths", [])
+                print(f"[DEBUG] loaded LoRAs ({len(lora_paths)}): "
+                      + str([l.get("path","?") for l in lora_paths]))
+                zimg_nets = getattr(_app, "_zimage_lora_networks", [])
+                if zimg_nets:
+                    print(f"[DEBUG] Z-Image LoRA networks active: {len(zimg_nets)}")
+                print("[DEBUG] ──────────────────────────────────────────────\n")
 
             try:
                 for image, video, status in _app.generate_image(**kwargs):
@@ -234,6 +295,9 @@ class PipelineManager:
                 # sentinel — generation finished
                 asyncio.run_coroutine_threadsafe(queue.put(None), loop)
 
+            except _GenerationStopped:
+                # Clean user-requested stop — no error event, just close the stream.
+                asyncio.run_coroutine_threadsafe(queue.put(None), loop)
             except MemoryError:
                 asyncio.run_coroutine_threadsafe(
                     queue.put({"type": "error",

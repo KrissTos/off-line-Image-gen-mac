@@ -50,6 +50,7 @@ inpaint_pipe = None   # cached FluxInpaintPipeline / ZImageInpaintPipeline
 current_device = None
 current_model = None  # "zimage-quant", "zimage-full", "flux2-klein-int8"
 current_lora_paths: list = []  # [{path: str, strength: float}, ...]
+_zimage_lora_networks: list = []  # LoRANetwork instances for Z-Image (must be removed on unload)
 model_source = "local"  # "local" or "hf_cache"
 last_sync_status = ""
 online_version_cache = {}  # repo_id -> sha string, or None if error
@@ -58,6 +59,17 @@ video_pipe           = None
 current_video_device = None
 
 WORKFLOWS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "workflows")
+
+
+def _dbg(msg: str) -> None:
+    """Print a [DEBUG] line — only when pipeline.DEBUG is True."""
+    try:
+        import pipeline as _pl
+        if _pl.DEBUG:
+            print(f"[DEBUG] {msg}")
+    except Exception:
+        pass
+
 
 # Model choices
 MODEL_CHOICES = [
@@ -663,10 +675,21 @@ def load_pipeline(model_choice: str, device: str = "mps"):
     return pipe
 
 
+def _unload_zimage_loras():
+    """Remove all custom Z-Image LoRA networks (forward-patch based)."""
+    global _zimage_lora_networks
+    for net in _zimage_lora_networks:
+        try:
+            net.remove()
+        except Exception:
+            pass
+    _zimage_lora_networks = []
+
+
 def load_loras(loras: list, device: str) -> str:
     """Load one or more LoRA adapters. loras = [{path, strength}, ...]
     Supports Z-Image Full and all FLUX.2-klein models."""
-    global current_lora_paths, pipe
+    global current_lora_paths, pipe, _zimage_lora_networks
 
     is_flux   = current_model is not None and current_model.startswith("flux2")
     is_zimage = current_model is not None and current_model == "zimage-full"
@@ -678,40 +701,55 @@ def load_loras(loras: list, device: str) -> str:
     valid = [l for l in (loras or []) if l.get("path") and os.path.exists(l["path"])]
 
     if not valid:
-        try:
-            pipe.unload_lora_weights()
-        except Exception:
-            pass
+        if is_flux:
+            try:
+                pipe.unload_lora_weights()
+            except Exception:
+                pass
+        else:
+            _unload_zimage_loras()
         current_lora_paths = []
         return "No LoRAs loaded"
 
     # Unload previous adapters before reloading
-    try:
-        pipe.unload_lora_weights()
-    except Exception:
-        pass
+    if is_flux:
+        try:
+            pipe.unload_lora_weights()
+        except Exception:
+            pass
+    else:
+        _unload_zimage_loras()
 
     if is_flux:
         from core.lora_flux2 import load_loras as _flux_load_loras
         try:
             status = _flux_load_loras(pipe, valid)
             current_lora_paths = valid
+            _dbg(f"FLUX LoRA loaded: {[l.get('path') for l in valid]}")
             return status
         except RuntimeError as e:
             return f"LoRA error: {e}"
     else:
-        # Z-Image Full — diffusers native multi-adapter
-        adapter_names   = []
-        adapter_weights = []
-        for i, lora in enumerate(valid):
-            name = f"lora_{i}"
-            pipe.load_lora_weights(lora["path"], adapter_name=name)
-            adapter_names.append(name)
-            adapter_weights.append(float(lora.get("strength", 1.0)))
-        pipe.set_adapters(adapter_names, adapter_weights=adapter_weights)
+        # Z-Image Full — custom forward-patch loader (bypasses PEFT module-name matching)
+        from core.lora_zimage import load_lora_for_pipeline
+        loaded = []
+        for lora in valid:
+            try:
+                net = load_lora_for_pipeline(
+                    pipe,
+                    lora_path=lora["path"],
+                    multiplier=float(lora.get("strength", 1.0)),
+                    device=device,
+                )
+                _zimage_lora_networks.append(net)
+                loaded.append(os.path.basename(lora["path"]))
+                _dbg(f"Z-Image LoRA patched: {lora['path']} strength={lora.get('strength', 1.0)}")
+            except Exception as e:
+                print(f"  LoRA load failed for {lora['path']}: {e}")
         current_lora_paths = valid
-        names = [os.path.basename(l["path"]) for l in valid]
-        return f"Loaded {len(valid)} LoRA(s): {', '.join(names)}"
+        if loaded:
+            return f"Loaded {len(loaded)} LoRA(s): {', '.join(loaded)}"
+        return "LoRA load failed — check console for details"
 
 
 def load_lora(lora_file, lora_strength: float, device: str):
@@ -1070,6 +1108,7 @@ def generate_image(
         # unavailable).  Initialise here so the post-try composite & save code is safe.
         image        = None
         video_frames = None
+        mode         = "txt2img"
         try:
             with torch.inference_mode():
                 if current_model in ("flux2-klein-int8", "flux2-klein-sdnq", "flux2-klein-9b-sdnq"):
@@ -1080,6 +1119,7 @@ def generate_image(
                             and "Inpainting" in (mask_mode or "")
                             and ref_full is not None):
                         preprocessed_flux_refs = preprocessed_flux_refs or [ref_full]
+                        _dbg("FLUX: inpainting fall-through → img2img (FluxInpaintPipeline incompatible)")
 
                     # ── FLUX img2img (reference images, incl. inpainting fall-through) ──
                     if preprocessed_flux_refs is not None:
@@ -1104,6 +1144,7 @@ def generate_image(
 
                         mode = f"img2img ({len(preprocessed_flux_refs)} ref)"
                         video_frames = None
+                        _dbg(f"FLUX branch: img2img, {len(preprocessed_flux_refs)} ref(s)")
 
                     # ── FLUX txt2img (no reference) ──
                     else:
@@ -1118,8 +1159,11 @@ def generate_image(
                         ).images[0]
                         mode = "txt2img"
                         video_frames = None
+                        _dbg("FLUX branch: txt2img (no reference)")
 
                 elif current_model == "zimage-full" and preprocessed_zimage_ref is not None:
+                    _dbg(f"Z-Image full branch: has_mask={has_mask} mask_mode={mask_mode!r}")
+                    _zimage_inpaint_failed = False
                     # ── Z-Image inpainting pipeline (mask + quality mode) ──────
                     if (has_mask and mask_full is not None
                             and "Inpainting" in (mask_mode or "")
@@ -1142,11 +1186,13 @@ def generate_image(
                                 callback_on_step_end=_cb,
                             ).images[0]
                             mode = "inpainting (Z-Image)"
+                            _dbg("Z-Image branch: ZImageInpaintPipeline succeeded")
                         except Exception as _e:
                             print(f"  ZImageInpaintPipeline unavailable ({_e}) — falling back to img2img")
-                            # Fall through to normal img2img
+                            _dbg(f"Z-Image branch: inpainting failed ({_e}), falling back to img2img")
+                            _zimage_inpaint_failed = True
                     # ── Z-Image img2img (reference, incl. crop mode) ─────────
-                    if not (has_mask and "Inpainting" in (mask_mode or "")):
+                    if _zimage_inpaint_failed or not (has_mask and "Inpainting" in (mask_mode or "")):
                         from diffusers import ZImageImg2ImgPipeline
                         if img2img_pipe is None:
                             print("  Creating img2img pipeline (shared weights, one-time cost)...")
@@ -1163,6 +1209,7 @@ def generate_image(
                             callback_on_step_end=_cb,
                         ).images[0]
                         mode = "img2img (ref)"
+                        _dbg("Z-Image branch: img2img (ref)")
                     video_frames = None
                 elif is_video_model:
                     n_frames = max(9, int(num_frames or 25))
@@ -1305,6 +1352,7 @@ def generate_image(
 def clear_lora():
     """Clear all loaded LoRAs."""
     global current_lora_paths, pipe
+    _unload_zimage_loras()
     if pipe is not None:
         try:
             pipe.unload_lora_weights()

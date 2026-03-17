@@ -32,7 +32,8 @@ async function del<T>(path: string): Promise<T> {
 // ── Status / devices / models ─────────────────────────────────────────────────
 
 export const fetchStatus  = () => get<AppStatus>('/api/status')
-export const pingServer   = () => fetch('/api/ping', { method: 'POST' }).catch(() => {})
+export const pingServer      = () => fetch('/api/ping', { method: 'POST' }).catch(() => {})
+export const stopGeneration  = () => fetch('/api/stop', { method: 'POST' }).catch(() => {})
 export const fetchDevices = () => get<{ devices: string[] }>('/api/devices')
 export const fetchModels  = () =>
   get<{ choices: string[]; available: string[]; current: string | null }>('/api/models')

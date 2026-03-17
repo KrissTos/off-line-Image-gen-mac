@@ -51,6 +51,10 @@ export default function SettingsDrawer({ open, onClose }: Props) {
   const [outputDirSaved, setOutputDirSaved]   = useState(false)
   const [outputDirSaving, setOutputDirSaving] = useState(false)
   const [folderPicking, setFolderPicking]     = useState(false)
+  // Default model
+  const [defaultModel, setDefaultModel]       = useState('')
+  const [defaultModelSaved, setDefaultModelSaved] = useState(false)
+  const [defaultModelSaving, setDefaultModelSaving] = useState(false)
   // Model updates
   const [updateResults, setUpdateResults]     = useState<ModelUpdateResult[] | null>(null)
   const [checkingUpdates, setCheckingUpdates] = useState(false)
@@ -93,6 +97,7 @@ export default function SettingsDrawer({ open, onClose }: Props) {
             if (s.theme_colors && typeof s.theme_colors === 'object') {
               setThemeColors({ ...DEFAULT_THEME, ...(s.theme_colors as Record<string, string>) })
             }
+            setDefaultModel((s.default_model as string) || '')
           })
           .catch(() => setOutputDir(DEFAULT_OUTPUT_DIR)),
         fetch('/api/hf/status')
@@ -230,6 +235,19 @@ export default function SettingsDrawer({ open, onClose }: Props) {
       setStatusMsg(`Save failed: ${(e as Error).message}`)
     } finally {
       setOutputDirSaving(false)
+    }
+  }
+
+  async function handleSaveDefaultModel() {
+    setDefaultModelSaving(true)
+    try {
+      await updateSettings({ default_model: defaultModel || null })
+      setDefaultModelSaved(true)
+      setTimeout(() => setDefaultModelSaved(false), 2000)
+    } catch (e: unknown) {
+      setStatusMsg(`Save failed: ${(e as Error).message}`)
+    } finally {
+      setDefaultModelSaving(false)
     }
   }
 
@@ -411,6 +429,43 @@ export default function SettingsDrawer({ open, onClose }: Props) {
                          placeholder-muted focus:outline-none focus:border-accent font-mono"
             />
           </section>
+
+          {/* ── Default model ── */}
+          {modelChoices.length > 0 && (
+            <section>
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-label mb-3 flex items-center gap-1.5">
+                <HardDrive size={13} /> Default Model
+              </h3>
+              <div className="flex gap-2">
+                <select
+                  value={defaultModel}
+                  onChange={e => { setDefaultModel(e.target.value); setDefaultModelSaved(false) }}
+                  className="flex-1 bg-card border border-border rounded-md px-3 py-2 text-xs text-white
+                             focus:outline-none focus:border-accent truncate"
+                >
+                  <option value="">— none (use last loaded) —</option>
+                  {modelChoices.map(m => (
+                    <option key={m} value={m}>{m}</option>
+                  ))}
+                </select>
+                <button
+                  onClick={handleSaveDefaultModel}
+                  disabled={defaultModelSaving}
+                  className={`px-3 py-2 rounded-md text-xs font-medium transition-colors flex items-center gap-1.5
+                    ${defaultModelSaved
+                      ? 'bg-green-700/60 text-green-300 border border-green-700/50'
+                      : 'bg-accent text-white hover:bg-accent/80'
+                    } disabled:opacity-40`}
+                >
+                  {defaultModelSaving ? <RefreshCw size={12} className="animate-spin" /> : defaultModelSaved ? <CheckCircle2 size={12} /> : <Save size={12} />}
+                  {defaultModelSaved ? 'Saved' : 'Save'}
+                </button>
+              </div>
+              <p className="text-[10px] text-muted/60 mt-1.5">
+                Pre-selects this model in the dropdown on every app launch.
+              </p>
+            </section>
+          )}
 
           {/* ── HuggingFace ── */}
           <section>
@@ -700,7 +755,7 @@ export default function SettingsDrawer({ open, onClose }: Props) {
                     !KNOWN_MODELS_NAMES.has(src.name) ? 'Open HuggingFace page to download manually' : ''
                   const isLocal =
                     src.type === 'base'     ? availableModels.includes(src.model_choice || src.name) :
-                    src.type === 'upscaler' ? (extras?.upscale_models.some(m => m.name === src.name) ?? false) :
+                    src.type === 'upscaler' ? (extras?.upscale_models.some(m => m.name.replace(/\.[^.]+$/, '') === src.name) ?? false) :
                     false
 
                   return (

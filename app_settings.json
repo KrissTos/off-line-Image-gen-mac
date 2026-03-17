@@ -10,5 +10,6 @@
     "muted": "#d6d6d6",
     "label": "#aaaaaa"
   },
-  "upscale_model_path": ""
+  "upscale_model_path": "/Users/cris/Projects/off-line-Image-gen-mac/upscale_models/4x-UltraSharp.safetensors",
+  "default_model": "FLUX.2-klein-4B (Int8)"
 }

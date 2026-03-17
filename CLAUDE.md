@@ -39,7 +39,7 @@ python server.py --port 7860 --no-auto-shutdown
 cd frontend && npm run build  # rebuild after any frontend change
 ```
 
-**Browser heartbeat / auto-shutdown**: server shuts down 60 s after the last ping (raised from 15 s; background tabs throttle `setInterval`). Watcher skips shutdown if `manager.is_busy` is True. Frontend sends `POST /api/ping` every 5 s. 20 s grace on first launch. Disable: `--no-auto-shutdown`.
+**Browser heartbeat / auto-shutdown**: server shuts down 60 s after last ping. Frontend sends `POST /api/ping` every 5s AND fires `navigator.sendBeacon('/api/shutdown')` on `beforeunload` (tab/window close → immediate ~1.5s shutdown). Watcher skips shutdown if `manager.is_busy`. Disable: `--no-auto-shutdown`.
 
 ## HuggingFace token
 Stored in `huggingface/token` (gitignored). Type: **Read** (fine-grained, gated repos). Login via Settings drawer in UI, or `python -c "from huggingface_hub import login; login()"`. Must also accept terms on each gated model page.
@@ -47,13 +47,13 @@ Stored in `huggingface/token` (gitignored). Type: **Read** (fine-grained, gated 
 ## Architecture
 
 ### Backend key files
-**`pipeline.py`** — `PipelineManager` singleton wrapping `app.generate_image()` in `asyncio.Lock` + `ThreadPoolExecutor(1)`. Yields SSE event dicts. `auto_save=False` prevents double-saving.
+**`pipeline.py`** — `PipelineManager` singleton wrapping `app.generate_image()` in `asyncio.Lock` + `ThreadPoolExecutor(1)`. Yields SSE event dicts. `auto_save=False` prevents double-saving. Stop: `threading.Event` + `_GenerationStopped` raised from step callback; `finally` always runs `gc.collect()` + `torch.mps.empty_cache()`.
 
 **`server.py`** — FastAPI. Serves `frontend/dist/`. All routes `/api/*`. SSE via `StreamingResponse`. HTTP 423 when pipeline busy. Writes `.json` sidecar alongside each output image. Suppresses resource_tracker semaphore warning at import time via `warnings.filterwarnings`.
 
 **`app.py`** — pure backend logic (Gradio fully removed). `generate_image()` initialises `image = None` and `video_frames = None` before each repeat-loop iteration. `lora_files: list[dict]` replaces `lora_file/lora_strength`; legacy single-LoRA args still accepted and merged at call time. `current_lora_paths: list` replaces `current_lora_path`. FLUX LoRA now loaded during generation (was previously skipped — pre-existing bug).
 
-Output filename: `{YYYYMMDD_HHMMSS}_{seed}_{slug}.png` → sidecar `…{slug}.json`. Saved to `~/Pictures/ultra-fast-image-gen/` (`app.DEFAULT_OUTPUT_DIR`).
+Output filename: `{YYYYMMDD}_{slug}.png` (date + slug, no seed/time; collision → `_2`, `_3` suffix). Sidecar `…{slug}.json` has ALL params. Companion folder `{slug}/` holds `params.json` + `ref_slot_N.png` + `mask.png` when refs/mask exist. Saved to `~/Pictures/ultra-fast-image-gen/` (`app.DEFAULT_OUTPUT_DIR`).
 
 ### Frontend (`frontend/`)
 Vite + React + TypeScript + Tailwind CSS v3 → `frontend/dist/`. Browser tab title: `Local AI Image Gen` (`index.html`).
@@ -87,9 +87,9 @@ Key source files:
 
 **`Canvas.tsx`** — flex 5. Shows result image/video + generating overlay. Drag-and-drop ref image support. Generating overlay: 56px spinner with `pct`% number overlaid at center (when step/total available), progress message text, thin progress bar.
 
-**`Gallery.tsx`** — flex 1, horizontal scroll strip. `onSelect` injects prompt + model into sidebar. Thumbnails: `draggable` + `onDragStart` sets `dataTransfer('text/plain', item.url)` for gallery→ref slot drag. Hover shows 3 icon buttons (Info overlay with `W × H px`, Upscale ×4, Delete). Dimensions read from `img.naturalWidth/naturalHeight` on load into `imgDims` state. Info overlay is `position:absolute inset-0` inside the thumbnail (avoids `overflow-hidden` clipping). Do NOT use `title` attribute on the outer div — causes native browser tooltip showing the prompt everywhere.
+**`Gallery.tsx`** — flex 1, horizontal scroll strip. `onSelect` injects prompt + model into sidebar. Thumbnails: `draggable` + `onDragStart` sets `dataTransfer('text/plain', item.url)` for gallery→ref slot drag. Hover shows 4 icon buttons: Info (`W × H px`), Load Params (`RotateCcw` green, restores all params + ref slots from companion folder), Upscale ×4, Delete. Info overlay is `position:absolute inset-0` inside the thumbnail. Do NOT use `title` on outer div — causes native browser tooltip.
 
-**`SettingsDrawer.tsx`** — `w-96` slide-in. Output folder (editable, saved via `POST /api/settings`), HF login, model list (✓ cached / ↓ not downloaded + per-model size + delete with confirm), upscale model list (delete), storage summary, **Server Log** section (Save Log → `POST /api/logs/save` → timestamped snapshot in `logs/`). Refresh button reloads all data.
+**`SettingsDrawer.tsx`** — `w-96` slide-in. Sections: Output folder, **Default Model** (dropdown → `default_model` in `app_settings.json`, pre-selects on bootstrap), HF login, model list (✓ cached / ↓ not downloaded + size + delete + update), upscale model list, storage summary, Server Log (Save → timestamped snapshot in `logs/`), Model Sources. Refresh button reloads all data.
 
 **`TopBar.tsx`** — "Local AI Image Gen" brand, model, device, VRAM, "generating…" pulse, settings gear.
 
@@ -115,6 +115,8 @@ Actions: `ADD_REF_SLOT` · `REMOVE_REF_SLOT` · `SET_SLOT_MASK` · `CLEAR_SLOT_M
 | Method | Path | Notes |
 |--------|------|-------|
 | POST | `/api/ping` | Heartbeat |
+| POST | `/api/stop` | Signal generation thread to stop at next step boundary |
+| POST | `/api/shutdown` | Immediate shutdown (called by `sendBeacon` on tab close); 1.5s delay; no-op if `--no-auto-shutdown` |
 | GET | `/api/status` | `{model, device, loaded, busy, vram_gb}` |
 | GET/POST | `/api/models` / `/api/models/load` | List / load model |
 | DELETE | `/api/models/{name}` | Delete cached model |
@@ -192,10 +194,10 @@ Tailwind tokens: `bg:#0a0a0a` · `surface:#141414` · `card:#1c1c1c` · `border:
 ## Guidance scale + Steps per model
 | Model | guidance | steps | Reason |
 |-------|----------|-------|--------|
-| Z-Image Turbo (any) | **0** | **4** | Distilled — CFG not used; more steps hurt quality |
+| Z-Image Turbo (any) | **0** | **4** | Step-wise distilled — CFG ignored; more steps hurt quality |
+| FLUX.2 (all variants) | **0** | **20** | Step-wise distilled — diffusers warns + ignores any non-zero value |
 | LTX-Video | **3.0** | **25** | |
-| FLUX.2 (all) | **3.5** | **20** | |
-`guidanceForModel(model)` and `stepsForModel(model)` helpers in `App.tsx` auto-set on model change and bootstrap.
+`guidanceForModel(model)` and `stepsForModel(model)` in `App.tsx`. Guidance slider **hidden** in UI (value still sent); unhide when adding full-precision non-distilled models.
 
 ## Implementation notes
 - `DELETE /api/output/{filename:path}` — deletes file + `.json` sidecar; `upscale_image()` falls back to CPU if MPS unsupported by spandrel
@@ -209,7 +211,10 @@ Tailwind tokens: `bg:#0a0a0a` · `surface:#141414` · `card:#1c1c1c` · `border:
 - **HF auth endpoints must be sync `def`**: blocking calls (`whoami()`, `os.walk`) — `async def` blocks event loop
 - **Multi-LoRA stacking**: `lora_files: LoraSlot[]` (up to 5); named adapters in `load_loras()`; partial-load cleanup via `unload_lora_weights()` before re-raise; `if not lora_files` (not `is None`) for legacy fallback; stable slot keys via `useRef` counter
 - **LoRA dropdown filtered by model**: `GET /api/lora/list` returns `model_type: "flux"|"zimage"|"unknown"` (safetensors header check); `LoraPanel` shows compatible + `unknown` entries (hide only positively incompatible); `_detect_lora_type()` in `server.py`
-- **Model Sources local highlight**: `isLocal` = `availableModels.includes(src.name)` (base) or `extras?.upscale_models.some(m => m.name === src.name)` (upscaler); card gets `border-green-500/60` when cached locally
+- **Model Sources local highlight**: `isLocal` uses `src.model_choice` (not `src.name`) for base type — `DEFAULT_SOURCES` names are shorter than `MODEL_CHOICES` strings; `model_choice` field added to each base entry; GET endpoint merges it by ID for existing `model_sources.json` on disk
+- **Z-Image LoRA loader**: uses `load_lora_for_pipeline()` from `core/lora_zimage.py` (forward-patch, not PEFT) — `pipe.load_lora_weights()` fails with "target modules not found" because PEFT can't match Z-Image module names; networks tracked in `_zimage_lora_networks: list`; `_unload_zimage_loras()` calls `net.remove()` on each
+- **`mode` UnboundLocalError**: `mode = "txt2img"` initialised alongside `image = None` before try block; Z-Image inpainting fallback flag `_zimage_inpaint_failed` ensures img2img runs when `ZImageInpaintPipeline` throws
+- **`--debug` flag**: `server.py` sets `pipeline.DEBUG = True`; `pipeline.py` dumps full generation params + LoRA state before each run; `app.py` `_dbg()` prints branch-taken lines; `Launch-Debug.command` double-click shortcut
 - **LoRA compat check on upload**: `check_lora_compatibility()` rejects single_blocks≥20 or double_blocks≥19; `api_upload_lora` uses `.tmp_<name>` temp → HTTP 422 on failure; `uploadLora()` in `api.ts` surfaces the `detail` message
 - **`SaveWorkflowRequest.lora_file`**: `str | None = None` — frontend sends `null`; plain `str` causes 422
 - **Workflow ref persistence**: `api_save_workflow` copies slot images/masks as `slot_N_image/mask.png`; `handleWorkflowLoad` is async + sequential — `ADD_REF_SLOT` assigns slotId at dispatch time so order matters
@@ -219,3 +224,9 @@ Tailwind tokens: `bg:#0a0a0a` · `surface:#141414` · `card:#1c1c1c` · `border:
 - **Model Sources registry**: `GET/POST /api/model-sources` → `model_sources.json`; 31 DEFAULT_SOURCES; `Body(...)` required for dict POST
 - **Sleep/wake auto-shutdown**: `_heartbeat_watcher` tracks wall-clock between ticks; jump > 60 s = Mac sleep → resets `_last_ping` instead of shutting down
 - **Safari Gallery padding**: `viewport-fit=cover` in `index.html`; `paddingBottom: 'max(8px, env(safe-area-inset-bottom))'` in Gallery
+- **MPS memory flush after generation**: `pipeline.py` `_thread()` has a `finally` block with `gc.collect()` + `torch.mps.empty_cache()` — releases pooled MPS memory back to OS after every generation (success or error). Root cause: `app.py` has per-branch cache calls but none guaranteed at top-level exit.
+- **Terminal auto-close**: `Launch.command` runs `osascript` to close Terminal after server exits. With `sendBeacon` shutdown, Terminal closes ~2s after browser tab is closed.
+- **Stop generation**: `POST /api/stop` sets `manager._stop_event`; step callback raises `_GenerationStopped`; caught cleanly (no error SSE); `finally` always frees MPS memory. Frontend `handleStop` calls `stopGeneration()` then aborts SSE.
+- **Default model**: stored as `default_model` in `app_settings.json`; bootstrap in `App.tsx` reads it after `fetchSettings()` and dispatches `SET_PARAM model_choice` + guidance + steps overrides.
+- **Guidance slider hidden**: removed from `Sidebar.tsx` UI; value still in state, correct default set by `guidanceForModel()`. ALL current models are step-wise distilled → guidance=0 always sent.
+- **Debug dump cleanup**: `lora_file`/`lora_strength` excluded from `[DEBUG]` params when `lora_files` is populated (legacy fields, always `None`/`1.0` from frontend).

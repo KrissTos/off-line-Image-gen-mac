@@ -64,14 +64,14 @@ TEMP_DIR.mkdir(exist_ok=True)
 MODEL_SOURCES_FILE = ROOT / "model_sources.json"
 
 DEFAULT_SOURCES: list[dict] = [
-    # Base models — name must match KNOWN_MODELS display name in app.py for Download to work
-    {"id": "src-001", "name": "FLUX.2-klein-4B (4bit SDNQ)",  "url": "https://huggingface.co/Disty0/FLUX.2-klein-4B-SDNQ-4bit-dynamic",           "type": "base",     "description": "~8 GB VRAM · MPS optimized · recommended for 16 GB Mac"},
-    {"id": "src-002", "name": "FLUX.2-klein-9B (4bit SDNQ)",  "url": "https://huggingface.co/Disty0/FLUX.2-klein-9B-SDNQ-4bit-dynamic-svd-r32",   "type": "base",     "description": "~12 GB VRAM · high quality"},
-    {"id": "src-003", "name": "FLUX.2-klein-4B (Int8)",        "url": "https://huggingface.co/aydin99/FLUX.2-klein-4B-int8",                        "type": "base",     "description": "~16 GB VRAM · MPS explicit · 4B int8"},
-    {"id": "src-004", "name": "FLUX.2-klein-9B FP8",           "url": "https://huggingface.co/black-forest-labs/FLUX.2-klein-9b-fp8",               "type": "base",     "description": "Official BFL FP8 · not yet loadable in-app"},
-    {"id": "src-005", "name": "Z-Image Turbo (Full)",           "url": "https://huggingface.co/Tongyi-MAI/Z-Image-Turbo",                           "type": "base",     "description": "~24 GB VRAM · LoRA support"},
-    {"id": "src-006", "name": "Z-Image Turbo (Quantized)",      "url": "https://huggingface.co/Disty0/Z-Image-Turbo-SDNQ-uint4-svd-r32",            "type": "base",     "description": "~6 GB VRAM · fast"},
-    {"id": "src-007", "name": "LTX-Video",                      "url": "https://huggingface.co/Lightricks/LTX-Video",                               "type": "base",     "description": "Official video generation model"},
+    # Base models — model_choice must exactly match MODEL_CHOICES in app.py
+    {"id": "src-001", "name": "FLUX.2-klein-4B (4bit SDNQ)",  "model_choice": "FLUX.2-klein-4B (4bit SDNQ - Low VRAM)",              "url": "https://huggingface.co/Disty0/FLUX.2-klein-4B-SDNQ-4bit-dynamic",           "type": "base",     "description": "~8 GB VRAM · MPS optimized · recommended for 16 GB Mac"},
+    {"id": "src-002", "name": "FLUX.2-klein-9B (4bit SDNQ)",  "model_choice": "FLUX.2-klein-9B (4bit SDNQ - Higher Quality)",        "url": "https://huggingface.co/Disty0/FLUX.2-klein-9B-SDNQ-4bit-dynamic-svd-r32",   "type": "base",     "description": "~12 GB VRAM · high quality"},
+    {"id": "src-003", "name": "FLUX.2-klein-4B (Int8)",        "model_choice": "FLUX.2-klein-4B (Int8)",                              "url": "https://huggingface.co/aydin99/FLUX.2-klein-4B-int8",                        "type": "base",     "description": "~16 GB VRAM · MPS explicit · 4B int8"},
+    {"id": "src-004", "name": "FLUX.2-klein-9B FP8",           "model_choice": "",                                                    "url": "https://huggingface.co/black-forest-labs/FLUX.2-klein-9b-fp8",               "type": "base",     "description": "Official BFL FP8 · not yet loadable in-app"},
+    {"id": "src-005", "name": "Z-Image Turbo (Full)",           "model_choice": "Z-Image Turbo (Full - LoRA support)",                "url": "https://huggingface.co/Tongyi-MAI/Z-Image-Turbo",                           "type": "base",     "description": "~24 GB VRAM · LoRA support"},
+    {"id": "src-006", "name": "Z-Image Turbo (Quantized)",      "model_choice": "Z-Image Turbo (Quantized - Fast)",                   "url": "https://huggingface.co/Disty0/Z-Image-Turbo-SDNQ-uint4-svd-r32",            "type": "base",     "description": "~6 GB VRAM · fast"},
+    {"id": "src-007", "name": "LTX-Video",                      "model_choice": "LTX-Video  (txt2video · img2video with ref)",        "url": "https://huggingface.co/Lightricks/LTX-Video",                               "type": "base",     "description": "Official video generation model"},
     # LoRAs
     {"id": "src-008", "name": "Outpaint LoRA (klein 4B)",       "url": "https://huggingface.co/fal/flux-2-klein-4B-outpaint-lora",                  "type": "lora",     "description": "Outpainting — add green border to image"},
     {"id": "src-009", "name": "Zoom LoRA (klein 4B)",            "url": "https://huggingface.co/fal/flux-2-klein-4B-zoom-lora",                     "type": "lora",     "description": "Zoom into red-highlighted region"},
@@ -362,6 +362,18 @@ async def api_ping() -> dict:
     return {"ok": True}
 
 
+@app.post("/api/shutdown")
+async def api_shutdown() -> dict:
+    """Immediate shutdown — called by browser beforeunload via sendBeacon."""
+    if not _auto_shutdown:
+        return {"ok": False, "reason": "auto-shutdown disabled"}
+    async def _delayed():
+        await asyncio.sleep(1.5)
+        os.kill(os.getpid(), signal.SIGTERM)
+    asyncio.create_task(_delayed())
+    return {"ok": True}
+
+
 # ── Routes: Status / devices / models ────────────────────────────────────────
 
 @app.get("/api/status")
@@ -536,6 +548,13 @@ async def api_open_output_folder():
 
 # ── Routes: Generation (SSE) ─────────────────────────────────────────────────
 
+@app.post("/api/stop")
+async def api_stop():
+    """Signal the running generation to stop at the next step boundary."""
+    _mgr().request_stop()
+    return {"status": "stop requested"}
+
+
 @app.post("/api/generate")
 async def api_generate(req: GenerateRequest):
     """
@@ -572,25 +591,62 @@ async def api_generate(req: GenerateRequest):
     params["output_dir"]   = req.output_dir or _output_dir()
 
     async def event_stream():
+        import re as _re
         try:
             async for event in _mgr().generate(params):
-                # Save sidecar JSON alongside output file so Gallery can reload prompt/model
+                # Save sidecar JSON + companion folder for each output file
                 if event.get("type") in ("image", "video"):
                     url = event.get("url", "")
                     if url.startswith("/api/output/"):
                         filename = url[len("/api/output/"):]
-                        out_path  = Path(params["output_dir"]) / filename
-                        sidecar   = out_path.with_suffix(".json")
+                        out_path = Path(params["output_dir"]) / filename
+                        # Resolve actual seed from the status string embedded in info
+                        _sm = _re.search(r"Seed:\s*(\d+)", event.get("info", ""))
+                        actual_seed = int(_sm.group(1)) if _sm else req.seed
+                        # Full params — everything needed to reproduce this generation
+                        full_params = {
+                            "prompt":             req.prompt,
+                            "model_choice":       req.model_choice,
+                            "model_source":       req.model_source,
+                            "width":              req.width,
+                            "height":             req.height,
+                            "steps":              req.steps,
+                            "guidance":           req.guidance,
+                            "seed":               actual_seed,
+                            "img_strength":       req.img_strength,
+                            "mask_mode":          req.mask_mode,
+                            "outpaint_align":     req.outpaint_align,
+                            "repeat_count":       req.repeat_count,
+                            "lora_files":         req.lora_files,
+                            "upscale_enabled":    req.upscale_enabled,
+                            "upscale_model_path": req.upscale_model_path,
+                            "num_frames":         req.num_frames,
+                            "fps":                req.fps,
+                            "device":             req.device,
+                            "ref_image_count":    len(req.input_image_ids),
+                            "has_mask":           bool(req.mask_image_id),
+                        }
                         try:
-                            sidecar.write_text(json.dumps({
-                                "prompt":       req.prompt,
-                                "model_choice": req.model_choice,
-                                "width":        req.width,
-                                "height":       req.height,
-                                "steps":        req.steps,
-                                "guidance":     req.guidance,
-                                "seed":         req.seed,
-                            }, indent=2))
+                            # Enriched sidecar JSON (gallery reads this)
+                            out_path.with_suffix(".json").write_text(
+                                json.dumps(full_params, indent=2)
+                            )
+                            # Companion folder with refs + mask when present
+                            has_refs = bool(req.input_image_ids or req.mask_image_id)
+                            if has_refs:
+                                companion = out_path.parent / out_path.stem
+                                companion.mkdir(exist_ok=True)
+                                (companion / "params.json").write_text(
+                                    json.dumps(full_params, indent=2)
+                                )
+                                for i, fid in enumerate(req.input_image_ids):
+                                    src = _temp_path(fid)
+                                    if src.exists():
+                                        shutil.copy2(src, companion / f"ref_slot_{i + 1}.png")
+                                if req.mask_image_id:
+                                    src = _temp_path(req.mask_image_id)
+                                    if src.exists():
+                                        shutil.copy2(src, companion / "mask.png")
                         except Exception:
                             pass  # non-critical
                 yield f"data: {json.dumps(event)}\n\n"
@@ -626,7 +682,7 @@ async def api_serve_temp(file_id: str):
 
 @app.delete("/api/output/{filename:path}")
 async def api_delete_output(filename: str):
-    """Delete an output file and its sidecar JSON."""
+    """Delete an output file, its sidecar JSON, and companion refs folder."""
     p = Path(_output_dir()) / filename
     if not p.exists():
         raise HTTPException(404, detail="File not found")
@@ -634,6 +690,9 @@ async def api_delete_output(filename: str):
     sidecar = p.with_suffix(".json")
     if sidecar.exists():
         sidecar.unlink()
+    companion = p.parent / p.stem
+    if companion.is_dir():
+        shutil.rmtree(companion, ignore_errors=True)
     return {"deleted": filename}
 
 
@@ -670,14 +729,14 @@ async def api_list_outputs(limit: int = 20):
     result = []
     for f in files:
         meta = _read_sidecar(f)
-        result.append({
-            "name":         f.name,
-            "url":          f"/api/output/{f.name}",
-            "mtime":        f.stat().st_mtime,
-            "kind":         "video" if f.suffix.lower() in {".mp4", ".webm", ".mov"} else "image",
-            "prompt":       meta.get("prompt"),
-            "model_choice": meta.get("model_choice"),
-        })
+        entry: dict = {
+            "name":  f.name,
+            "url":   f"/api/output/{f.name}",
+            "mtime": f.stat().st_mtime,
+            "kind":  "video" if f.suffix.lower() in {".mp4", ".webm", ".mov"} else "image",
+        }
+        entry.update(meta)   # spread all sidecar fields (prompt, model_choice, steps, lora_files, …)
+        result.append(entry)
     return {"files": result}
 
 
@@ -1134,14 +1193,22 @@ async def api_update_settings(req: UpdateSettingsRequest):
 
 @app.get("/api/model-sources")
 def api_get_model_sources():
-    """Return the model sources list. Seeds from DEFAULT_SOURCES if file missing."""
+    """Return the model sources list. Seeds from DEFAULT_SOURCES if file missing.
+    Always merges model_choice from DEFAULT_SOURCES by ID so existing saved files
+    get the field even if they were written before it existed."""
+    _defaults_by_id = {s["id"]: s for s in DEFAULT_SOURCES}
+    sources = DEFAULT_SOURCES
     if MODEL_SOURCES_FILE.exists():
         try:
             data = json.loads(MODEL_SOURCES_FILE.read_text())
-            return {"sources": data.get("sources", DEFAULT_SOURCES)}
+            sources = data.get("sources", DEFAULT_SOURCES)
         except Exception:
             pass
-    return {"sources": DEFAULT_SOURCES}
+    # Merge model_choice from DEFAULT_SOURCES for any entry that lacks it
+    for s in sources:
+        if "model_choice" not in s and s.get("id") in _defaults_by_id:
+            s["model_choice"] = _defaults_by_id[s["id"]].get("model_choice", "")
+    return {"sources": sources}
 
 
 @app.post("/api/model-sources")
@@ -1283,7 +1350,14 @@ if __name__ == "__main__":
                         help="Enable uvicorn auto-reload (dev mode)")
     parser.add_argument("--no-auto-shutdown", action="store_true",
                         help="Keep server running even when the browser is closed")
+    parser.add_argument("--debug", action="store_true",
+                        help="Enable verbose debug logging (params dump, branch tracing, LoRA state)")
     args = parser.parse_args()
+
+    if args.debug:
+        import pipeline as _pl
+        _pl.DEBUG = True
+        print("[DEBUG] Debug mode enabled")
 
     if args.no_auto_shutdown:
         _auto_shutdown = False  # type: ignore[assignment]

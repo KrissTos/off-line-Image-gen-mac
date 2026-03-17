@@ -4,7 +4,7 @@ import type { GenerateParams, SSEEvent, OutputItem } from './types'
 import {
   fetchStatus, fetchModels, fetchDevices, fetchWorkflows,
   fetchOutputs, uploadImage, uploadFromUrl, streamGenerate, pingServer,
-  fetchSettings, deleteOutput, upscaleSingleImage,
+  fetchSettings, deleteOutput, upscaleSingleImage, stopGeneration,
 } from './api'
 
 function hexToRgbVar(hex: string): string {
@@ -58,9 +58,10 @@ function RowDivider({
 }
 
 function guidanceForModel(model: string): number {
-  if (model.includes('Z-Image')) return 0
+  // Z-Image and FLUX.2-klein are step-wise distilled — guidance_scale is ignored by the pipeline.
+  // LTX-Video uses guidance. Full-precision non-distilled models added in the future should return a real value.
   if (model.includes('LTX-Video')) return 3.0
-  return 3.5
+  return 0
 }
 
 function stepsForModel(model: string): number {
@@ -171,6 +172,13 @@ export default function App() {
       if (savedModel) {
         dispatch({ type: 'SET_PARAM', key: 'upscale_model_path', value: savedModel })
       }
+      // pre-select default model (overrides the loaded/first model set above)
+      const defaultModel = s.default_model as string | undefined
+      if (defaultModel) {
+        dispatch({ type: 'SET_PARAM', key: 'model_choice', value: defaultModel })
+        dispatch({ type: 'SET_PARAM', key: 'guidance', value: guidanceForModel(defaultModel) })
+        dispatch({ type: 'SET_PARAM', key: 'steps',    value: stepsForModel(defaultModel) })
+      }
     }).catch(() => {})
 
     refreshWorkflows()
@@ -192,7 +200,16 @@ export default function App() {
   useEffect(() => {
     pingServer()                                    // immediate ping on mount
     const id = setInterval(pingServer, 5000)        // then every 5 s
-    return () => clearInterval(id)
+
+    // Notify server immediately when the tab/window closes so it can shut down
+    // without waiting the full 60 s heartbeat timeout.
+    const onUnload = () => navigator.sendBeacon('/api/shutdown')
+    window.addEventListener('beforeunload', onUnload)
+
+    return () => {
+      clearInterval(id)
+      window.removeEventListener('beforeunload', onUnload)
+    }
   }, [])
 
   // ── Generation ────────────────────────────────────────────────────────────
@@ -238,6 +255,7 @@ export default function App() {
   }, [state.isGenerating, state.params, dispatch, refreshOutputs])
 
   const handleStop = useCallback(() => {
+    stopGeneration()
     abortRef.current?.abort()
     dispatch({ type: 'STOP_GENERATE' })
   }, [dispatch])

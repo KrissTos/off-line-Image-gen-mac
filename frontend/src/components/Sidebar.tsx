@@ -998,8 +998,9 @@ export default function Sidebar({
       <Accordion label="Parameters" icon={<Sliders size={13} />} defaultOpen>
         <Slider label="Steps"    value={params.steps}    min={1}   max={50}  onChange={v => onParamChange('steps', v)}
           helpTip={<HelpTip text="Denoising iterations. More steps = more detail but slower. FLUX.2: 20, Z-Image Turbo: 4, LTX-Video: 25. Going beyond the recommended value rarely helps." />} />
-        <Slider label="Guidance" value={params.guidance} min={0}   max={20}  step={0.5} onChange={v => onParamChange('guidance', v)}
-          helpTip={<HelpTip text="How strictly the model follows your prompt. Lower = more creative, higher = more literal. Z-Image Turbo always uses 0 (distilled model)." />} />
+        {/* Guidance slider hidden for quantized models (all current models). Value is still
+            sent to the backend and auto-set by guidanceForModel(). Unhide here when adding
+            full-precision non-distilled models where guidance meaningfully affects output. */}
         <Slider label="Repeat"   value={params.repeat_count} min={1} max={8} onChange={v => onParamChange('repeat_count', v)}
           helpTip={<HelpTip text="Generate N images in sequence with the same settings (different seeds if seed is -1). Each result is saved individually." />} />
         <NumberInput label="Seed (-1 = random)" value={params.seed} onChange={v => onParamChange('seed', v)} placeholder="-1"
