@@ -6,11 +6,12 @@ export interface LoraSlot {
 }
 
 export interface AppStatus {
-  model:   string | null
-  device:  string | null
-  loaded:  boolean
-  busy:    boolean
-  vram_gb: number
+  model:              string | null
+  device:             string | null
+  loaded:             boolean
+  busy:               boolean
+  vram_gb:            number
+  is_batch_running?:  boolean
 }
 
 export interface GenerateParams {
@@ -51,11 +52,12 @@ export interface RefImageSlot {
 }
 
 export type SSEEvent =
-  | { type: 'progress'; message: string; step?: number; total?: number }
-  | { type: 'image';    url: string; info?: string; path?: string }
-  | { type: 'video';    url: string; path?: string }
+  | { type: 'progress';       message: string; step?: number; total?: number }
+  | { type: 'image';          url: string; info?: string; path?: string }
+  | { type: 'video';          url: string; path?: string }
   | { type: 'done' }
-  | { type: 'error';    message: string }
+  | { type: 'error';          message: string }
+  | { type: 'batch_progress'; current: number; total: number; filename: string }
 
 export interface OutputItem {
   name:               string

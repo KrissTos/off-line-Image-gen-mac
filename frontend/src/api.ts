@@ -281,6 +281,48 @@ export async function streamGenerate(
   }
 }
 
+/**
+ * POST /api/batch/generate and consume the SSE stream.
+ * Processes all images in a folder and streams progress events including batch_progress.
+ * Calls onEvent for each event; returns when the stream ends or errors.
+ */
+export async function streamBatchGenerate(
+  params: GenerateParams,
+  folder: string,
+  onEvent: (e: SSEEvent | { type: 'batch_progress'; current: number; total: number; filename: string }) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const r = await fetch('/api/batch/generate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...params, input_folder: folder }),
+    signal,
+  })
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({ detail: r.statusText }))
+    throw new Error(err.detail ?? `Batch generate failed: ${r.status}`)
+  }
+  const reader  = r.body!.getReader()
+  const decoder = new TextDecoder()
+  let   buf     = ''
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buf += decoder.decode(value, { stream: true })
+    const lines = buf.split('\n')
+    buf = lines.pop() ?? ''
+    for (const line of lines) {
+      if (line.startsWith('data: ')) {
+        try {
+          const ev = JSON.parse(line.slice(6))
+          onEvent(ev)
+          if (ev.type === 'done' || ev.type === 'error') return
+        } catch { /* ignore malformed */ }
+      }
+    }
+  }
+}
+
 // ── Model sources ─────────────────────────────────────────────────────────────
 
 export async function fetchModelSources(): Promise<ModelSource[]> {

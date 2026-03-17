@@ -288,6 +288,9 @@ class GenerateRequest(BaseModel):
     mask_mode:          str   = "Crop & Composite (Fast)"
     outpaint_align:     str   = "center"
 
+class BatchGenerateRequest(GenerateRequest):
+    input_folder: str = ""  # local path to folder of images
+
 class LoadModelRequest(BaseModel):
     model_choice: str
     device:       str = "mps"
@@ -1318,6 +1321,75 @@ async def api_workflow_asset(name: str, filename: str):
     if not path.exists():
         raise HTTPException(404, "Asset not found")
     return FileResponse(str(path))
+
+
+# ── Routes: Batch generation ──
+
+@app.post("/api/batch/generate")
+async def api_batch_generate(req: BatchGenerateRequest):
+    """
+    Batch img2img: process each image in input_folder using current params.
+    Streams SSE events: batch_progress, progress, image, video, error, done.
+    """
+    if _mgr().is_busy:
+        raise HTTPException(423, "A generation is already running")
+
+    async def event_stream():
+        from PIL import Image as PILImage
+        mgr = _mgr()
+
+        # Validate and list input images
+        folder = Path(req.input_folder)
+        if not folder.is_dir():
+            yield f"data: {json.dumps({'type': 'error', 'message': f'Input folder not found: {req.input_folder}'})}\n\n"
+            return
+
+        exts = {'.jpg', '.jpeg', '.png', '.webp'}
+        images = sorted([p for p in folder.iterdir() if p.suffix.lower() in exts])
+        if not images:
+            yield f"data: {json.dumps({'type': 'error', 'message': 'No images found in folder'})}\n\n"
+            return
+
+        total = len(images)
+        processed = 0
+        mgr.is_batch_running = True
+        try:
+            for i, img_path in enumerate(images):
+                if mgr.stop_requested:
+                    break
+
+                yield f"data: {json.dumps({'type': 'batch_progress', 'current': i + 1, 'total': total, 'filename': img_path.name})}\n\n"
+
+                # Load image
+                try:
+                    pil_image = PILImage.open(img_path).convert("RGB")
+                except Exception as e:
+                    yield f"data: {json.dumps({'type': 'error', 'message': f'Skipping {img_path.name}: {e}'})}\n\n"
+                    continue
+
+                # Build params
+                params = req.model_dump()
+                params["input_images"] = [pil_image]
+                params["mask_image"]   = None
+                params["output_dir"]   = req.output_dir or _output_dir()
+
+                # Generate
+                try:
+                    async for event in mgr.generate(params):
+                        yield f"data: {json.dumps(event)}\n\n"
+                    processed += 1
+                except Exception as e:
+                    yield f"data: {json.dumps({'type': 'error', 'message': f'Error on {img_path.name}: {e}'})}\n\n"
+
+            yield f"data: {json.dumps({'type': 'done', 'processed': processed})}\n\n"
+        finally:
+            mgr.is_batch_running = False
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 # ── Routes: SPA (MUST be last — wildcard would shadow /api/* if registered earlier) ──

@@ -5,7 +5,7 @@ import {
   Wand2, ArrowUpCircle, FolderInput, ListOrdered, FolderOpen, ImagePlus, Plus,
 } from 'lucide-react'
 import type { GenerateParams, RefImageSlot, LoraSlot } from '../types'
-import { importComfyUI, loadWorkflow, saveWorkflow, uploadLora, uploadUpscaleModel, streamBatchUpscale, openFolderDialog, openFileDialog, upscaleSingleImage, updateSettings, openWorkflowFolderDialog, listLoras } from '../api'
+import { importComfyUI, loadWorkflow, saveWorkflow, uploadLora, uploadUpscaleModel, streamBatchUpscale, streamBatchGenerate, openFolderDialog, openFileDialog, upscaleSingleImage, updateSettings, openWorkflowFolderDialog, listLoras, stopGeneration } from '../api'
 import HelpTip from './HelpTip'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -924,6 +924,159 @@ function WorkflowPanel({ workflows, params, refSlots, onLoad, onRefresh, onImpor
   )
 }
 
+// ── Batch Img2Img panel ───────────────────────────────────────────────────────
+
+interface BatchImgImgPanelProps {
+  params:        GenerateParams
+  isGenerating:  boolean
+  onRefresh:     () => void
+  onStatus:      (msg: string) => void
+}
+function BatchImgImgPanel({ params, isGenerating, onRefresh, onStatus }: BatchImgImgPanelProps) {
+  const [inputFolder, setInputFolder] = useState('')
+  const [running,     setRunning]     = useState(false)
+  const [log,         setLog]         = useState<string[]>([])
+  const [progress,    setProgress]    = useState<{ current: number; total: number; filename: string } | null>(null)
+  const [picking,     setPicking]     = useState(false)
+  const abortRef = useRef<AbortController | null>(null)
+  const logRef   = useRef<HTMLDivElement>(null)
+
+  async function pickFolder() {
+    setPicking(true)
+    try {
+      const data = await openFolderDialog()
+      if (!data.cancelled && data.path) setInputFolder(data.path)
+    } catch (e: unknown) {
+      onStatus(`Folder picker error: ${(e as Error).message}`)
+    } finally {
+      setPicking(false)
+    }
+  }
+
+  async function handleRun() {
+    if (!inputFolder.trim()) { onStatus('⚠ Enter an input folder path'); return }
+    setRunning(true)
+    setLog([])
+    setProgress(null)
+    abortRef.current = new AbortController()
+    try {
+      await streamBatchGenerate(
+        params,
+        inputFolder.trim(),
+        ev => {
+          if (ev.type === 'batch_progress') {
+            setProgress({ current: ev.current, total: ev.total, filename: ev.filename })
+            setLog(prev => {
+              const next = [...prev, `[${ev.current}/${ev.total}] ${ev.filename}`]
+              setTimeout(() => { logRef.current?.scrollTo(0, logRef.current.scrollHeight) }, 0)
+              return next
+            })
+          } else if (ev.type === 'image' || ev.type === 'video') {
+            onRefresh()
+          } else if (ev.type === 'error') {
+            setLog(prev => [...prev, `✗ ${ev.message ?? 'Unknown error'}`])
+          } else if (ev.type === 'done') {
+            const processed = (ev as { type: string; processed?: number }).processed
+            onStatus(`✓ Batch complete — ${processed ?? '?'} images generated`)
+            setProgress(null)
+          }
+        },
+        abortRef.current.signal,
+      )
+    } catch (e: unknown) {
+      if ((e as Error).name !== 'AbortError') onStatus(`Batch error: ${(e as Error).message}`)
+    } finally {
+      setRunning(false)
+    }
+  }
+
+  function handleStop() {
+    stopGeneration()
+    abortRef.current?.abort()
+    setRunning(false)
+    setProgress(null)
+    onStatus('Batch stopped')
+  }
+
+  const disabled = isGenerating || running
+
+  return (
+    <div className="space-y-3">
+      {/* Input folder */}
+      <div>
+        <label className="text-xs text-muted block mb-1">Input folder</label>
+        <div className="flex gap-2">
+          <input
+            type="text"
+            value={inputFolder}
+            onChange={e => setInputFolder(e.target.value)}
+            placeholder="/Users/you/Pictures/batch"
+            disabled={disabled}
+            className="flex-1 bg-card border border-border rounded-md px-3 py-1.5 text-xs text-white
+                       placeholder-muted focus:outline-none focus:border-accent transition-colors disabled:opacity-50"
+          />
+          <button
+            onClick={pickFolder}
+            disabled={disabled || picking}
+            title="Browse for input folder"
+            aria-label="Browse for input folder"
+            className="px-2 py-1.5 rounded-md bg-card border border-border text-muted hover:text-white
+                       hover:border-accent transition-colors disabled:opacity-50 shrink-0"
+          >
+            <FolderOpen size={13} aria-hidden="true" />
+          </button>
+        </div>
+      </div>
+
+      {/* Progress */}
+      {progress && (
+        <p className="text-[11px] text-muted font-mono truncate">
+          Image {progress.current}/{progress.total} — {progress.filename}
+        </p>
+      )}
+
+      {/* Run / Stop */}
+      {running ? (
+        <button
+          onClick={handleStop}
+          className="w-full py-2 rounded-lg bg-red-600/80 hover:bg-red-600 text-white text-xs font-medium
+                     flex items-center justify-center gap-2 transition-colors"
+        >
+          <Square size={12} /> Stop
+        </button>
+      ) : (
+        <button
+          onClick={handleRun}
+          disabled={isGenerating || !inputFolder.trim()}
+          className="w-full py-2 rounded-lg bg-accent hover:bg-accent/80 text-white text-xs font-medium
+                     flex items-center justify-center gap-2 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          <FolderInput size={13} /> Run Batch Img2Img
+        </button>
+      )}
+
+      {/* Log */}
+      {log.length > 0 && (
+        <div
+          ref={logRef}
+          className="bg-bg border border-border rounded-md p-2 text-[10px] text-muted font-mono
+                     max-h-36 overflow-y-auto space-y-0.5"
+        >
+          {log.map((line, i) => (
+            <div key={i} className={line.startsWith('✗') ? 'text-red-400' : line.includes('✓') ? 'text-green-400' : ''}>
+              {line}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {isGenerating && !running && (
+        <p className="text-[10px] text-amber-400/80">⚠ Wait for current generation to finish before running batch.</p>
+      )}
+    </div>
+  )
+}
+
 // ── Main Sidebar ──────────────────────────────────────────────────────────────
 
 interface SidebarProps {
@@ -944,6 +1097,7 @@ interface SidebarProps {
   onIterate:            () => void
   onWorkflowLoad:       (wf: Record<string, unknown>) => Promise<void>
   onWorkflowRefresh:    () => void
+  onRefresh:            () => void
   onStatus:             (msg: string) => void
 }
 
@@ -951,7 +1105,7 @@ export default function Sidebar({
   params, models, availableModels, devices, workflows, isGenerating,
   hasIteratableMasks, hasRefImage, refImageSize, refSlots,
   onParamChange, onParamsChange, onGenerate, onStop, onIterate,
-  onWorkflowLoad, onWorkflowRefresh, onStatus,
+  onWorkflowLoad, onWorkflowRefresh, onRefresh, onStatus,
 }: SidebarProps) {
   const isVideo    = params.model_choice.includes('LTX-Video')
   const isFlux     = params.model_choice.startsWith('FLUX')
@@ -1052,6 +1206,16 @@ export default function Sidebar({
             onStatus={onStatus}
           />
         </div>
+      </Accordion>
+
+      {/* Batch Img2Img */}
+      <Accordion label="Batch Img2Img" icon={<FolderInput size={13} />}>
+        <BatchImgImgPanel
+          params={params}
+          isGenerating={isGenerating}
+          onRefresh={onRefresh}
+          onStatus={onStatus}
+        />
       </Accordion>
 
       {/* Video */}

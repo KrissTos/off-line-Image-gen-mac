@@ -570,6 +570,7 @@ export default function App() {
           onIterate={handleIterateGenerate}
           onWorkflowLoad={handleWorkflowLoad}
           onWorkflowRefresh={refreshWorkflows}
+          onRefresh={refreshOutputs}
           onStatus={setStatusMsg}
         />
 

@@ -87,10 +87,16 @@ class PipelineManager:
                                                                 thread_name_prefix="pipeline")
         self.is_busy   = False
         self._stop_event = threading.Event()
+        self.is_batch_running = False
 
     def request_stop(self):
         """Signal the running generation thread to stop at the next step boundary."""
         self._stop_event.set()
+
+    @property
+    def stop_requested(self) -> bool:
+        """True if a stop has been requested for the current generation."""
+        return self._stop_event.is_set()
 
     def _make_step_callback(self, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop):
         """Return a step callback that reports progress and raises on stop."""
@@ -117,11 +123,12 @@ class PipelineManager:
                 "device":  getattr(_app, "current_device", None),
                 "loaded":  getattr(_app, "pipe", None) is not None,
                 "busy":    self.is_busy,
+                "is_batch_running": self.is_batch_running,
                 "vram_gb": self._get_vram(),
             }
         except Exception:
             return {"model": None, "device": None, "loaded": False,
-                    "busy": self.is_busy, "vram_gb": 0.0}
+                    "busy": self.is_busy, "is_batch_running": self.is_batch_running, "vram_gb": 0.0}
 
     def _get_vram(self) -> float:
         try:
