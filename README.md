@@ -16,6 +16,7 @@
 - **Iterative multi-mask inpainting** — chain multiple mask passes automatically (one per slot)
 - **Video generation** — text-to-video and image-to-video with LTX-Video
 - **Multi-LoRA stacking** — load up to 5 `.safetensors` LoRA adapters simultaneously, each with its own strength slider; the dropdown is filtered to only show LoRAs compatible with the active model
+- **Batch img2img** — point at a folder of images and run the current prompt + params over all of them automatically; gallery updates after each image
 - **Upscaling** — 4× single image or batch-folder upscale with any Spandrel-compatible model
 - **Workflow save/load** — save your full setup (model, params, reference images, masks) and reload it later
 - **Gallery** — browse recent outputs, drag them into reference slots, upscale or delete
@@ -125,6 +126,7 @@ Open `http://localhost:7860` in your browser.
 | **Size** | Output resolution — presets change per model |
 | **LoRA** | Stack up to 5 LoRA adapters, each with its own strength; filtered by active model |
 | **Upscale** | 4× single image or batch folder |
+| **Batch Img2Img** | Process a whole folder of images with the current settings |
 | **Video** | LTX-Video settings (only visible with LTX model) |
 | **Workflows** | Save / load your full setup |
 
