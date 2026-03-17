@@ -57,7 +57,9 @@ if [[ "$1" == "--debug" ]]; then
 
     (sleep 5 && open http://127.0.0.1:7860) &
     UV_PROJECT_ENVIRONMENT=venv "$UV" run python server.py --port 7860 --debug --no-auto-shutdown
-    osascript -e 'tell application "Terminal" to close front window' 2>/dev/null; exit
+    osascript -e 'delay 0.3
+tell application "Terminal" to close front window' 2>/dev/null &
+    exit
 
 elif [[ "$1" == "--dev" ]]; then
     # ── Dev mode: FastAPI backend + Vite frontend ──────────────────────────
@@ -76,7 +78,8 @@ elif [[ "$1" == "--dev" ]]; then
 
     # Cleanup
     kill "$BACKEND_PID" 2>/dev/null
-    osascript -e 'tell application "Terminal" to close front window' 2>/dev/null
+    osascript -e 'delay 0.3
+tell application "Terminal" to close front window' 2>/dev/null &
     exit $DEV_EXIT
 
 else
@@ -123,5 +126,7 @@ else
 
     (sleep 5 && open http://127.0.0.1:7860) &
     UV_PROJECT_ENVIRONMENT=venv "$UV" run python server.py --port 7860
-    osascript -e 'tell application "Terminal" to close front window' 2>/dev/null
+    osascript -e 'delay 0.3
+tell application "Terminal" to close front window' 2>/dev/null &
+    exit
 fi

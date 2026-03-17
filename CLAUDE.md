@@ -16,7 +16,7 @@
 - **3+ files, or design is unclear** → full superpowers flow (brainstorm → spec → plan → subagent-driven-development)
 
 ## What this project is
-Fully offline AI image generation for Mac Silicon (MPS). No cloud, no subscriptions. Supports FLUX.2 and Z-Image Turbo models with 4-bit/int8 quantization. Features: text-to-image, image-to-image editing, multi-slot reference images with per-slot rectangle-mask drawing, iterative multi-mask inpainting, multi-LoRA stacking (up to 5, per-slot strength), gallery drag-and-drop into ref slots, inline HelpTip ⓘ tooltips, upscaling (single + batch folder), video generation (LTX-Video). **Gradio fully removed** — `app.py` is pure backend logic only.
+Fully offline AI image generation for Mac Silicon (MPS). No cloud, no subscriptions. Supports FLUX.2 and Z-Image Turbo models with 4-bit/int8 quantization. Features: text-to-image, image-to-image editing, multi-slot reference images with per-slot rectangle-mask drawing, iterative multi-mask inpainting, multi-LoRA stacking (up to 5, per-slot strength), gallery drag-and-drop into ref slots, inline HelpTip ⓘ tooltips, upscaling (single + batch folder), video generation (LTX-Video), **batch img2img** (process a folder of images). **Gradio fully removed** — `app.py` is pure backend logic only.
 
 **Renamed from** `ultra-fast-image-gen` → `off-line-Image-gen-mac`. Brand name in UI: **"Local AI Image Gen"** (TopBar + browser tab title).
 
@@ -39,7 +39,7 @@ python server.py --port 7860 --no-auto-shutdown
 cd frontend && npm run build  # rebuild after any frontend change
 ```
 
-**Browser heartbeat / auto-shutdown**: server shuts down 60 s after last ping. Frontend sends `POST /api/ping` every 5s AND fires `navigator.sendBeacon('/api/shutdown')` on `beforeunload` (tab/window close → immediate ~1.5s shutdown). Watcher skips shutdown if `manager.is_busy`. Disable: `--no-auto-shutdown`.
+**Browser heartbeat / auto-shutdown**: server shuts down 60 s after last ping. Frontend sends `POST /api/ping` every 5s AND fires `navigator.sendBeacon('/api/shutdown')` on `beforeunload`. `api_shutdown` starts a **4 s cancellable countdown** (`_shutdown_task`); the next `/api/ping` cancels it — so a page **refresh survives** (reconnects in <1s), while a real tab close shuts down after 4s. Watcher skips shutdown if `manager.is_busy`. Disable: `--no-auto-shutdown`.
 
 ## HuggingFace token
 Stored in `huggingface/token` (gitignored). Type: **Read** (fine-grained, gated repos). Login via Settings drawer in UI, or `python -c "from huggingface_hub import login; login()"`. Must also accept terms on each gated model page.
@@ -47,7 +47,7 @@ Stored in `huggingface/token` (gitignored). Type: **Read** (fine-grained, gated 
 ## Architecture
 
 ### Backend key files
-**`pipeline.py`** — `PipelineManager` singleton wrapping `app.generate_image()` in `asyncio.Lock` + `ThreadPoolExecutor(1)`. Yields SSE event dicts. `auto_save=False` prevents double-saving. Stop: `threading.Event` + `_GenerationStopped` raised from step callback; `finally` always runs `gc.collect()` + `torch.mps.empty_cache()`.
+**`pipeline.py`** — `PipelineManager` singleton wrapping `app.generate_image()` in `asyncio.Lock` + `ThreadPoolExecutor(1)`. Yields SSE event dicts. `auto_save=False` prevents double-saving. Stop: `threading.Event` + `_GenerationStopped` raised from step callback; `finally` always runs `gc.collect()` + `torch.mps.empty_cache()`. `is_batch_running: bool` flag; `stop_requested` property (public accessor for `_stop_event.is_set()`).
 
 **`server.py`** — FastAPI. Serves `frontend/dist/`. All routes `/api/*`. SSE via `StreamingResponse`. HTTP 423 when pipeline busy. Writes `.json` sidecar alongside each output image. Suppresses resource_tracker semaphore warning at import time via `warnings.filterwarnings`.
 
@@ -64,13 +64,13 @@ Key source files:
 | `src/App.tsx` | Root: bootstrap, 4 s status poll, 5 s heartbeat, SSE handler, ref-slot handlers, iterate loop |
 | `src/store.ts` | `useReducer` global state; `useAppState()` → `{ state, dispatch }` |
 | `src/types.ts` | `AppStatus`, `GenerateParams`, `SSEEvent`, `OutputItem`, `RefImageSlot`, `Workflow` |
-| `src/api.ts` | Typed fetch helpers: `streamGenerate`, `uploadImage`, `uploadFromUrl`, `streamBatchUpscale`, `pingServer`, … |
+| `src/api.ts` | Typed fetch helpers: `streamGenerate`, `streamBatchGenerate`, `uploadImage`, `uploadFromUrl`, `streamBatchUpscale`, `pingServer`, … |
 
 3-row center layout: Canvas (flex 5) / RefImagesRow (flex 4) / Gallery (flex 1) → 50/40/10 % via `style={{ flex: 'N 0 0%' }}`.
 
 ### Component details
 
-**`Sidebar.tsx`** (`w-[576px]`) — Accordions: Model, Parameters, Size, LoRA (Z-Image Full + FLUX.2), Upscale (single + batch), Video (LTX only), Workflows. HelpTip ⓘ tooltips on: Steps, Guidance, Seed, Repeat count, LoRA strength, mask mode, outpaint align, model. Single adaptive bottom button:
+**`Sidebar.tsx`** (`w-[576px]`) — Accordions: Model, Parameters, Size, LoRA (Z-Image Full + FLUX.2), Upscale (single + batch), **Batch Img2Img**, Video (LTX only), Workflows. HelpTip ⓘ tooltips on: Steps, Guidance, Seed, Repeat count, LoRA strength, mask mode, outpaint align, model. Single adaptive bottom button:
 - **Generate** — default (single-pass)
 - **Iterate Masks** — shown instead of Generate when mask mode = "Inpainting Pipeline (Quality)" AND ≥1 slot has a mask; calls `handleIterateGenerate`
 - **Stop** — replaces the button while generating
@@ -117,7 +117,7 @@ Actions: `ADD_REF_SLOT` · `REMOVE_REF_SLOT` · `SET_SLOT_MASK` · `CLEAR_SLOT_M
 | POST | `/api/ping` | Heartbeat |
 | POST | `/api/stop` | Signal generation thread to stop at next step boundary |
 | POST | `/api/shutdown` | Immediate shutdown (called by `sendBeacon` on tab close); 1.5s delay; no-op if `--no-auto-shutdown` |
-| GET | `/api/status` | `{model, device, loaded, busy, vram_gb}` |
+| GET | `/api/status` | `{model, device, loaded, busy, is_batch_running, vram_gb}` |
 | GET/POST | `/api/models` / `/api/models/load` | List / load model |
 | DELETE | `/api/models/{name}` | Delete cached model |
 | GET | `/api/models/check-updates` | Query HF Hub for latest hashes; returns `{results:[{choice,status,local_hash,online_hash}]}` |
@@ -126,6 +126,7 @@ Actions: `ADD_REF_SLOT` · `REMOVE_REF_SLOT` · `SET_SLOT_MASK` · `CLEAR_SLOT_M
 | GET | `/api/open-workflow-folder-dialog` | Same but opens at WORKFLOWS_DIR via osascript `default location` |
 | GET | `/api/devices` | Available compute devices |
 | POST | `/api/generate` | SSE stream |
+| POST | `/api/batch/generate` | SSE stream — process folder of images; yields `batch_progress` + normal generation events |
 | POST | `/api/upload` | Upload temp image → `{id, url}` |
 | GET | `/api/temp/{id}` | Serve temp file |
 | GET | `/api/outputs` | Recent outputs (with sidecar data) |
@@ -150,6 +151,7 @@ Actions: `ADD_REF_SLOT` · `REMOVE_REF_SLOT` · `SET_SLOT_MASK` · `CLEAR_SLOT_M
 {"type":"video","url":"/api/output/bar.mp4"}
 {"type":"error","message":"…"}
 {"type":"done"}
+{"type":"batch_progress","current":3,"total":12,"filename":"photo_003.jpg"}
 ```
 
 ## Key Python modules
@@ -225,8 +227,9 @@ Tailwind tokens: `bg:#0a0a0a` · `surface:#141414` · `card:#1c1c1c` · `border:
 - **Sleep/wake auto-shutdown**: `_heartbeat_watcher` tracks wall-clock between ticks; jump > 60 s = Mac sleep → resets `_last_ping` instead of shutting down
 - **Safari Gallery padding**: `viewport-fit=cover` in `index.html`; `paddingBottom: 'max(8px, env(safe-area-inset-bottom))'` in Gallery
 - **MPS memory flush after generation**: `pipeline.py` `_thread()` has a `finally` block with `gc.collect()` + `torch.mps.empty_cache()` — releases pooled MPS memory back to OS after every generation (success or error). Root cause: `app.py` has per-branch cache calls but none guaranteed at top-level exit.
-- **Terminal auto-close**: `Launch.command` runs `osascript` to close Terminal after server exits. With `sendBeacon` shutdown, Terminal closes ~2s after browser tab is closed.
+- **Terminal auto-close**: `Launch.command` runs `osascript` in background (`&`) with `delay 0.3` then `exit` — shell exits BEFORE osascript fires, preventing macOS "running process" dialog. If osascript runs while shell is still alive (foreground), Terminal shows a confirmation dialog.
 - **Stop generation**: `POST /api/stop` sets `manager._stop_event`; step callback raises `_GenerationStopped`; caught cleanly (no error SSE); `finally` always frees MPS memory. Frontend `handleStop` calls `stopGeneration()` then aborts SSE.
 - **Default model**: stored as `default_model` in `app_settings.json`; bootstrap in `App.tsx` reads it after `fetchSettings()` and dispatches `SET_PARAM model_choice` + guidance + steps overrides.
 - **Guidance slider hidden**: removed from `Sidebar.tsx` UI; value still in state, correct default set by `guidanceForModel()`. ALL current models are step-wise distilled → guidance=0 always sent.
 - **Debug dump cleanup**: `lora_file`/`lora_strength` excluded from `[DEBUG]` params when `lora_files` is populated (legacy fields, always `None`/`1.0` from frontend).
+- **Batch img2img**: `POST /api/batch/generate` uses `BatchGenerateRequest(GenerateRequest)` + `input_folder`. Endpoint sets `manager.is_batch_running`, streams `batch_progress` + generation events per image; single-image failures log and continue. Frontend stop calls `stopGeneration()` (mid-image) + `abort()` (between images). `stop_requested` is the public property; never access `_stop_event` directly from server.py.

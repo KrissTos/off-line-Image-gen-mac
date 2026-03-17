@@ -199,10 +199,11 @@ app.add_event_handler("startup", _startup_patch_access_log)
 
 # ── Browser heartbeat (auto-shutdown when browser closes) ─────────────────────
 
-_last_ping:          float = time.time()   # updated by POST /api/ping
-_auto_shutdown:      bool  = True          # set to False via --no-auto-shutdown
-_HEARTBEAT_TIMEOUT:  float = 60.0          # seconds of silence → shutdown (60 s handles background-tab throttling)
-_HEARTBEAT_INTERVAL: float = 5.0          # check interval
+_last_ping:           float = time.time()   # updated by POST /api/ping
+_auto_shutdown:       bool  = True          # set to False via --no-auto-shutdown
+_HEARTBEAT_TIMEOUT:   float = 60.0          # seconds of silence → shutdown (60 s handles background-tab throttling)
+_HEARTBEAT_INTERVAL:  float = 5.0           # check interval
+_shutdown_task:       asyncio.Task | None = None  # pending graceful-shutdown countdown
 
 
 async def _heartbeat_watcher() -> None:
@@ -359,21 +360,29 @@ def _output_dir() -> str:
 
 @app.post("/api/ping")
 async def api_ping() -> dict:
-    """Browser heartbeat — resets the auto-shutdown timer."""
-    global _last_ping
+    """Browser heartbeat — resets the auto-shutdown timer and cancels any pending shutdown."""
+    global _last_ping, _shutdown_task
     _last_ping = time.time()
+    if _shutdown_task and not _shutdown_task.done():
+        _shutdown_task.cancel()
+        _shutdown_task = None
     return {"ok": True}
 
 
 @app.post("/api/shutdown")
 async def api_shutdown() -> dict:
-    """Immediate shutdown — called by browser beforeunload via sendBeacon."""
+    """Graceful shutdown — called by browser beforeunload via sendBeacon.
+    Waits 4 s before killing: a page refresh will cancel it via the next /api/ping."""
+    global _shutdown_task
     if not _auto_shutdown:
         return {"ok": False, "reason": "auto-shutdown disabled"}
+    if _shutdown_task and not _shutdown_task.done():
+        return {"ok": True, "reason": "shutdown already pending"}
     async def _delayed():
-        await asyncio.sleep(1.5)
+        await asyncio.sleep(4.0)
+        print("\n⏹  Browser closed — shutting down server.", flush=True)
         os.kill(os.getpid(), signal.SIGTERM)
-    asyncio.create_task(_delayed())
+    _shutdown_task = asyncio.create_task(_delayed())
     return {"ok": True}
 
 

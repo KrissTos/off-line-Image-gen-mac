@@ -61,6 +61,8 @@ Then **double-click `Launch.command`** in Finder.
 
 The first launch installs all dependencies (~5 min). A browser tab opens automatically at `http://localhost:7860`.
 
+> **Terminal lifecycle**: The Terminal window that opens is managed automatically. When you close the browser tab the server shuts down and **Terminal closes itself** — you don't need to quit it manually. Refreshing the page reconnects within ~1 s and cancels the shutdown.
+
 ---
 
 ## Manual start

@@ -316,7 +316,9 @@ export async function streamBatchGenerate(
         try {
           const ev = JSON.parse(line.slice(6))
           onEvent(ev)
-          if (ev.type === 'done' || ev.type === 'error') return
+          // Only stop on the batch-level done (has 'processed' field).
+          // Per-image 'done' and 'error' events must not abort the batch stream.
+          if (ev.type === 'done' && 'processed' in ev) return
         } catch { /* ignore malformed */ }
       }
     }
