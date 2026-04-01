@@ -53,6 +53,7 @@ const DEFAULT_PARAMS: GenerateParams = {
   fps:                24,
   mask_mode:          'Crop & Composite (Fast)',
   outpaint_align:     'center',
+  depth_model_repo:   'depth-anything/DA3MONO-LARGE',
 }
 
 export const initialState: State = {

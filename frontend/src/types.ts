@@ -37,6 +37,7 @@ export interface GenerateParams {
   fps:                number
   mask_mode:          string
   outpaint_align:     string
+  depth_model_repo:   string
 }
 
 /** One reference-image slot — image + optional per-slot mask, labeled #1/#2/… */
