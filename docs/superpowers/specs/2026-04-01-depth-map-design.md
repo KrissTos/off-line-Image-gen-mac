@@ -31,10 +31,14 @@ load_depth_model(repo_id: str) -> pipeline
   - Model cached in module-level dict: _model_cache: dict[str, pipeline]
   - HF_HUB_CACHE already set to ./models/ by app.py env vars
 
-generate_depth_map(image_path: str, repo_id: str) -> bytes
+generate_depth_map(image_path: str, repo_id: str, invert: bool = True) -> bytes
   - Opens image with PIL
   - Runs depth pipeline
-  - Normalises output to 0–65535 (16-bit grayscale)
+  - Normalises output to 0.0–1.0 float
+  - Inverts by default: depth = 1.0 - depth  (white=near, black=far — Blender convention)
+    DA3 predicts depth directly (larger=farther), so inversion is required.
+    DA2 predicted disparity (larger=nearer) so did NOT need inversion — this is a DA3 gotcha.
+  - Scales to 0–65535, saves as 16-bit grayscale PNG
   - Returns PNG bytes via io.BytesIO
 ```
 
@@ -74,10 +78,15 @@ Loaded/saved via existing `GET/POST /api/settings` endpoints.
 
 - Positioned below the Upscale Models section
 - Dropdown with options:
-  - `depth-anything/DA3MONO-LARGE` (default, ~1.3 GB)
+  - `depth-anything/DA3MONO-LARGE` (default, ~1.3 GB, best quality)
   - `depth-anything/DA3-BASE` (~400 MB, faster)
+  - `apple/coreml-depth-anything-v2-small` (ANE-optimised, <0.5s, V2 quality — future comparison)
 - Selection saved immediately via `POST /api/settings`
 - Note: model downloads automatically on first use
+
+### Depth inversion note
+
+DA3 outputs direct depth (large=far). The Blender addon used DA2 which output disparity (large=near) — already white=near without inversion. DA3 **requires explicit inversion** to match Blender's white=near convention. This is handled in `core/depth_map.py` with `invert=True` by default.
 
 ### `Gallery.tsx` — 5th hover button
 
