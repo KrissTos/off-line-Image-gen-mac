@@ -5,6 +5,7 @@ import {
   fetchStatus, fetchModels, fetchDevices, fetchWorkflows,
   fetchOutputs, uploadImage, uploadFromUrl, streamGenerate, pingServer,
   fetchSettings, deleteOutput, upscaleSingleImage, stopGeneration,
+  generateDepthMap,
 } from './api'
 
 function hexToRgbVar(hex: string): string {
@@ -76,6 +77,7 @@ export default function App() {
   const isRestoringWorkflow   = useRef(false)
   const [statusMsg, setStatusMsg] = useState('')
   const [upscalingGalleryUrl, setUpscalingGalleryUrl] = useState<string | null>(null)
+  const [depthMappingGalleryUrl, setDepthMappingGalleryUrl] = useState<string | null>(null)
   const centerRef   = useRef<HTMLDivElement>(null)
   const [rowPcts, setRowPcts] = useState<[number, number, number]>([50, 36, 14])
 
@@ -171,6 +173,10 @@ export default function App() {
       const savedModel = (s.upscale_model_path || s.upscaler_model_path) as string | undefined
       if (savedModel) {
         dispatch({ type: 'SET_PARAM', key: 'upscale_model_path', value: savedModel })
+      }
+      const savedDepthRepo = s.depth_model_repo as string | undefined
+      if (savedDepthRepo) {
+        dispatch({ type: 'SET_PARAM', key: 'depth_model_repo', value: savedDepthRepo })
       }
       // pre-select default model (overrides the loaded/first model set above)
       const defaultModel = s.default_model as string | undefined
@@ -411,6 +417,23 @@ export default function App() {
     }
   }, [state.params.upscale_model_path, dispatch, refreshOutputs])
 
+  // ── Gallery depth map ──────────────────────────────────────────────────────
+
+  const handleDepthMapGalleryItem = useCallback(async (item: OutputItem) => {
+    setDepthMappingGalleryUrl(item.url)
+    try {
+      await generateDepthMap({
+        filename:    item.name,
+        model_repo:  state.params.depth_model_repo,
+      })
+      await refreshOutputs()
+    } catch (err: unknown) {
+      dispatch({ type: 'SET_ERROR', message: (err as Error).message })
+    } finally {
+      setDepthMappingGalleryUrl(null)
+    }
+  }, [state.params.depth_model_repo, dispatch, refreshOutputs])
+
   // ── Gallery select: load result + inject prompt/model ─────────────────────
 
   const handleSelectGallery = useCallback((item: OutputItem) => {
@@ -628,6 +651,8 @@ export default function App() {
               upscaleModelPath={state.params.upscale_model_path}
               onUpscale={handleUpscaleGalleryItem}
               upscalingItem={upscalingGalleryUrl}
+              onDepthMap={handleDepthMapGalleryItem}
+              depthMappingItem={depthMappingGalleryUrl}
             />
           </div>
 
