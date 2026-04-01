@@ -1186,6 +1186,46 @@ async def api_upscale_single(req: SingleUpscaleRequest):
     return {"saved_path": saved_path, "filename": out_name, "url": url, "width": w, "height": h}
 
 
+# ── Routes: Depth Map ─────────────────────────────────────────────────────────
+
+class DepthMapRequest(BaseModel):
+    filename:   str
+    model_repo: str = "depth-anything/DA3MONO-LARGE"
+
+
+@app.post("/api/depth-map")
+async def api_depth_map(req: DepthMapRequest):
+    """Generate a depth map for an existing output image."""
+    if manager.is_busy:
+        raise HTTPException(503, "Pipeline is busy — wait for generation to finish")
+
+    src_path = Path(_output_dir()) / Path(req.filename).name
+    if not src_path.exists():
+        raise HTTPException(400, f"File not found: {req.filename}")
+
+    out_name = src_path.stem + "_depth.png"
+    out_path = src_path.parent / out_name
+
+    import asyncio
+    from concurrent.futures import ThreadPoolExecutor
+
+    loop = asyncio.get_event_loop()
+    with ThreadPoolExecutor(1) as pool:
+        png_bytes = await loop.run_in_executor(
+            pool,
+            lambda: _run_depth_map(str(src_path), req.model_repo),
+        )
+
+    out_path.write_bytes(png_bytes)
+    url = f"/api/output/{out_name}"
+    return {"url": url, "filename": out_name}
+
+
+def _run_depth_map(image_path: str, repo_id: str) -> bytes:
+    from core.depth_map import generate_depth_map
+    return generate_depth_map(image_path, repo_id=repo_id)
+
+
 # ── Routes: Settings ──────────────────────────────────────────────────────────
 
 @app.get("/api/settings")
