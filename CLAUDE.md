@@ -16,7 +16,7 @@
 - **3+ files, or design is unclear** → full superpowers flow (brainstorm → spec → plan → subagent-driven-development)
 
 ## What this project is
-Fully offline AI image generation for Mac Silicon (MPS). No cloud, no subscriptions. Supports FLUX.2 and Z-Image Turbo models with 4-bit/int8 quantization. Features: text-to-image, image-to-image editing, multi-slot reference images with per-slot rectangle-mask drawing, iterative multi-mask inpainting, multi-LoRA stacking (up to 5, per-slot strength), gallery drag-and-drop into ref slots, inline HelpTip ⓘ tooltips, upscaling (single + batch folder), video generation (LTX-Video), **batch img2img** (process a folder of images). **Gradio fully removed** — `app.py` is pure backend logic only.
+Fully offline AI image generation for Mac Silicon (MPS). No cloud, no subscriptions. Supports FLUX.2 and Z-Image Turbo models with 4-bit/int8 quantization. Features: text-to-image, image-to-image editing, multi-slot reference images with per-slot rectangle-mask drawing, iterative multi-mask inpainting, multi-LoRA stacking (up to 5, per-slot strength), gallery drag-and-drop into ref slots, inline HelpTip ⓘ tooltips, upscaling (single + batch folder), video generation (LTX-Video), **batch img2img** (process a folder of images), **depth map generation** (DA3 16-bit PNG, Gallery button). **Gradio fully removed** — `app.py` is pure backend logic only.
 
 **Renamed from** `ultra-fast-image-gen` → `off-line-Image-gen-mac`. Brand name in UI: **"Local AI Image Gen"** (TopBar + browser tab title).
 
@@ -87,9 +87,9 @@ Key source files:
 
 **`Canvas.tsx`** — flex 5. Shows result image/video + generating overlay. Drag-and-drop ref image support. Generating overlay: 56px spinner with `pct`% number overlaid at center (when step/total available), progress message text, thin progress bar.
 
-**`Gallery.tsx`** — flex 1, horizontal scroll strip. `onSelect` injects prompt + model into sidebar. Thumbnails: `draggable` + `onDragStart` sets `dataTransfer('text/plain', item.url)` for gallery→ref slot drag. Hover shows 4 icon buttons: Info (`W × H px`), Load Params (`RotateCcw` green, restores all params + ref slots from companion folder), Upscale ×4, Delete. Info overlay is `position:absolute inset-0` inside the thumbnail. Do NOT use `title` on outer div — causes native browser tooltip.
+**`Gallery.tsx`** — flex 1, horizontal scroll strip. `onSelect` injects prompt + model into sidebar. Thumbnails: `draggable` + `onDragStart` sets `dataTransfer('text/plain', item.url)` for gallery→ref slot drag. Hover shows 5 icon buttons: Info (`W × H px`), Depth Map (`Layers` teal, images only → `POST /api/depth-map`), Load Params (`RotateCcw` green, restores all params + ref slots), Upscale ×4, Delete. Info overlay is `position:absolute inset-0` inside the thumbnail. Do NOT use `title` on outer div — causes native browser tooltip.
 
-**`SettingsDrawer.tsx`** — `w-96` slide-in. Sections: Output folder, **Default Model** (dropdown → `default_model` in `app_settings.json`, pre-selects on bootstrap), HF login, model list (✓ cached / ↓ not downloaded + size + delete + update), upscale model list, storage summary, Server Log (Save → timestamped snapshot in `logs/`), Model Sources. Refresh button reloads all data.
+**`SettingsDrawer.tsx`** — `w-96` slide-in. Sections: Output folder, **Default Model** (dropdown → `default_model` in `app_settings.json`, pre-selects on bootstrap), HF login, model list (✓ cached / ↓ not downloaded + size + delete + update), upscale model list, **Depth Map Model** (3-option dropdown → `depth_model_repo` in `app_settings.json`), storage summary, Server Log (Save → timestamped snapshot in `logs/`), Model Sources. Refresh button reloads all data.
 
 **`TopBar.tsx`** — "Local AI Image Gen" brand, model, device, VRAM, "generating…" pulse, settings gear.
 
@@ -143,6 +143,7 @@ Actions: `ADD_REF_SLOT` · `REMOVE_REF_SLOT` · `SET_SLOT_MASK` · `CLEAR_SLOT_M
 | GET/POST/POST | `/api/hf/status` · `/api/hf/login` · `/api/hf/logout` | HF auth |
 | GET | `/api/models/extras` | `{upscale_models:[{name,size}]}` |
 | DELETE | `/api/upscale/{filename}` | Delete upscale model file |
+| POST | `/api/depth-map` | Generate 16-bit depth map for an output image; `{filename, model_repo}`; runs in `ThreadPoolExecutor(1)` |
 
 ### SSE event format
 ```json
@@ -156,6 +157,7 @@ Actions: `ADD_REF_SLOT` · `REMOVE_REF_SLOT` · `SET_SLOT_MASK` · `CLEAR_SLOT_M
 
 ## Key Python modules
 - `pipeline.py` — `PipelineManager`, SSE generation loop
+- `core/depth_map.py` — DA3 depth estimation; `generate_depth_map(path, repo_id, invert=True)` → 16-bit PNG bytes; white=near (invert required for DA3 direct depth, NOT needed for DA2 disparity); module-level model cache; MPS → CPU fallback
 - `core/lora_zimage.py` — LoRA injection for Linear/Conv2d layers
 - `core/lora_flux2.py` — LoRA for FLUX.2-klein: PEFT/fal prefix remap; requires diffusers git main
 - `core/ip_adapter_flux.py` — IP-Adapter code (kept on disk but NOT imported; Flux2KleinPipeline has no IPA support)
@@ -233,3 +235,4 @@ Tailwind tokens: `bg:#0a0a0a` · `surface:#141414` · `card:#1c1c1c` · `border:
 - **Guidance slider hidden**: removed from `Sidebar.tsx` UI; value still in state, correct default set by `guidanceForModel()`. ALL current models are step-wise distilled → guidance=0 always sent.
 - **Debug dump cleanup**: `lora_file`/`lora_strength` excluded from `[DEBUG]` params when `lora_files` is populated (legacy fields, always `None`/`1.0` from frontend).
 - **Batch img2img**: `POST /api/batch/generate` uses `BatchGenerateRequest(GenerateRequest)` + `input_folder`. Endpoint sets `manager.is_batch_running`, streams `batch_progress` + generation events per image; single-image failures log and continue. Frontend stop calls `stopGeneration()` (mid-image) + `abort()` (between images). `stop_requested` is the public property; never access `_stop_event` directly from server.py.
+- **Depth map**: `POST /api/depth-map` → `core/depth_map.py`; DA3 convention = invert (direct depth, larger=farther); DA2 = no invert (disparity); saved as `{stem}_depth.png` alongside source; `depth_model_repo` in `GenerateParams` + `app_settings.json`; 3 model options: DA3MONO-LARGE (~1.3 GB), DA3-BASE (~400 MB), CoreML V2-Small.
