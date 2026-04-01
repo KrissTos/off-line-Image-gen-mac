@@ -4,7 +4,7 @@ import type { GenerateParams, SSEEvent, OutputItem } from './types'
 import {
   fetchStatus, fetchModels, fetchDevices, fetchWorkflows,
   fetchOutputs, uploadImage, uploadFromUrl, streamGenerate, pingServer,
-  fetchSettings, deleteOutput, upscaleSingleImage, stopGeneration,
+  fetchSettings, updateSettings, deleteOutput, upscaleSingleImage, stopGeneration,
   generateDepthMap,
 } from './api'
 
@@ -663,6 +663,13 @@ export default function App() {
       <SettingsDrawer
         open={state.settingsOpen}
         onClose={() => dispatch({ type: 'TOGGLE_SETTINGS' })}
+        depthModelRepo={state.params.depth_model_repo}
+        onDepthModelChange={async (repo) => {
+          dispatch({ type: 'SET_PARAM', key: 'depth_model_repo', value: repo })
+          try {
+            await updateSettings({ depth_model_repo: repo })
+          } catch { /* non-fatal */ }
+        }}
       />
     </div>
   )

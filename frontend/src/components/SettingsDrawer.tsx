@@ -1,7 +1,7 @@
 import {
   X, HardDrive, LogIn, LogOut, CheckCircle2, Download, Trash2,
   RefreshCw, AlertCircle, FolderOpen, Save, CloudDownload, ArrowDownCircle, Palette, FileDown,
-  ExternalLink, Globe, Plus,
+  ExternalLink, Globe, Plus, Layers,
 } from 'lucide-react'
 import { useState, useEffect, useCallback } from 'react'
 import {
@@ -26,6 +26,8 @@ const KNOWN_MODELS_NAMES = new Set([
 interface Props {
   open:    boolean
   onClose: () => void
+  depthModelRepo?:       string
+  onDepthModelChange?:   (repo: string) => void
 }
 
 interface StorageModel {
@@ -36,7 +38,7 @@ interface StorageModel {
 
 const DEFAULT_OUTPUT_DIR = '~/Pictures/ultra-fast-image-gen'
 
-export default function SettingsDrawer({ open, onClose }: Props) {
+export default function SettingsDrawer({ open, onClose, depthModelRepo, onDepthModelChange }: Props) {
   const [storage, setStorage]           = useState<{ models: StorageModel[]; summary: string } | null>(null)
   const [hfToken, setHfToken]           = useState('')
   const [hfStatus, setHfStatus]         = useState<string | null>(null)
@@ -656,6 +658,27 @@ export default function SettingsDrawer({ open, onClose }: Props) {
               </div>
             </section>
           )}
+
+          {/* ── Depth Map Model ── */}
+          <section>
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-label mb-3 flex items-center gap-1.5">
+              <Layers size={13} /> Depth Map Model
+            </h3>
+            <div className="space-y-2">
+              <select
+                value={depthModelRepo ?? 'depth-anything/DA3MONO-LARGE'}
+                onChange={e => onDepthModelChange?.(e.target.value)}
+                className="w-full bg-card border border-border rounded px-2 py-1.5 text-xs text-white focus:outline-none focus:border-accent"
+              >
+                <option value="depth-anything/DA3MONO-LARGE">DA3MONO-LARGE — best quality (~1.3 GB)</option>
+                <option value="depth-anything/DA3-BASE">DA3-BASE — faster (~400 MB)</option>
+                <option value="apple/coreml-depth-anything-v2-small">CoreML V2-Small — ANE optimised (&lt;0.5s)</option>
+              </select>
+              <p className="text-muted text-[10px] leading-relaxed">
+                Model downloads automatically on first use and is cached in <code className="text-accent">./models/</code>.
+              </p>
+            </div>
+          </section>
 
           {/* ── Theme Colors ── */}
           <section>
