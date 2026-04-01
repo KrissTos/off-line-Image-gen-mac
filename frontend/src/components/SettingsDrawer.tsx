@@ -1,12 +1,12 @@
 import {
   X, HardDrive, LogIn, LogOut, CheckCircle2, Download, Trash2,
   RefreshCw, AlertCircle, FolderOpen, Save, CloudDownload, ArrowDownCircle, Palette, FileDown,
-  ExternalLink, Globe, Plus, Layers,
+  ExternalLink, Globe, Plus,
 } from 'lucide-react'
 import { useState, useEffect, useCallback } from 'react'
 import {
   fetchStorage, fetchSettings, updateSettings, fetchModels, deleteModel,
-  checkModelUpdates, updateModel, openFolderDialog, openOutputFolder,
+  checkModelUpdates, streamUpdateModel, openFolderDialog, openOutputFolder,
   fetchModelExtras, deleteUpscaleModel,
   fetchModelSources, saveModelSources,
   type ModelUpdateResult, type ModelExtras, type ModelSource,
@@ -26,8 +26,6 @@ const KNOWN_MODELS_NAMES = new Set([
 interface Props {
   open:    boolean
   onClose: () => void
-  depthModelRepo?:       string
-  onDepthModelChange?:   (repo: string) => void
 }
 
 interface StorageModel {
@@ -38,7 +36,7 @@ interface StorageModel {
 
 const DEFAULT_OUTPUT_DIR = '~/Pictures/ultra-fast-image-gen'
 
-export default function SettingsDrawer({ open, onClose, depthModelRepo, onDepthModelChange }: Props) {
+export default function SettingsDrawer({ open, onClose }: Props) {
   const [storage, setStorage]           = useState<{ models: StorageModel[]; summary: string } | null>(null)
   const [hfToken, setHfToken]           = useState('')
   const [hfStatus, setHfStatus]         = useState<string | null>(null)
@@ -61,6 +59,7 @@ export default function SettingsDrawer({ open, onClose, depthModelRepo, onDepthM
   const [updateResults, setUpdateResults]     = useState<ModelUpdateResult[] | null>(null)
   const [checkingUpdates, setCheckingUpdates] = useState(false)
   const [updatingModel, setUpdatingModel]     = useState<string | null>(null)
+  const [downloadProgress, setDownloadProgress] = useState<{ pct: number; filename: string } | null>(null)
   // Extra models (upscale)
   const [extras, setExtras]                   = useState<ModelExtras | null>(null)
   const [deletingUpscale, setDeletingUpscale] = useState<string | null>(null)
@@ -182,9 +181,13 @@ export default function SettingsDrawer({ open, onClose, depthModelRepo, onDepthM
 
   async function handleUpdateModel(choice: string) {
     setUpdatingModel(choice)
+    setDownloadProgress(null)
     try {
-      const data = await updateModel(choice)
-      setStatusMsg(data.status)
+      const msg = await streamUpdateModel(choice, e => {
+        if (e.type === 'file_progress')
+          setDownloadProgress({ pct: e.pct ?? 0, filename: e.filename ?? '' })
+      })
+      setStatusMsg(msg)
       // Re-check after update
       const updated = await checkModelUpdates()
       setUpdateResults(updated.results)
@@ -193,6 +196,7 @@ export default function SettingsDrawer({ open, onClose, depthModelRepo, onDepthM
       setStatusMsg(`Update failed: ${(e as Error).message}`)
     } finally {
       setUpdatingModel(null)
+      setDownloadProgress(null)
     }
   }
 
@@ -316,13 +320,19 @@ export default function SettingsDrawer({ open, onClose, depthModelRepo, onDepthM
   async function handleDownloadSource(source: ModelSource) {
     if (source.type !== 'base') return
     setDownloadingSource(source.id)
+    setDownloadProgress(null)
     try {
-      await updateModel(source.name)
-      setStatusMsg(`Downloading ${source.name}…`)
+      const msg = await streamUpdateModel(source.name, e => {
+        if (e.type === 'file_progress')
+          setDownloadProgress({ pct: e.pct ?? 0, filename: e.filename ?? '' })
+      })
+      setStatusMsg(msg || `Downloaded ${source.name}`)
+      await fetchModels().then(d => { setModelChoices(d.choices); setAvailableModels(d.available) }).catch(() => {})
     } catch (e: any) {
       setStatusMsg(e.message || 'Download failed')
     } finally {
       setDownloadingSource(null)
+      setDownloadProgress(null)
     }
   }
 
@@ -579,9 +589,25 @@ export default function SettingsDrawer({ open, onClose, depthModelRepo, onDepthM
                                 ? <RefreshCw size={10} className="animate-spin" />
                                 : <ArrowDownCircle size={10} />
                               }
-                              {isUpdating ? 'Updating…' : 'Update'}
+                              {isUpdating ? 'Downloading…' : 'Update'}
                             </button>
                           )}
+                        </div>
+                      )}
+
+                      {/* Download progress bar */}
+                      {isUpdating && downloadProgress && (
+                        <div className="mt-2 space-y-1">
+                          <div className="flex items-center justify-between text-[10px] text-muted">
+                            <span className="truncate max-w-[160px]">{downloadProgress.filename}</span>
+                            <span className="shrink-0 ml-1">{downloadProgress.pct}%</span>
+                          </div>
+                          <div className="w-full h-1 bg-border rounded-full overflow-hidden">
+                            <div
+                              className="h-full bg-accent transition-all duration-200"
+                              style={{ width: `${downloadProgress.pct}%` }}
+                            />
+                          </div>
                         </div>
                       )}
 
@@ -658,27 +684,6 @@ export default function SettingsDrawer({ open, onClose, depthModelRepo, onDepthM
               </div>
             </section>
           )}
-
-          {/* ── Depth Map Model ── */}
-          <section>
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-label mb-3 flex items-center gap-1.5">
-              <Layers size={13} /> Depth Map Model
-            </h3>
-            <div className="space-y-2">
-              <select
-                value={depthModelRepo ?? 'depth-anything/DA3MONO-LARGE'}
-                onChange={e => onDepthModelChange?.(e.target.value)}
-                className="w-full bg-card border border-border rounded px-2 py-1.5 text-xs text-white focus:outline-none focus:border-accent"
-              >
-                <option value="depth-anything/DA3MONO-LARGE">DA3MONO-LARGE — best quality (~1.3 GB)</option>
-                <option value="depth-anything/DA3-BASE">DA3-BASE — faster (~400 MB)</option>
-                <option value="apple/coreml-depth-anything-v2-small">CoreML V2-Small — ANE optimised (&lt;0.5s)</option>
-              </select>
-              <p className="text-muted text-[10px] leading-relaxed">
-                Model downloads automatically on first use and is cached in <code className="text-accent">./models/</code>.
-              </p>
-            </div>
-          </section>
 
           {/* ── Theme Colors ── */}
           <section>
@@ -782,47 +787,63 @@ export default function SettingsDrawer({ open, onClose, depthModelRepo, onDepthM
                     false
 
                   return (
-                    <div key={src.id} className={`flex items-start gap-2 p-2 rounded-lg bg-card border group ${isLocal ? 'border-green-500/60' : 'border-border'}`}>
-                      <span className={`shrink-0 mt-0.5 text-[9px] font-semibold px-1.5 py-0.5 rounded border uppercase tracking-wide ${typeBadgeClass}`}>
-                        {src.type}
-                      </span>
-                      <div className="flex-1 min-w-0">
-                        <div className="text-xs text-white truncate">{src.name}</div>
-                        {src.description && (
-                          <div className="text-[10px] text-muted/70 truncate mt-0.5">{src.description}</div>
-                        )}
+                    <div key={src.id} className={`p-2 rounded-lg bg-card border group ${isLocal ? 'border-green-500/60' : 'border-border'}`}>
+                      <div className="flex items-start gap-2">
+                        <span className={`shrink-0 mt-0.5 text-[9px] font-semibold px-1.5 py-0.5 rounded border uppercase tracking-wide ${typeBadgeClass}`}>
+                          {src.type}
+                        </span>
+                        <div className="flex-1 min-w-0">
+                          <div className="text-xs text-white truncate">{src.name}</div>
+                          {src.description && (
+                            <div className="text-[10px] text-muted/70 truncate mt-0.5">{src.description}</div>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button
+                            onClick={() => window.open(src.url, '_blank')}
+                            title="Open HuggingFace page"
+                            className="p-1 rounded text-muted hover:text-white hover:bg-white/10 transition-colors"
+                          >
+                            <ExternalLink size={12} />
+                          </button>
+                          <button
+                            onClick={() => canDownload && handleDownloadSource(src)}
+                            disabled={!canDownload || downloadingSource === src.id}
+                            title={downloadTooltip || `Download ${src.name}`}
+                            className={`p-1 rounded transition-colors ${
+                              canDownload
+                                ? 'text-muted hover:text-white hover:bg-white/10'
+                                : 'text-muted/30 cursor-not-allowed'
+                            }`}
+                          >
+                            {downloadingSource === src.id
+                              ? <RefreshCw size={12} className="animate-spin" />
+                              : <Download size={12} />
+                            }
+                          </button>
+                          <button
+                            onClick={() => handleDeleteSource(src.id)}
+                            title="Remove from list"
+                            className="p-1 rounded text-muted/40 hover:text-red-400 hover:bg-red-900/20 transition-colors opacity-0 group-hover:opacity-100"
+                          >
+                            <Trash2 size={11} />
+                          </button>
+                        </div>
                       </div>
-                      <div className="flex items-center gap-1 shrink-0">
-                        <button
-                          onClick={() => window.open(src.url, '_blank')}
-                          title="Open HuggingFace page"
-                          className="p-1 rounded text-muted hover:text-white hover:bg-white/10 transition-colors"
-                        >
-                          <ExternalLink size={12} />
-                        </button>
-                        <button
-                          onClick={() => canDownload && handleDownloadSource(src)}
-                          disabled={!canDownload || downloadingSource === src.id}
-                          title={downloadTooltip || `Download ${src.name}`}
-                          className={`p-1 rounded transition-colors ${
-                            canDownload
-                              ? 'text-muted hover:text-white hover:bg-white/10'
-                              : 'text-muted/30 cursor-not-allowed'
-                          }`}
-                        >
-                          {downloadingSource === src.id
-                            ? <RefreshCw size={12} className="animate-spin" />
-                            : <Download size={12} />
-                          }
-                        </button>
-                        <button
-                          onClick={() => handleDeleteSource(src.id)}
-                          title="Remove from list"
-                          className="p-1 rounded text-muted/40 hover:text-red-400 hover:bg-red-900/20 transition-colors opacity-0 group-hover:opacity-100"
-                        >
-                          <Trash2 size={11} />
-                        </button>
-                      </div>
+                      {downloadingSource === src.id && downloadProgress && (
+                        <div className="mt-2 space-y-1">
+                          <div className="flex items-center justify-between text-[10px] text-muted">
+                            <span className="truncate max-w-[160px]">{downloadProgress.filename}</span>
+                            <span className="shrink-0 ml-1">{downloadProgress.pct}%</span>
+                          </div>
+                          <div className="w-full h-1 bg-border rounded-full overflow-hidden">
+                            <div
+                              className="h-full bg-accent transition-all duration-200"
+                              style={{ width: `${downloadProgress.pct}%` }}
+                            />
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )
                 })}

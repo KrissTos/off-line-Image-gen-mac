@@ -64,8 +64,50 @@ export interface ModelUpdateResult {
 export const checkModelUpdates = () =>
   get<{ results: ModelUpdateResult[] }>('/api/models/check-updates')
 
-export const updateModel = (model_choice: string) =>
-  post<{ status: string }>('/api/models/update', { model_choice, device: '' })
+export interface DownloadProgressEvent {
+  type:       'file_progress' | 'done' | 'error'
+  filename?:  string
+  downloaded?: number
+  total?:     number
+  pct?:       number
+  message?:   string
+}
+
+export async function streamUpdateModel(
+  model_choice: string,
+  onEvent: (e: DownloadProgressEvent) => void,
+  signal?: AbortSignal,
+): Promise<string> {
+  const r = await fetch('/api/models/update', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model_choice, device: '' }),
+    signal,
+  })
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({ detail: r.statusText }))
+    throw new Error(err.detail ?? `POST /api/models/update → ${r.status}`)
+  }
+  const reader = r.body!.getReader()
+  const decoder = new TextDecoder()
+  let buf = ''
+  let finalMsg = ''
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buf += decoder.decode(value, { stream: true })
+    const lines = buf.split('\n')
+    buf = lines.pop()!
+    for (const line of lines) {
+      if (!line.startsWith('data: ')) continue
+      const event: DownloadProgressEvent = JSON.parse(line.slice(6))
+      onEvent(event)
+      if (event.type === 'done')  finalMsg = event.message ?? ''
+      if (event.type === 'error') throw new Error(event.message)
+    }
+  }
+  return finalMsg
+}
 
 export const openFolderDialog  = () =>
   get<{ path: string | null; cancelled: boolean }>('/api/open-folder-dialog')
@@ -84,7 +126,8 @@ export interface DepthMapResult {
 }
 
 export const generateDepthMap = (params: {
-  filename:    string
+  file_path?:  string
+  filename?:   string
   model_repo?: string
 }) => post<DepthMapResult>('/api/depth-map', params)
 

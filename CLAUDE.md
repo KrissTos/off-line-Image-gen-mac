@@ -87,9 +87,9 @@ Key source files:
 
 **`Canvas.tsx`** — flex 5. Shows result image/video + generating overlay. Drag-and-drop ref image support. Generating overlay: 56px spinner with `pct`% number overlaid at center (when step/total available), progress message text, thin progress bar.
 
-**`Gallery.tsx`** — flex 1, horizontal scroll strip. `onSelect` injects prompt + model into sidebar. Thumbnails: `draggable` + `onDragStart` sets `dataTransfer('text/plain', item.url)` for gallery→ref slot drag. Hover shows 5 icon buttons: Info (`W × H px`), Depth Map (`Layers` teal, images only → `POST /api/depth-map`), Load Params (`RotateCcw` green, restores all params + ref slots), Upscale ×4, Delete. Info overlay is `position:absolute inset-0` inside the thumbnail. Do NOT use `title` on outer div — causes native browser tooltip.
+**`Gallery.tsx`** — flex 1, horizontal scroll strip. `onSelect` injects prompt + model into sidebar. Thumbnails: `draggable` + `onDragStart` sets `dataTransfer('text/plain', item.url)` for gallery→ref slot drag. Hover shows 4 icon buttons: Info (`W × H px`), Load Params (`RotateCcw` green, restores all params + ref slots), Upscale ×4, Delete. Info overlay is `position:absolute inset-0` inside the thumbnail. Do NOT use `title` on outer div — causes native browser tooltip.
 
-**`SettingsDrawer.tsx`** — `w-96` slide-in. Sections: Output folder, **Default Model** (dropdown → `default_model` in `app_settings.json`, pre-selects on bootstrap), HF login, model list (✓ cached / ↓ not downloaded + size + delete + update), upscale model list, **Depth Map Model** (3-option dropdown → `depth_model_repo` in `app_settings.json`), storage summary, Server Log (Save → timestamped snapshot in `logs/`), Model Sources. Refresh button reloads all data.
+**`SettingsDrawer.tsx`** — `w-96` slide-in. Sections: Output folder, **Default Model** (dropdown → `default_model` in `app_settings.json`, pre-selects on bootstrap), HF login, model list (✓ cached / ↓ not downloaded + size + delete + update), upscale model list, storage summary, Server Log (Save → timestamped snapshot in `logs/`), Model Sources. Refresh button reloads all data.
 
 **`TopBar.tsx`** — "Local AI Image Gen" brand, model, device, VRAM, "generating…" pulse, settings gear.
 
@@ -157,7 +157,7 @@ Actions: `ADD_REF_SLOT` · `REMOVE_REF_SLOT` · `SET_SLOT_MASK` · `CLEAR_SLOT_M
 
 ## Key Python modules
 - `pipeline.py` — `PipelineManager`, SSE generation loop
-- `core/depth_map.py` — DA3 depth estimation; `generate_depth_map(path, repo_id, invert=True)` → 16-bit PNG bytes; white=near (invert required for DA3 direct depth, NOT needed for DA2 disparity); module-level model cache; MPS → CPU fallback
+- `core/depth_map.py` — DA3/DA2 depth estimation; `generate_depth_map(path, repo_id, invert=True)` → 16-bit PNG bytes; white=near; output always resized back to source resolution with LANCZOS; module-level model cache; DA3 path uses `depth_anything_3.api.DepthAnything3`, DA2 path uses `transformers.pipeline`; detects DA3 via `'DA3'/'da3' in repo_id`
 - `core/lora_zimage.py` — LoRA injection for Linear/Conv2d layers
 - `core/lora_flux2.py` — LoRA for FLUX.2-klein: PEFT/fal prefix remap; requires diffusers git main
 - `core/ip_adapter_flux.py` — IP-Adapter code (kept on disk but NOT imported; Flux2KleinPipeline has no IPA support)
@@ -235,4 +235,7 @@ Tailwind tokens: `bg:#0a0a0a` · `surface:#141414` · `card:#1c1c1c` · `border:
 - **Guidance slider hidden**: removed from `Sidebar.tsx` UI; value still in state, correct default set by `guidanceForModel()`. ALL current models are step-wise distilled → guidance=0 always sent.
 - **Debug dump cleanup**: `lora_file`/`lora_strength` excluded from `[DEBUG]` params when `lora_files` is populated (legacy fields, always `None`/`1.0` from frontend).
 - **Batch img2img**: `POST /api/batch/generate` uses `BatchGenerateRequest(GenerateRequest)` + `input_folder`. Endpoint sets `manager.is_batch_running`, streams `batch_progress` + generation events per image; single-image failures log and continue. Frontend stop calls `stopGeneration()` (mid-image) + `abort()` (between images). `stop_requested` is the public property; never access `_stop_event` directly from server.py.
-- **Depth map**: `POST /api/depth-map` → `core/depth_map.py`; DA3 convention = invert (direct depth, larger=farther); DA2 = no invert (disparity); saved as `{stem}_depth.png` alongside source; `depth_model_repo` in `GenerateParams` + `app_settings.json`; 3 model options: DA3MONO-LARGE (~1.3 GB), DA3-BASE (~400 MB), CoreML V2-Small.
+- **Depth map**: `POST /api/depth-map` → `core/depth_map.py`; accepts `file_path` (absolute) or `filename` (output-dir); DA3 = invert, DA2 = no invert; output always LANCZOS-resized to source resolution; saved as `{stem}_depth.png`; `depth_model_repo` in `GenerateParams` + `app_settings.json`; model selector in **Sidebar DEPTH MAP accordion**; `from pipeline import manager` lazy import in endpoint.
+- **DA3 install**: `depth_anything_3` installed with `--no-deps` + `omegaconf addict moviepy<2 opencv-python-headless`; GS/3D export deps (`gsplat`, `plyfile`, `evo`) mocked at import time via `sys.modules` — never needed for inference. Official model: `depth-anything/DA3MONO-LARGE`; local weights → `models/da3mono-large/`; `from_pretrained` uses local dir if `model.safetensors` exists, else falls back to HF Hub.
+- **DA3 model IDs**: `depth-anything/DA3MONO-LARGE` (official, verified); `depth-anything/Depth-Anything-V2-Large-hf` (DA2 fallback); `istiakiat/DA3-BASE` does NOT exist (404). Sidebar dropdown has 2 options only.
+- **xformers on Apple Silicon**: not installable, not needed — PyTorch MPS has built-in SDPA. Never attempt to install xformers on Mac.
