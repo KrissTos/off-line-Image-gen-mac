@@ -76,6 +76,18 @@ export const openFileDialog    = () =>
 export const openOutputFolder  = () =>
   get<{ ok: boolean }>('/api/open-output-folder')
 
+// ── Depth Map ─────────────────────────────────────────────────────────────────
+
+export interface DepthMapResult {
+  url:      string
+  filename: string
+}
+
+export const generateDepthMap = (params: {
+  filename:    string
+  model_repo?: string
+}) => post<DepthMapResult>('/api/depth-map', params)
+
 export interface SingleUpscaleResult {
   saved_path: string
   filename:   string
