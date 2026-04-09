@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react'
-import { Film, Trash2, Info, ArrowUpCircle, Loader2, RotateCcw, Layers } from 'lucide-react'
+import { Film, Trash2, Info, ArrowUpCircle, Loader2, RotateCcw } from 'lucide-react'
 import type { OutputItem } from '../types'
 
 interface Props {
@@ -10,11 +10,9 @@ interface Props {
   upscaleModelPath?: string
   onUpscale?:        (item: OutputItem) => void
   upscalingItem?:    string | null   // url of item currently being upscaled
-  onDepthMap?:       (item: OutputItem) => void
-  depthMappingItem?: string | null
 }
 
-export default function Gallery({ outputs, onSelect, onDelete, onLoadParams, upscaleModelPath, onUpscale, upscalingItem, onDepthMap, depthMappingItem }: Props) {
+export default function Gallery({ outputs, onSelect, onDelete, onLoadParams, upscaleModelPath, onUpscale, upscalingItem }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const [imgDims, setImgDims] = useState<Record<string, { w: number; h: number }>>({})
   const [showInfo, setShowInfo] = useState<string | null>(null)   // url of item with visible info tooltip
@@ -96,21 +94,6 @@ export default function Gallery({ outputs, onSelect, onDelete, onLoadParams, ups
                   {upscalingItem === item.url
                     ? <Loader2 size={16} className="animate-spin" aria-hidden="true" />
                     : <ArrowUpCircle size={16} aria-hidden="true" />
-                  }
-                </button>
-              )}
-
-              {/* Depth map button */}
-              {item.kind !== 'video' && onDepthMap && (
-                <button
-                  onClick={e => { e.stopPropagation(); onDepthMap(item) }}
-                  aria-label="Generate depth map"
-                  disabled={depthMappingItem === item.url}
-                  className="bg-black/70 hover:bg-teal-600 rounded-full p-1.5 transition-colors disabled:opacity-60"
-                >
-                  {depthMappingItem === item.url
-                    ? <Loader2 size={16} className="animate-spin" aria-hidden="true" />
-                    : <Layers size={16} aria-hidden="true" />
                   }
                 </button>
               )}

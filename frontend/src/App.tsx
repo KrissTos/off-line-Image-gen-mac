@@ -4,8 +4,7 @@ import type { GenerateParams, SSEEvent, OutputItem } from './types'
 import {
   fetchStatus, fetchModels, fetchDevices, fetchWorkflows,
   fetchOutputs, uploadImage, uploadFromUrl, streamGenerate, pingServer,
-  fetchSettings, updateSettings, deleteOutput, upscaleSingleImage, stopGeneration,
-  generateDepthMap,
+  fetchSettings, deleteOutput, upscaleSingleImage, stopGeneration,
 } from './api'
 
 function hexToRgbVar(hex: string): string {
@@ -77,7 +76,6 @@ export default function App() {
   const isRestoringWorkflow   = useRef(false)
   const [statusMsg, setStatusMsg] = useState('')
   const [upscalingGalleryUrl, setUpscalingGalleryUrl] = useState<string | null>(null)
-  const [depthMappingGalleryUrl, setDepthMappingGalleryUrl] = useState<string | null>(null)
   const centerRef   = useRef<HTMLDivElement>(null)
   const [rowPcts, setRowPcts] = useState<[number, number, number]>([50, 36, 14])
 
@@ -417,23 +415,6 @@ export default function App() {
     }
   }, [state.params.upscale_model_path, dispatch, refreshOutputs])
 
-  // ── Gallery depth map ──────────────────────────────────────────────────────
-
-  const handleDepthMapGalleryItem = useCallback(async (item: OutputItem) => {
-    setDepthMappingGalleryUrl(item.url)
-    try {
-      await generateDepthMap({
-        filename:    item.name,
-        model_repo:  state.params.depth_model_repo,
-      })
-      await refreshOutputs()
-    } catch (err: unknown) {
-      dispatch({ type: 'SET_ERROR', message: (err as Error).message })
-    } finally {
-      setDepthMappingGalleryUrl(null)
-    }
-  }, [state.params.depth_model_repo, dispatch, refreshOutputs])
-
   // ── Gallery select: load result + inject prompt/model ─────────────────────
 
   const handleSelectGallery = useCallback((item: OutputItem) => {
@@ -651,8 +632,6 @@ export default function App() {
               upscaleModelPath={state.params.upscale_model_path}
               onUpscale={handleUpscaleGalleryItem}
               upscalingItem={upscalingGalleryUrl}
-              onDepthMap={handleDepthMapGalleryItem}
-              depthMappingItem={depthMappingGalleryUrl}
             />
           </div>
 
@@ -663,13 +642,6 @@ export default function App() {
       <SettingsDrawer
         open={state.settingsOpen}
         onClose={() => dispatch({ type: 'TOGGLE_SETTINGS' })}
-        depthModelRepo={state.params.depth_model_repo}
-        onDepthModelChange={async (repo) => {
-          dispatch({ type: 'SET_PARAM', key: 'depth_model_repo', value: repo })
-          try {
-            await updateSettings({ depth_model_repo: repo })
-          } catch { /* non-fatal */ }
-        }}
       />
     </div>
   )

@@ -349,6 +349,49 @@ def download_model_update(model_selection):
     return msg, table, None
 
 
+def download_model_update_stream(model_selection, progress_queue):
+    """Like download_model_update but pushes SSE-style dicts to progress_queue."""
+    import tqdm as _tqdm_mod
+    from huggingface_hub import snapshot_download
+    from pathlib import Path as _Path
+
+    if not model_selection:
+        progress_queue.put({"type": "error", "message": "No model selected."})
+        return
+
+    repo_id = next((rid for rid, dn in KNOWN_MODELS.items() if dn == model_selection), None)
+    if not repo_id:
+        progress_queue.put({"type": "error", "message": f"Unknown model: {model_selection}"})
+        return
+
+    class _ProgressTqdm(_tqdm_mod.tqdm):
+        def display(self, *args, **kwargs):
+            pass  # suppress console clutter
+        def update(self, n=1):
+            super().update(n)
+            try:
+                raw = (self.desc or "").strip()
+                filename = _Path(raw).name if raw else "downloading…"
+                total = int(self.total or 0)
+                downloaded = int(self.n or 0)
+                progress_queue.put({
+                    "type": "file_progress",
+                    "filename": filename,
+                    "downloaded": downloaded,
+                    "total": total,
+                    "pct": round(100 * downloaded / total, 1) if total else 0,
+                })
+            except Exception:
+                pass
+
+    try:
+        print(f"[Online update] Downloading {model_selection}...")
+        snapshot_download(repo_id, cache_dir=get_local_models_dir(), tqdm_class=_ProgressTqdm)
+        progress_queue.put({"type": "done", "message": f"✓ {model_selection}: updated successfully"})
+    except Exception as e:
+        progress_queue.put({"type": "error", "message": str(e)})
+
+
 def download_all_online_updates():
     """Download every model that has an update available (per online_version_cache)."""
     from huggingface_hub import snapshot_download

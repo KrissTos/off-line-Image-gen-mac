@@ -5,7 +5,7 @@ import {
   Wand2, ArrowUpCircle, FolderInput, ListOrdered, FolderOpen, ImagePlus, Plus,
 } from 'lucide-react'
 import type { GenerateParams, RefImageSlot, LoraSlot } from '../types'
-import { importComfyUI, loadWorkflow, saveWorkflow, uploadLora, uploadUpscaleModel, streamBatchUpscale, streamBatchGenerate, openFolderDialog, openFileDialog, upscaleSingleImage, updateSettings, openWorkflowFolderDialog, listLoras, stopGeneration } from '../api'
+import { importComfyUI, loadWorkflow, saveWorkflow, uploadLora, uploadUpscaleModel, streamBatchUpscale, streamBatchGenerate, openFolderDialog, openFileDialog, upscaleSingleImage, updateSettings, openWorkflowFolderDialog, listLoras, stopGeneration, generateDepthMap } from '../api'
 import HelpTip from './HelpTip'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -924,6 +924,110 @@ function WorkflowPanel({ workflows, params, refSlots, onLoad, onRefresh, onImpor
   )
 }
 
+// ── Depth Map panel ───────────────────────────────────────────────────────────
+
+interface DepthMapPanelProps {
+  modelRepo:     string
+  onModelChange: (repo: string) => void
+  onRefresh:     () => void
+  onStatus:      (msg: string) => void
+}
+function DepthMapPanel({ modelRepo, onModelChange, onRefresh, onStatus }: DepthMapPanelProps) {
+  const [filePath,   setFilePath]   = useState('')
+  const [running,    setRunning]    = useState(false)
+  const [resultPath, setResultPath] = useState<string | null>(null)
+  const [picking,    setPicking]    = useState(false)
+
+  async function handlePick() {
+    setPicking(true)
+    setResultPath(null)
+    try {
+      const data = await openFileDialog()
+      if (!data.cancelled && data.path) setFilePath(data.path)
+    } catch (e: unknown) {
+      onStatus(`File picker error: ${(e as Error).message}`)
+    } finally {
+      setPicking(false)
+    }
+  }
+
+  async function handleRun() {
+    if (!filePath.trim()) { onStatus('⚠ Pick an image file first'); return }
+    setRunning(true)
+    setResultPath(null)
+    try {
+      const result = await generateDepthMap({ file_path: filePath.trim(), model_repo: modelRepo })
+      onStatus(`✓ Depth map saved: ${result.filename}`)
+      setResultPath(result.filename)
+      onRefresh()
+    } catch (e: unknown) {
+      onStatus(`Depth map failed: ${(e as Error).message}`)
+    } finally {
+      setRunning(false)
+    }
+  }
+
+  return (
+    <div className="space-y-3">
+      {/* Model selector */}
+      <div>
+        <label className="text-xs text-muted block mb-1">Model</label>
+        <select
+          value={modelRepo}
+          onChange={e => onModelChange(e.target.value)}
+          className="w-full bg-card border border-border rounded-md px-3 py-1.5 text-sm text-white
+                     focus:outline-none focus:border-accent transition-colors"
+        >
+          <option value="depth-anything/DA3MONO-LARGE">DA3MONO-LARGE — best quality (~1.3 GB)</option>
+          <option value="depth-anything/Depth-Anything-V2-Large-hf">DA2-Large — fallback (~1.3 GB)</option>
+        </select>
+      </div>
+
+      {/* File picker */}
+      <div>
+        <label className="text-xs text-muted block mb-1">Image</label>
+        <div className="flex gap-2">
+          <input
+            type="text"
+            value={filePath}
+            onChange={e => setFilePath(e.target.value)}
+            placeholder="/Users/you/Pictures/photo.png"
+            className="flex-1 bg-card border border-border rounded-md px-3 py-1.5 text-xs text-white
+                       placeholder-muted focus:outline-none focus:border-accent transition-colors"
+          />
+          <button
+            onClick={handlePick}
+            disabled={picking || running}
+            title="Browse for image"
+            aria-label="Browse for image"
+            className="px-2 py-1.5 rounded-md bg-card border border-border text-muted hover:text-white
+                       hover:border-accent transition-colors disabled:opacity-50 shrink-0"
+          >
+            <FolderOpen size={13} aria-hidden="true" />
+          </button>
+        </div>
+      </div>
+
+      <button
+        onClick={handleRun}
+        disabled={running || !filePath.trim()}
+        className="w-full py-2 rounded-lg bg-accent hover:bg-accent/80 text-white text-xs font-medium
+                   flex items-center justify-center gap-2 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+      >
+        <Layers size={13} />
+        {running ? 'Generating…' : 'Create Depth Map'}
+      </button>
+
+      {resultPath && (
+        <div className="bg-bg border border-green-800/40 rounded-md px-2 py-1.5 text-[10px] text-green-400 font-mono
+                        break-all leading-snug">
+          Saved: {resultPath}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Batch Img2Img panel ───────────────────────────────────────────────────────
 
 interface BatchImgImgPanelProps {
@@ -1213,6 +1317,19 @@ export default function Sidebar({
         <BatchImgImgPanel
           params={params}
           isGenerating={isGenerating}
+          onRefresh={onRefresh}
+          onStatus={onStatus}
+        />
+      </Accordion>
+
+      {/* Depth Map */}
+      <Accordion label="Depth Map" icon={<Layers size={13} />}>
+        <DepthMapPanel
+          modelRepo={params.depth_model_repo}
+          onModelChange={async (repo) => {
+            onParamChange('depth_model_repo', repo)
+            try { await updateSettings({ depth_model_repo: repo }) } catch { /* non-fatal */ }
+          }}
           onRefresh={onRefresh}
           onStatus={onStatus}
         />

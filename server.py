@@ -465,15 +465,31 @@ async def api_check_model_updates():
 
 @app.post("/api/models/update")
 async def api_update_model(req: LoadModelRequest):
-    """Download / update a model from HuggingFace Hub."""
+    """Download / update a model from HuggingFace Hub. Streams SSE download progress."""
+    import queue as _q
+    import threading as _threading
+
     a = _app()
-    try:
-        msg, _, _ = await asyncio.get_event_loop().run_in_executor(
-            None, a.download_model_update, req.model_choice
-        )
-        return {"status": msg}
-    except Exception as e:
-        raise HTTPException(500, str(e))
+    progress_q = _q.Queue()
+    loop = asyncio.get_event_loop()
+
+    async def generate():
+        def run():
+            a.download_model_update_stream(req.model_choice, progress_q)
+
+        t = _threading.Thread(target=run, daemon=True)
+        t.start()
+        while True:
+            event = await loop.run_in_executor(None, progress_q.get)
+            yield f"data: {json.dumps(event)}\n\n"
+            if event.get("type") in ("done", "error"):
+                break
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.get("/api/open-folder-dialog")
@@ -1189,32 +1205,45 @@ async def api_upscale_single(req: SingleUpscaleRequest):
 # ── Routes: Depth Map ─────────────────────────────────────────────────────────
 
 class DepthMapRequest(BaseModel):
-    filename:   str
-    model_repo: str = "depth-anything/DA3MONO-LARGE"
+    file_path:  str | None = None   # absolute path from file picker
+    filename:   str | None = None   # legacy: output-dir filename
+    model_repo: str = "istiakiat/DA3MONO-LARGE"
 
 
 @app.post("/api/depth-map")
 async def api_depth_map(req: DepthMapRequest):
-    """Generate a depth map for an existing output image."""
+    """Generate a depth map for an image file."""
+    from pipeline import manager
     if manager.is_busy:
         raise HTTPException(503, "Pipeline is busy — wait for generation to finish")
 
-    src_path = Path(_output_dir()) / Path(req.filename).name
+    if req.file_path:
+        src_path = Path(req.file_path)
+    elif req.filename:
+        src_path = Path(_output_dir()) / Path(req.filename).name
+    else:
+        raise HTTPException(400, "Provide either file_path or filename")
+
     if not src_path.exists():
-        raise HTTPException(400, f"File not found: {req.filename}")
+        raise HTTPException(400, f"File not found: {src_path}")
 
     out_name = src_path.stem + "_depth.png"
-    out_path = src_path.parent / out_name
+    out_path = Path(_output_dir()) / out_name
 
     import asyncio
     from concurrent.futures import ThreadPoolExecutor
 
     loop = asyncio.get_event_loop()
-    with ThreadPoolExecutor(1) as pool:
-        png_bytes = await loop.run_in_executor(
-            pool,
-            lambda: _run_depth_map(str(src_path), req.model_repo),
-        )
+    try:
+        with ThreadPoolExecutor(1) as pool:
+            png_bytes = await loop.run_in_executor(
+                pool,
+                lambda: _run_depth_map(str(src_path), req.model_repo),
+            )
+    except Exception as e:
+        import traceback
+        traceback.print_exc()   # full traceback goes to server.log via _LogTee
+        raise HTTPException(500, f"Depth map generation failed: {e}")
 
     out_path.write_bytes(png_bytes)
     url = f"/api/output/{out_name}"
@@ -1223,7 +1252,10 @@ async def api_depth_map(req: DepthMapRequest):
 
 def _run_depth_map(image_path: str, repo_id: str) -> bytes:
     from core.depth_map import generate_depth_map
-    return generate_depth_map(image_path, repo_id=repo_id)
+    # DA2 outputs disparity (larger = nearer) — no inversion needed.
+    # DA3 and others output true depth (larger = farther) — invert for white=near.
+    invert = not repo_id.startswith("depth-anything/Depth-Anything-V2")
+    return generate_depth_map(image_path, repo_id=repo_id, invert=invert)
 
 
 # ── Routes: Settings ──────────────────────────────────────────────────────────
