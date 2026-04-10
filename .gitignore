@@ -20,3 +20,10 @@ huggingface/
 .env*
 .worktrees/
 model_sources.json
+logs/
+.superpowers/
+docs/plans/
+docs/superpowers/
+node-compile-cache/
+node-jiti/
+uv-setuptools-*.lock
