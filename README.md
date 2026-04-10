@@ -3,8 +3,6 @@
 > Fully offline AI image generation and editing for **Mac Silicon (Apple MPS)**.
 > No cloud. No API keys. No subscriptions. Everything runs on your machine.
 
-![Local AI Image Gen UI](docs/screenshot.png)
-
 ---
 
 ## What it does
@@ -20,6 +18,7 @@
 - **Upscaling** — 4× single image or batch-folder upscale with any Spandrel-compatible model
 - **Workflow save/load** — save your full setup (model, params, reference images, masks) and reload it later
 - **Gallery** — browse recent outputs, drag them into reference slots, upscale or delete
+- **Depth map generation** — generate 16-bit DA3 depth maps directly from the Gallery; white = near, black = far
 - **Auto-outpaint** — automatically fill borders when the reference image is a different aspect ratio
 
 ---
@@ -130,6 +129,7 @@ Open `http://localhost:7860` in your browser.
 | **Upscale** | 4× single image or batch folder |
 | **Batch Img2Img** | Process a whole folder of images with the current settings |
 | **Video** | LTX-Video settings (only visible with LTX model) |
+| **Depth Map** | Generate a 16-bit depth PNG for the current output image |
 | **Workflows** | Save / load your full setup |
 
 ### Reference image slots
@@ -167,7 +167,8 @@ Workflows save your entire session — model, all parameters, reference images, 
 Images are saved to `~/Pictures/ultra-fast-image-gen/` by default (change in Settings).
 Each image gets a `.json` sidecar with the prompt, seed, model, and all parameters.
 
-Filename format: `YYYYMMDD_HHMMSS_seed_prompt-slug.png`
+Filename format: `YYYYMMDD_prompt-slug.png` (collisions get `_2`, `_3` suffix).
+When reference images or masks are present, a companion folder `prompt-slug/` is created alongside the image containing `params.json`, `ref_slot_N.png`, and `mask.png`.
 
 ---
 
@@ -208,23 +209,40 @@ Open **Settings** (gear icon, top-right):
 
 ```
 off-line-Image-gen-mac/
-├── server.py          ← FastAPI backend (main entry point)
-├── app.py             ← Generation logic + model management
-├── pipeline.py        ← Async bridge: FastAPI ↔ generation thread
-├── Launch.command     ← 1-click Mac launcher
-├── frontend/          ← React + Vite + TypeScript UI
+├── server.py              ← FastAPI backend + static file server (main entry point)
+├── app.py                 ← Generation logic, model management (no Gradio)
+├── pipeline.py            ← Async bridge: FastAPI ↔ generation thread (SSE)
+├── generate.py            ← CLI for Z-Image Turbo only
+├── Launch.command         ← 1-click Mac launcher (production + dev modes)
+│
+├── frontend/              ← React + Vite + TypeScript UI → builds to frontend/dist/
 │   └── src/
-│       ├── App.tsx
-│       ├── components/
-│       └── ...
+│       ├── App.tsx            ← Root: SSE handler, ref-slot logic, iterate loop
+│       ├── store.ts           ← useReducer global state
+│       ├── api.ts             ← Typed fetch helpers
+│       ├── types.ts           ← Shared TypeScript types
+│       └── components/
+│           ├── Sidebar.tsx        ← All generation params + accordions
+│           ├── Canvas.tsx         ← Result image / video + progress overlay
+│           ├── RefImagesRow.tsx   ← Reference image slots + mask editor
+│           ├── Gallery.tsx        ← Recent outputs strip
+│           ├── TopBar.tsx         ← Brand, model, device, VRAM status
+│           ├── SettingsDrawer.tsx ← HF login, model list, storage, log
+│           ├── MaskEditorModal.tsx← Rectangle mask drawing canvas
+│           └── HelpTip.tsx        ← Inline ⓘ tooltips
+│
 ├── core/
-│   ├── lora_flux2.py
-│   ├── lora_zimage.py
-│   ├── quantized_flux2.py
-│   └── workflow_utils.py
-├── models/            ← Downloaded model weights (gitignored)
-├── workflows/         ← Saved workflows
-└── logs/              ← Server logs
+│   ├── depth_map.py       ← DA3 / DA2 depth estimation → 16-bit PNG
+│   ├── lora_flux2.py      ← LoRA for FLUX.2-klein (PEFT)
+│   ├── lora_zimage.py     ← LoRA for Z-Image (forward-patch)
+│   ├── quantized_flux2.py ← 4-bit SDNQ + int8 quantization
+│   └── workflow_utils.py  ← Workflow save/load, ComfyUI importer
+│
+├── models/                ← Downloaded model weights (gitignored)
+├── lora_uploads/          ← User-uploaded LoRA files (gitignored)
+├── upscale_models/        ← Upscaler weights (gitignored)
+├── workflows/             ← Saved workflow folders
+└── logs/                  ← Server logs (server.log + timestamped snapshots)
 ```
 
 ---
