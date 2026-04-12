@@ -421,3 +421,9 @@ export async function saveModelSources(sources: ModelSource[]): Promise<void> {
     throw new Error(detail)
   }
 }
+
+export async function discoverModelSources(): Promise<{ added: number; sources: ModelSource[] }> {
+  const r = await fetch('/api/model-sources/discover')
+  if (!r.ok) throw new Error(`Discovery failed: ${r.status}`)
+  return r.json()
+}

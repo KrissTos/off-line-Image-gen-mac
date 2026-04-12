@@ -1391,6 +1391,90 @@ def api_get_model_sources():
     return {"sources": sources}
 
 
+@app.get("/api/model-sources/discover")
+def api_discover_model_sources():
+    """Search HuggingFace for new Apple Silicon-compatible models not already in the source list."""
+    from huggingface_hub import HfApi
+
+    BASE_ORGS     = {"Disty0", "Tongyi-MAI", "Lightricks", "aydin99", "black-forest-labs"}
+    LORA_ORGS     = {"fal", "nomadoor", "DeverStyle", "WarmBloodAban", "linoyts",
+                     "dx8152", "vafipas663", "valiantcat", "CodeGoat24"}
+    UPSCALER_ORGS = {"Comfy-Org", "Phips", "Kim2091", "OzzyGT", "halffried",
+                     "GraydientPlatformAPI", "uwg"}
+    ALL_ORGS = BASE_ORGS | LORA_ORGS | UPSCALER_ORGS
+
+    def _infer_type(repo_id: str, tags: list) -> str:
+        author = repo_id.split("/")[0]
+        if author in UPSCALER_ORGS:
+            return "upscaler"
+        tag_str = " ".join(tags).lower()
+        if author in LORA_ORGS or "lora" in repo_id.lower() or "lora" in tag_str:
+            return "lora"
+        return "base"
+
+    current = api_get_model_sources()["sources"]
+    existing_urls = {s["url"] for s in current}
+
+    existing_ids = [
+        int(s["id"].replace("src-", ""))
+        for s in current if s.get("id", "").startswith("src-") and s["id"][4:].isdigit()
+    ]
+    next_id = max(existing_ids, default=0) + 1
+
+    api  = HfApi()
+    candidates: list[dict] = []
+    seen_urls: set[str]    = set()
+
+    # Scan known orgs
+    for org in ALL_ORGS:
+        try:
+            for m in api.list_models(author=org, limit=50):
+                url = f"https://huggingface.co/{m.id}"
+                if url in existing_urls or url in seen_urls:
+                    continue
+                seen_urls.add(url)
+                model_tags = list(m.tags or [])
+                candidates.append({
+                    "id":           f"src-{next_id:03d}",
+                    "name":         m.id.split("/")[-1],
+                    "url":          url,
+                    "type":         _infer_type(m.id, model_tags),
+                    "description":  "",
+                    "model_choice": "",
+                })
+                next_id += 1
+        except Exception:
+            continue
+
+    # Search by MPS hardware tag (catches community models outside known orgs)
+    try:
+        for m in api.list_models(tags="mps", limit=50):
+            url = f"https://huggingface.co/{m.id}"
+            if url in existing_urls or url in seen_urls:
+                continue
+            seen_urls.add(url)
+            model_tags = list(m.tags or [])
+            candidates.append({
+                "id":           f"src-{next_id:03d}",
+                "name":         m.id.split("/")[-1],
+                "url":          url,
+                "type":         _infer_type(m.id, model_tags),
+                "description":  "",
+                "model_choice": "",
+            })
+            next_id += 1
+    except Exception:
+        pass
+
+    if candidates:
+        updated = current + candidates
+        MODEL_SOURCES_FILE.write_text(json.dumps({"version": 1, "sources": updated}, indent=2))
+    else:
+        updated = current
+
+    return {"added": len(candidates), "sources": updated}
+
+
 @app.post("/api/model-sources")
 def api_save_model_sources(payload: dict = Body(...)):
     """Save the model sources list."""
