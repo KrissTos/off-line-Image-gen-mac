@@ -1280,7 +1280,6 @@ async def api_erase_detect(req: EraseDetectRequest):
     img_id = f"{uuid.uuid4().hex}{src_path.suffix or '.png'}"
     shutil.copy2(src_path, _temp_path(img_id))
 
-    import asyncio
     from concurrent.futures import ThreadPoolExecutor
     loop = asyncio.get_event_loop()
     try:
@@ -1319,7 +1318,6 @@ async def api_erase(req: EraseRequest):
     out_name = src_path.stem + "_erased.png"
     out_path = Path(_output_dir()) / out_name
 
-    import asyncio, json as _json
     from concurrent.futures import ThreadPoolExecutor
     loop = asyncio.get_event_loop()
     try:
@@ -1333,7 +1331,7 @@ async def api_erase(req: EraseRequest):
 
     out_path.write_bytes(result_bytes)
     out_path.with_suffix(".json").write_text(
-        _json.dumps({"source": str(src_path), "operation": "watermark_removal"}, indent=2)
+        json.dumps({"source": str(src_path), "operation": "watermark_removal"}, indent=2)
     )
 
     return {"url": f"/api/output/{out_name}", "filename": out_name}
