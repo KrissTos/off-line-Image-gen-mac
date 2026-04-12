@@ -70,7 +70,7 @@ def detect_watermark(path: Path) -> bytes:
     # Keep only the largest connected component
     labeled, num_features = label(dilated)
     if num_features > 0:
-        sizes = [int((labeled == i).sum()) for i in range(1, num_features + 1)]
+        sizes = np.bincount(labeled.ravel())[1:]
         largest_idx = int(np.argmax(sizes)) + 1
         mask = (labeled == largest_idx).astype(np.uint8) * 255
     else:
@@ -101,7 +101,7 @@ def remove_watermark(image_path: Path, mask_bytes: bytes) -> bytes:
 
     mask = Image.open(io.BytesIO(mask_bytes)).convert("L")
     if mask.size != (orig_w, orig_h):
-        mask = mask.resize((orig_w, orig_h), Image.LANCZOS)
+        mask = mask.resize((orig_w, orig_h), Image.NEAREST)
 
     result = lama(orig, mask)
 
