@@ -128,6 +128,7 @@ Actions: `ADD_REF_SLOT` · `REMOVE_REF_SLOT` · `SET_SLOT_MASK` · `CLEAR_SLOT_M
 | POST | `/api/depth-map` | DA3/DA2 depth map; `{filename, model_repo}`; runs in `ThreadPoolExecutor(1)` |
 | POST | `/api/erase/detect` | FFT watermark heuristic → `{image_id, image_url, mask_id, mask_url}`; `ThreadPoolExecutor` |
 | POST | `/api/erase` | LaMa inpainting fill → `{url, filename}`; `mask_id` path-traversal guarded; `_erased_2.png` collision suffix |
+| GET | `/api/model-sources/discover` | Scan known HF orgs + `mps` tag; auto-merge new entries → `{added, sources}` |
 
 ### SSE event format
 ```json
