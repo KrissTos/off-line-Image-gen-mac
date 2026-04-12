@@ -131,6 +131,26 @@ export const generateDepthMap = (params: {
   model_repo?: string
 }) => post<DepthMapResult>('/api/depth-map', params)
 
+// ── Watermark Remover ─────────────────────────────────────────────────────────
+
+export interface EraseDetectResult {
+  image_id:  string
+  image_url: string
+  mask_id:   string
+  mask_url:  string
+}
+
+export const eraseDetect = (filePath: string) =>
+  post<EraseDetectResult>('/api/erase/detect', { file_path: filePath })
+
+export interface EraseResult {
+  url:      string
+  filename: string
+}
+
+export const eraseRemove = (filePath: string, maskId: string) =>
+  post<EraseResult>('/api/erase', { file_path: filePath, mask_id: maskId })
+
 export interface SingleUpscaleResult {
   saved_path: string
   filename:   string
