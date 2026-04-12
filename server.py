@@ -1388,7 +1388,13 @@ def api_get_model_sources():
     for s in sources:
         if "model_choice" not in s and s.get("id") in _defaults_by_id:
             s["model_choice"] = _defaults_by_id[s["id"]].get("model_choice", "")
-    return {"sources": sources}
+    return {"sources": _sort_sources(sources)}
+
+
+_TYPE_ORDER = {"base": 0, "lora": 1, "upscaler": 2}
+
+def _sort_sources(sources: list[dict]) -> list[dict]:
+    return sorted(sources, key=lambda s: _TYPE_ORDER.get(s.get("type", "base"), 3))
 
 
 @app.get("/api/model-sources/discover")
@@ -1401,7 +1407,20 @@ def api_discover_model_sources():
                      "dx8152", "vafipas663", "valiantcat", "CodeGoat24"}
     UPSCALER_ORGS = {"Comfy-Org", "Phips", "Kim2091", "OzzyGT", "halffried",
                      "GraydientPlatformAPI", "uwg"}
-    ALL_ORGS = BASE_ORGS | LORA_ORGS | UPSCALER_ORGS
+
+    # Keywords that must appear in repo name or tags for a model to be relevant
+    BASE_KW     = {"flux", "z-image", "zimage", "klein", "sdnq", "ltx", "turbo", "diffusion"}
+    LORA_KW     = {"lora"}
+    UPSCALER_KW = {"esrgan", "drct", "swinir", "hat", "upscal", "plksr", "atd",
+                   "remacri", "ultrasharp", "4x-", "4xreal", "4xnomos", "gyre"}
+
+    def _is_relevant(repo_id: str, tags: list, org_type: str) -> bool:
+        combined = (repo_id + " " + " ".join(tags)).lower()
+        if org_type == "upscaler":
+            return any(k in combined for k in UPSCALER_KW)
+        if org_type == "lora":
+            return any(k in combined for k in LORA_KW | BASE_KW)
+        return any(k in combined for k in BASE_KW)
 
     def _infer_type(repo_id: str, tags: list) -> str:
         author = repo_id.split("/")[0]
@@ -1425,15 +1444,22 @@ def api_discover_model_sources():
     candidates: list[dict] = []
     seen_urls: set[str]    = set()
 
-    # Scan known orgs
-    for org in ALL_ORGS:
+    all_orgs_typed = (
+        [(org, "base")     for org in BASE_ORGS] +
+        [(org, "lora")     for org in LORA_ORGS] +
+        [(org, "upscaler") for org in UPSCALER_ORGS]
+    )
+
+    for org, org_type in all_orgs_typed:
         try:
             for m in api.list_models(author=org, limit=50):
                 url = f"https://huggingface.co/{m.id}"
                 if url in existing_urls or url in seen_urls:
                     continue
-                seen_urls.add(url)
                 model_tags = list(m.tags or [])
+                if not _is_relevant(m.id, model_tags, org_type):
+                    continue
+                seen_urls.add(url)
                 candidates.append({
                     "id":           f"src-{next_id:03d}",
                     "name":         m.id.split("/")[-1],
@@ -1446,14 +1472,17 @@ def api_discover_model_sources():
         except Exception:
             continue
 
-    # Search by MPS hardware tag (catches community models outside known orgs)
+    # MPS tag search — keyword filter required (very broad tag)
     try:
         for m in api.list_models(tags="mps", limit=50):
             url = f"https://huggingface.co/{m.id}"
             if url in existing_urls or url in seen_urls:
                 continue
-            seen_urls.add(url)
             model_tags = list(m.tags or [])
+            combined = (m.id + " " + " ".join(model_tags)).lower()
+            if not any(k in combined for k in BASE_KW | LORA_KW | UPSCALER_KW):
+                continue
+            seen_urls.add(url)
             candidates.append({
                 "id":           f"src-{next_id:03d}",
                 "name":         m.id.split("/")[-1],
@@ -1467,10 +1496,11 @@ def api_discover_model_sources():
         pass
 
     if candidates:
-        updated = current + candidates
+        updated = _sort_sources(current + candidates)
         MODEL_SOURCES_FILE.write_text(json.dumps({"version": 1, "sources": updated}, indent=2))
     else:
-        updated = current
+        updated = _sort_sources(current)
+        MODEL_SOURCES_FILE.write_text(json.dumps({"version": 1, "sources": updated}, indent=2))
 
     return {"added": len(candidates), "sources": updated}
 
