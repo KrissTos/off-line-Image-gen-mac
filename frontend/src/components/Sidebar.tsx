@@ -3,10 +3,12 @@ import {
   ChevronDown, ChevronRight, Play, Square,
   Layers, Sliders, Video, UploadCloud, X, Workflow, Cpu,
   Wand2, ArrowUpCircle, FolderInput, ListOrdered, FolderOpen, ImagePlus, Plus,
+  Eraser,
 } from 'lucide-react'
 import type { GenerateParams, RefImageSlot, LoraSlot } from '../types'
-import { importComfyUI, loadWorkflow, saveWorkflow, uploadLora, uploadUpscaleModel, streamBatchUpscale, streamBatchGenerate, openFolderDialog, openFileDialog, upscaleSingleImage, updateSettings, openWorkflowFolderDialog, listLoras, stopGeneration, generateDepthMap } from '../api'
+import { importComfyUI, loadWorkflow, saveWorkflow, uploadLora, uploadUpscaleModel, streamBatchUpscale, streamBatchGenerate, openFolderDialog, openFileDialog, upscaleSingleImage, updateSettings, openWorkflowFolderDialog, listLoras, stopGeneration, generateDepthMap, eraseDetect, eraseRemove } from '../api'
 import HelpTip from './HelpTip'
+import EraseEditorModal from './EraseEditorModal'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -924,6 +926,176 @@ function WorkflowPanel({ workflows, params, refSlots, onLoad, onRefresh, onImpor
   )
 }
 
+// ── Watermark Remover panel ───────────────────────────────────────────────────
+
+interface WatermarkPanelProps {
+  onRefresh: () => void
+  onStatus:  (msg: string) => void
+}
+
+function WatermarkPanel({ onRefresh, onStatus }: WatermarkPanelProps) {
+  const [filePath,      setFilePath]      = useState('')
+  const [imageUrl,      setImageUrl]      = useState<string | null>(null)
+  const [maskId,        setMaskId]        = useState<string | null>(null)
+  const [maskUrl,       setMaskUrl]       = useState<string | null>(null)
+  const [detectionMsg,  setDetectionMsg]  = useState('')
+  const [isDetecting,   setIsDetecting]   = useState(false)
+  const [isRemoving,    setIsRemoving]    = useState(false)
+  const [showEditor,    setShowEditor]    = useState(false)
+  const [picking,       setPicking]       = useState(false)
+
+  async function handlePick() {
+    setPicking(true)
+    try {
+      const data = await openFileDialog()
+      if (!data.cancelled && data.path) {
+        setFilePath(data.path)
+        setImageUrl(null)
+        setMaskId(null)
+        setMaskUrl(null)
+        setDetectionMsg('')
+      }
+    } catch (e: unknown) {
+      onStatus(`File picker error: ${(e as Error).message}`)
+    } finally {
+      setPicking(false)
+    }
+  }
+
+  async function handleDetect() {
+    if (!filePath.trim()) { onStatus('⚠ Pick an image file first'); return }
+    setIsDetecting(true)
+    setMaskId(null)
+    setMaskUrl(null)
+    setDetectionMsg('')
+    try {
+      const result = await eraseDetect(filePath.trim())
+      setImageUrl(result.image_url)
+      setMaskId(result.mask_id)
+      setMaskUrl(result.mask_url)
+      setDetectionMsg('Watermark region detected — edit mask if needed')
+    } catch (e: unknown) {
+      onStatus(`Detection failed: ${(e as Error).message}`)
+      setDetectionMsg('Detection failed — draw mask manually')
+    } finally {
+      setIsDetecting(false)
+    }
+  }
+
+  async function handleRemove() {
+    if (!filePath.trim() || !maskId) { onStatus('⚠ Run detection first'); return }
+    setIsRemoving(true)
+    try {
+      const result = await eraseRemove(filePath.trim(), maskId)
+      onStatus(`✓ Saved: ${result.filename}`)
+      onRefresh()
+    } catch (e: unknown) {
+      onStatus(`Removal failed: ${(e as Error).message}`)
+    } finally {
+      setIsRemoving(false)
+    }
+  }
+
+  const busy = isDetecting || isRemoving || picking
+
+  return (
+    <div className="space-y-3">
+      {/* File picker */}
+      <div>
+        <label className="text-xs text-muted block mb-1">Image</label>
+        <div className="flex gap-2">
+          <input
+            type="text"
+            value={filePath}
+            onChange={e => setFilePath(e.target.value)}
+            placeholder="/Users/you/Pictures/photo.png"
+            className="flex-1 bg-card border border-border rounded-md px-3 py-1.5 text-xs text-white
+                       placeholder-muted focus:outline-none focus:border-accent transition-colors"
+          />
+          <button
+            onClick={handlePick}
+            disabled={busy}
+            title="Browse for image"
+            aria-label="Browse for image"
+            className="px-2 py-1.5 rounded-md bg-card border border-border text-muted
+                       hover:text-white hover:border-accent transition-colors disabled:opacity-50 shrink-0"
+          >
+            <FolderOpen size={13} aria-hidden="true" />
+          </button>
+        </div>
+      </div>
+
+      {/* Detect button */}
+      <button
+        onClick={handleDetect}
+        disabled={busy || !filePath.trim()}
+        className="w-full py-2 rounded-lg bg-card border border-border text-white text-xs font-medium
+                   flex items-center justify-center gap-2 transition-colors
+                   hover:border-accent disabled:opacity-40 disabled:cursor-not-allowed"
+      >
+        <Eraser size={13} />
+        {isDetecting ? 'Detecting…' : 'Detect Watermark'}
+      </button>
+
+      {/* Preview + mask overlay */}
+      {imageUrl && (
+        <div className="relative rounded-md overflow-hidden bg-black">
+          <img src={imageUrl} alt="source" className="w-full object-contain max-h-48 select-none" />
+          {maskUrl && (
+            <img
+              src={maskUrl}
+              alt="mask"
+              className="absolute inset-0 w-full h-full object-contain pointer-events-none"
+              style={{ opacity: 0.45, mixBlendMode: 'screen', filter: 'sepia(1) saturate(8) hue-rotate(300deg)' }}
+            />
+          )}
+        </div>
+      )}
+
+      {/* Detection status message */}
+      {detectionMsg && (
+        <p className="text-[10px] text-muted leading-snug">{detectionMsg}</p>
+      )}
+
+      {/* Edit mask / Remove buttons — only show after detection */}
+      {imageUrl && (
+        <div className="flex gap-2">
+          <button
+            onClick={() => setShowEditor(true)}
+            disabled={busy}
+            className="flex-1 py-1.5 rounded-md bg-card border border-border text-xs text-muted
+                       hover:text-white hover:border-accent transition-colors disabled:opacity-40"
+          >
+            Edit Mask
+          </button>
+          <button
+            onClick={handleRemove}
+            disabled={busy || !maskId}
+            className="flex-1 py-1.5 rounded-lg bg-accent hover:bg-accent/80 text-white text-xs font-medium
+                       flex items-center justify-center gap-1.5 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {isRemoving ? 'Removing…' : 'Remove'}
+          </button>
+        </div>
+      )}
+
+      {/* Editor modal */}
+      {showEditor && imageUrl && (
+        <EraseEditorModal
+          imageUrl={imageUrl}
+          initialMaskUrl={maskUrl}
+          onClose={() => setShowEditor(false)}
+          onConfirm={(id, url) => {
+            setMaskId(id)
+            setMaskUrl(url)
+            setShowEditor(false)
+          }}
+        />
+      )}
+    </div>
+  )
+}
+
 // ── Depth Map panel ───────────────────────────────────────────────────────────
 
 interface DepthMapPanelProps {
@@ -1330,6 +1502,14 @@ export default function Sidebar({
             onParamChange('depth_model_repo', repo)
             try { await updateSettings({ depth_model_repo: repo }) } catch { /* non-fatal */ }
           }}
+          onRefresh={onRefresh}
+          onStatus={onStatus}
+        />
+      </Accordion>
+
+      {/* Watermark Remover */}
+      <Accordion label="Watermark Remover" icon={<Eraser size={13} />}>
+        <WatermarkPanel
           onRefresh={onRefresh}
           onStatus={onStatus}
         />
