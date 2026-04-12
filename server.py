@@ -1258,6 +1258,97 @@ def _run_depth_map(image_path: str, repo_id: str) -> bytes:
     return generate_depth_map(image_path, repo_id=repo_id, invert=invert)
 
 
+# ── Routes: Watermark Remover ─────────────────────────────────────────────────
+
+class EraseDetectRequest(BaseModel):
+    file_path: str
+
+
+class EraseRequest(BaseModel):
+    file_path: str
+    mask_id:   str
+
+
+@app.post("/api/erase/detect")
+async def api_erase_detect(req: EraseDetectRequest):
+    """Run heuristic watermark detection. Returns temp URLs for image + mask."""
+    src_path = Path(req.file_path)
+    if not src_path.exists():
+        raise HTTPException(400, f"File not found: {src_path}")
+
+    # Copy source image to temp so frontend can preview it
+    img_id = f"{uuid.uuid4().hex}{src_path.suffix or '.png'}"
+    shutil.copy2(src_path, _temp_path(img_id))
+
+    import asyncio
+    from concurrent.futures import ThreadPoolExecutor
+    loop = asyncio.get_event_loop()
+    try:
+        with ThreadPoolExecutor(1) as pool:
+            mask_bytes = await loop.run_in_executor(
+                pool, lambda: _run_erase_detect(str(src_path))
+            )
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        raise HTTPException(500, f"Detection failed: {e}")
+
+    mask_id = f"{uuid.uuid4().hex}.png"
+    _temp_path(mask_id).write_bytes(mask_bytes)
+
+    return {
+        "image_id":  img_id,
+        "image_url": f"/api/temp/{img_id}",
+        "mask_id":   mask_id,
+        "mask_url":  f"/api/temp/{mask_id}",
+    }
+
+
+@app.post("/api/erase")
+async def api_erase(req: EraseRequest):
+    """Fill the masked region with LaMa inpainting. Saves result to output dir."""
+    src_path = Path(req.file_path)
+    if not src_path.exists():
+        raise HTTPException(400, f"File not found: {src_path}")
+
+    mask_path = _temp_path(req.mask_id)
+    if not mask_path.exists():
+        raise HTTPException(400, f"Mask not found: {req.mask_id}")
+
+    mask_bytes = mask_path.read_bytes()
+
+    out_name = src_path.stem + "_erased.png"
+    out_path = Path(_output_dir()) / out_name
+
+    import asyncio, json as _json
+    from concurrent.futures import ThreadPoolExecutor
+    loop = asyncio.get_event_loop()
+    try:
+        with ThreadPoolExecutor(1) as pool:
+            result_bytes = await loop.run_in_executor(
+                pool, lambda: _run_erase(str(src_path), mask_bytes)
+            )
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        raise HTTPException(500, f"Watermark removal failed: {e}")
+
+    out_path.write_bytes(result_bytes)
+    out_path.with_suffix(".json").write_text(
+        _json.dumps({"source": str(src_path), "operation": "watermark_removal"}, indent=2)
+    )
+
+    return {"url": f"/api/output/{out_name}", "filename": out_name}
+
+
+def _run_erase_detect(image_path: str) -> bytes:
+    from core.erase import detect_watermark
+    return detect_watermark(Path(image_path))
+
+
+def _run_erase(image_path: str, mask_bytes: bytes) -> bytes:
+    from core.erase import remove_watermark
+    return remove_watermark(Path(image_path), mask_bytes)
+
+
 # ── Routes: Settings ──────────────────────────────────────────────────────────
 
 @app.get("/api/settings")
