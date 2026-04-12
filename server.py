@@ -1310,12 +1310,19 @@ async def api_erase(req: EraseRequest):
         raise HTTPException(400, f"File not found: {src_path}")
 
     mask_path = _temp_path(req.mask_id)
+    if not mask_path.resolve().is_relative_to(TEMP_DIR.resolve()):
+        raise HTTPException(400, "Invalid mask_id")
     if not mask_path.exists():
         raise HTTPException(400, f"Mask not found: {req.mask_id}")
 
     mask_bytes = mask_path.read_bytes()
 
-    out_name = src_path.stem + "_erased.png"
+    base_name = src_path.stem + "_erased"
+    out_name  = f"{base_name}.png"
+    counter   = 2
+    while (Path(_output_dir()) / out_name).exists():
+        out_name = f"{base_name}_{counter}.png"
+        counter += 1
     out_path = Path(_output_dir()) / out_name
 
     from concurrent.futures import ThreadPoolExecutor

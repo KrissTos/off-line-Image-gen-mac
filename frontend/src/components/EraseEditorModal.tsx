@@ -21,6 +21,7 @@ export default function EraseEditorModal({ imageUrl, initialMaskUrl, onClose, on
   const [tool,        setTool]        = useState<Tool>('rect')
   const [brushSize,   setBrushSize]   = useState(20)
   const [applying,    setApplying]    = useState(false)
+  const [uploadError, setUploadError] = useState<string | null>(null)
 
   // Rect tool state
   const [rect, setRect]   = useState<{ x: number; y: number; w: number; h: number } | null>(null)
@@ -187,6 +188,7 @@ export default function EraseEditorModal({ imageUrl, initialMaskUrl, onClose, on
 
   async function handleConfirm() {
     setApplying(true)
+    setUploadError(null)
     try {
       const mc = maskRef.current!
       const blob: Blob = await new Promise(res => mc.toBlob(b => res(b!), 'image/png'))
@@ -197,7 +199,7 @@ export default function EraseEditorModal({ imageUrl, initialMaskUrl, onClose, on
       const { id, url } = await r.json()
       onConfirm(id, url)
     } catch (err) {
-      console.error('Mask upload failed', err)
+      setUploadError((err as Error).message ?? 'Upload failed')
     } finally {
       setApplying(false)
     }
@@ -288,6 +290,9 @@ export default function EraseEditorModal({ imageUrl, initialMaskUrl, onClose, on
         </div>
 
         {/* Footer */}
+        {uploadError && (
+          <p className="text-[10px] text-red-400">{uploadError}</p>
+        )}
         <div className="flex justify-end gap-2">
           <button
             onClick={onClose}
