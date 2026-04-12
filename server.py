@@ -1401,6 +1401,11 @@ def api_discover_model_sources():
     """Search HuggingFace for new Apple Silicon-compatible models not already in the source list."""
     from huggingface_hub import HfApi
 
+    # Repo IDs that are incompatible with Apple Silicon — never add these
+    BLOCKLIST = {
+        "black-forest-labs/FLUX.2-klein-9b-fp8",  # FP8: no native MPS support
+    }
+
     BASE_ORGS     = {"Disty0", "Tongyi-MAI", "Lightricks", "aydin99", "black-forest-labs"}
     LORA_ORGS     = {"fal", "nomadoor", "DeverStyle", "WarmBloodAban", "linoyts",
                      "dx8152", "vafipas663", "valiantcat", "CodeGoat24"}
@@ -1453,7 +1458,7 @@ def api_discover_model_sources():
         try:
             for m in api.list_models(author=org, limit=50):
                 url = f"https://huggingface.co/{m.id}"
-                if url in existing_urls or url in seen_urls:
+                if url in existing_urls or url in seen_urls or m.id in BLOCKLIST:
                     continue
                 model_tags = list(m.tags or [])
                 if not _is_relevant(m.id, model_tags, org_type):
@@ -1475,7 +1480,7 @@ def api_discover_model_sources():
     try:
         for m in api.list_models(tags="mps", limit=50):
             url = f"https://huggingface.co/{m.id}"
-            if url in existing_urls or url in seen_urls:
+            if url in existing_urls or url in seen_urls or m.id in BLOCKLIST:
                 continue
             model_tags = list(m.tags or [])
             combined = (m.id + " " + " ".join(model_tags)).lower()
