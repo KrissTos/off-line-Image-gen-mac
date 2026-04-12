@@ -8,7 +8,7 @@ import {
   fetchStorage, fetchSettings, updateSettings, fetchModels, deleteModel,
   checkModelUpdates, streamUpdateModel, openFolderDialog, openOutputFolder,
   fetchModelExtras, deleteUpscaleModel,
-  fetchModelSources, saveModelSources,
+  fetchModelSources, saveModelSources, discoverModelSources,
   type ModelUpdateResult, type ModelExtras, type ModelSource,
 } from '../api'
 import { applyThemeColors } from '../App'
@@ -79,13 +79,15 @@ export default function SettingsDrawer({ open, onClose }: Props) {
   const [savingLog, setSavingLog] = useState(false)
   const [logSaved,  setLogSaved]  = useState(false)
   // Model Sources
-  const [sources, setSources]             = useState<ModelSource[]>([])
-  const [sourcesLoaded, setSourcesLoaded] = useState(false)
-  const [addingSource, setAddingSource]   = useState(false)
-  const [newSource, setNewSource]         = useState<Omit<ModelSource, 'id'>>({
+  const [sources, setSources]               = useState<ModelSource[]>([])
+  const [sourcesLoaded, setSourcesLoaded]   = useState(false)
+  const [addingSource, setAddingSource]     = useState(false)
+  const [newSource, setNewSource]           = useState<Omit<ModelSource, 'id'>>({
     name: '', url: '', type: 'base', description: ''
   })
   const [downloadingSource, setDownloadingSource] = useState<string | null>(null)
+  const [discovering, setDiscovering]       = useState(false)
+  const [discoverMsg, setDiscoverMsg]       = useState<string | null>(null)
 
   const loadData = useCallback(async () => {
     setRefreshing(true)
@@ -292,6 +294,21 @@ export default function SettingsDrawer({ open, onClose }: Props) {
       setStatusMsg(`Log save failed: ${(e as Error).message}`)
     } finally {
       setSavingLog(false)
+    }
+  }
+
+  async function handleDiscoverSources() {
+    setDiscovering(true)
+    setDiscoverMsg(null)
+    try {
+      const { added, sources: updated } = await discoverModelSources()
+      setSources(updated)
+      setDiscoverMsg(added > 0 ? `${added} new source${added > 1 ? 's' : ''} added` : 'Already up to date')
+    } catch {
+      setDiscoverMsg('Could not reach HuggingFace')
+    } finally {
+      setDiscovering(false)
+      setTimeout(() => setDiscoverMsg(null), 4000)
     }
   }
 
@@ -760,9 +777,25 @@ export default function SettingsDrawer({ open, onClose }: Props) {
 
           {/* ── Model Sources ── */}
           <section>
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-label mb-3 flex items-center gap-1.5">
-              <Globe size={13} /> Model Sources
-            </h3>
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-label flex items-center gap-1.5">
+                <Globe size={13} /> Model Sources
+              </h3>
+              <div className="flex items-center gap-2">
+                {discoverMsg && (
+                  <span className="text-[10px] text-muted/80">{discoverMsg}</span>
+                )}
+                <button
+                  onClick={handleDiscoverSources}
+                  disabled={discovering}
+                  title="Search HuggingFace for new Apple Silicon compatible models"
+                  className="flex items-center gap-1 text-[10px] px-2 py-1 rounded bg-white/5 hover:bg-white/10 text-muted hover:text-white transition-colors disabled:opacity-40"
+                >
+                  <RefreshCw size={10} className={discovering ? 'animate-spin' : ''} />
+                  Update
+                </button>
+              </div>
+            </div>
             <p className="text-[10px] text-muted/70 mb-3">
               Curated Mac Silicon models. User-editable — add your own sources.
             </p>

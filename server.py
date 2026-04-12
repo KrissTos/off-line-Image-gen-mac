@@ -1258,6 +1258,102 @@ def _run_depth_map(image_path: str, repo_id: str) -> bytes:
     return generate_depth_map(image_path, repo_id=repo_id, invert=invert)
 
 
+# ── Routes: Watermark Remover ─────────────────────────────────────────────────
+
+class EraseDetectRequest(BaseModel):
+    file_path: str
+
+
+class EraseRequest(BaseModel):
+    file_path: str
+    mask_id:   str
+
+
+@app.post("/api/erase/detect")
+async def api_erase_detect(req: EraseDetectRequest):
+    """Run heuristic watermark detection. Returns temp URLs for image + mask."""
+    src_path = Path(req.file_path)
+    if not src_path.exists():
+        raise HTTPException(400, f"File not found: {src_path}")
+
+    # Copy source image to temp so frontend can preview it
+    img_id = f"{uuid.uuid4().hex}{src_path.suffix or '.png'}"
+    shutil.copy2(src_path, _temp_path(img_id))
+
+    from concurrent.futures import ThreadPoolExecutor
+    loop = asyncio.get_event_loop()
+    try:
+        with ThreadPoolExecutor(1) as pool:
+            mask_bytes = await loop.run_in_executor(
+                pool, lambda: _run_erase_detect(str(src_path))
+            )
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        raise HTTPException(500, f"Detection failed: {e}")
+
+    mask_id = f"{uuid.uuid4().hex}.png"
+    _temp_path(mask_id).write_bytes(mask_bytes)
+
+    return {
+        "image_id":  img_id,
+        "image_url": f"/api/temp/{img_id}",
+        "mask_id":   mask_id,
+        "mask_url":  f"/api/temp/{mask_id}",
+    }
+
+
+@app.post("/api/erase")
+async def api_erase(req: EraseRequest):
+    """Fill the masked region with LaMa inpainting. Saves result to output dir."""
+    src_path = Path(req.file_path)
+    if not src_path.exists():
+        raise HTTPException(400, f"File not found: {src_path}")
+
+    mask_path = _temp_path(req.mask_id)
+    if not mask_path.resolve().is_relative_to(TEMP_DIR.resolve()):
+        raise HTTPException(400, "Invalid mask_id")
+    if not mask_path.exists():
+        raise HTTPException(400, f"Mask not found: {req.mask_id}")
+
+    mask_bytes = mask_path.read_bytes()
+
+    base_name = src_path.stem + "_erased"
+    out_name  = f"{base_name}.png"
+    counter   = 2
+    while (Path(_output_dir()) / out_name).exists():
+        out_name = f"{base_name}_{counter}.png"
+        counter += 1
+    out_path = Path(_output_dir()) / out_name
+
+    from concurrent.futures import ThreadPoolExecutor
+    loop = asyncio.get_event_loop()
+    try:
+        with ThreadPoolExecutor(1) as pool:
+            result_bytes = await loop.run_in_executor(
+                pool, lambda: _run_erase(str(src_path), mask_bytes)
+            )
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        raise HTTPException(500, f"Watermark removal failed: {e}")
+
+    out_path.write_bytes(result_bytes)
+    out_path.with_suffix(".json").write_text(
+        json.dumps({"source": str(src_path), "operation": "watermark_removal"}, indent=2)
+    )
+
+    return {"url": f"/api/output/{out_name}", "filename": out_name}
+
+
+def _run_erase_detect(image_path: str) -> bytes:
+    from core.erase import detect_watermark
+    return detect_watermark(Path(image_path))
+
+
+def _run_erase(image_path: str, mask_bytes: bytes) -> bytes:
+    from core.erase import remove_watermark
+    return remove_watermark(Path(image_path), mask_bytes)
+
+
 # ── Routes: Settings ──────────────────────────────────────────────────────────
 
 @app.get("/api/settings")
@@ -1293,6 +1389,90 @@ def api_get_model_sources():
         if "model_choice" not in s and s.get("id") in _defaults_by_id:
             s["model_choice"] = _defaults_by_id[s["id"]].get("model_choice", "")
     return {"sources": sources}
+
+
+@app.get("/api/model-sources/discover")
+def api_discover_model_sources():
+    """Search HuggingFace for new Apple Silicon-compatible models not already in the source list."""
+    from huggingface_hub import HfApi
+
+    BASE_ORGS     = {"Disty0", "Tongyi-MAI", "Lightricks", "aydin99", "black-forest-labs"}
+    LORA_ORGS     = {"fal", "nomadoor", "DeverStyle", "WarmBloodAban", "linoyts",
+                     "dx8152", "vafipas663", "valiantcat", "CodeGoat24"}
+    UPSCALER_ORGS = {"Comfy-Org", "Phips", "Kim2091", "OzzyGT", "halffried",
+                     "GraydientPlatformAPI", "uwg"}
+    ALL_ORGS = BASE_ORGS | LORA_ORGS | UPSCALER_ORGS
+
+    def _infer_type(repo_id: str, tags: list) -> str:
+        author = repo_id.split("/")[0]
+        if author in UPSCALER_ORGS:
+            return "upscaler"
+        tag_str = " ".join(tags).lower()
+        if author in LORA_ORGS or "lora" in repo_id.lower() or "lora" in tag_str:
+            return "lora"
+        return "base"
+
+    current = api_get_model_sources()["sources"]
+    existing_urls = {s["url"] for s in current}
+
+    existing_ids = [
+        int(s["id"].replace("src-", ""))
+        for s in current if s.get("id", "").startswith("src-") and s["id"][4:].isdigit()
+    ]
+    next_id = max(existing_ids, default=0) + 1
+
+    api  = HfApi()
+    candidates: list[dict] = []
+    seen_urls: set[str]    = set()
+
+    # Scan known orgs
+    for org in ALL_ORGS:
+        try:
+            for m in api.list_models(author=org, limit=50):
+                url = f"https://huggingface.co/{m.id}"
+                if url in existing_urls or url in seen_urls:
+                    continue
+                seen_urls.add(url)
+                model_tags = list(m.tags or [])
+                candidates.append({
+                    "id":           f"src-{next_id:03d}",
+                    "name":         m.id.split("/")[-1],
+                    "url":          url,
+                    "type":         _infer_type(m.id, model_tags),
+                    "description":  "",
+                    "model_choice": "",
+                })
+                next_id += 1
+        except Exception:
+            continue
+
+    # Search by MPS hardware tag (catches community models outside known orgs)
+    try:
+        for m in api.list_models(tags="mps", limit=50):
+            url = f"https://huggingface.co/{m.id}"
+            if url in existing_urls or url in seen_urls:
+                continue
+            seen_urls.add(url)
+            model_tags = list(m.tags or [])
+            candidates.append({
+                "id":           f"src-{next_id:03d}",
+                "name":         m.id.split("/")[-1],
+                "url":          url,
+                "type":         _infer_type(m.id, model_tags),
+                "description":  "",
+                "model_choice": "",
+            })
+            next_id += 1
+    except Exception:
+        pass
+
+    if candidates:
+        updated = current + candidates
+        MODEL_SOURCES_FILE.write_text(json.dumps({"version": 1, "sources": updated}, indent=2))
+    else:
+        updated = current
+
+    return {"added": len(candidates), "sources": updated}
 
 
 @app.post("/api/model-sources")
