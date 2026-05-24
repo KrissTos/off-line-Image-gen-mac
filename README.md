@@ -3,6 +3,8 @@
 > Fully offline AI image generation and editing for **Mac Silicon (Apple MPS)**.
 > No cloud. No API keys. No subscriptions. Everything runs on your machine.
 
+> **Standalone project.** Started as a fork of [newideas99/ultra-fast-image-gen](https://github.com/newideas99/ultra-fast-image-gen) but has diverged significantly — Gradio replaced with a FastAPI backend + React UI, new features (batch img2img, depth maps, watermark removal, LoRA stacking, iterative inpainting), and a different architecture overall. Not intended to track upstream.
+
 ---
 
 ## What it does

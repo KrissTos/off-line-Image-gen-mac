@@ -187,6 +187,8 @@ Tailwind tokens: `bg:#0a0a0a` · `surface:#141414` · `card:#1c1c1c` · `border:
 - **FastAPI route order**: SPA wildcard `/{path:path}` must be LAST — routes after it are unreachable
 - **HF auth endpoints must be sync `def`**: blocking calls (`whoami()`, `os.walk`) — `async def` blocks event loop
 - **Multi-LoRA stacking**: `lora_files: LoraSlot[]` (up to 5); named adapters in `load_loras()`; `if not lora_files` (not `is None`) for legacy fallback
+- **LoRA in Sidebar**: `LoraSlot` has `name?`/`model_type?`; populated on select/upload for sidecar completeness. LoRA `Accordion` uses `key={lora_files.length > 0 ? 'lora-has-files' : 'lora-empty'}` + `defaultOpen={lora_files.length > 0}` — forces re-mount to auto-open when params loaded from gallery (`useState(defaultOpen)` only reads at mount)
+- **Gallery "Load Params"** (`handleLoadParams` in `App.tsx`): restores prompt, model, size, steps, seed, lora_files, repeat_count, upscale_enabled, upscale_model_path, num_frames, fps. `repeat_count` must be declared in `OutputItem` (not auto-typed from API). device not restored (always MPS)
 - **Batch img2img stop**: `stop_requested` is the public property — never access `_stop_event` directly from `server.py`
 - **Default model**: stored as `default_model` in `app_settings.json`; bootstrap in `App.tsx` reads it after `fetchSettings()`
 - **DA3 depth map**: `depth-anything/DA3MONO-LARGE` (official); DA3 = invert, DA2 = no invert; output LANCZOS-resized to source resolution; GS/3D export deps mocked via `sys.modules`

@@ -314,8 +314,12 @@ function LoraPanel({ loraFiles, onChange, onStatus, modelChoice }: LoraPanelProp
     setUploading(idx)
     try {
       const { path, name } = await uploadLora(file)
-      refreshLibrary()
-      const updated = loraFiles.map((s, i) => i === idx ? { ...s, path } : s)
+      const freshLibrary = await listLoras().then(r => r.files).catch(() => library)
+      setLibrary(freshLibrary)
+      const entry = freshLibrary.find(l => l.path === path)
+      const updated = loraFiles.map((s, i) =>
+        i === idx ? { ...s, path, name, model_type: entry?.model_type } : s
+      )
       onChange(updated)
       onStatus(`✓ LoRA uploaded: ${name}`)
     } catch (e: unknown) {
@@ -337,7 +341,10 @@ function LoraPanel({ loraFiles, onChange, onStatus, modelChoice }: LoraPanelProp
   }
 
   function setPath(idx: number, path: string) {
-    onChange(loraFiles.map((s, i) => i === idx ? { ...s, path } : s))
+    const entry = library.find(l => l.path === path)
+    onChange(loraFiles.map((s, i) =>
+      i === idx ? { ...s, path, name: entry?.name, model_type: entry?.model_type } : s
+    ))
   }
 
   function setStrength(idx: number, strength: number) {
@@ -1444,7 +1451,12 @@ export default function Sidebar({
 
       {/* LoRA */}
       {(isZImageFull || isFlux) && (
-        <Accordion label="LoRA" icon={<Wand2 size={13} />}>
+        <Accordion
+          key={params.lora_files.length > 0 ? 'lora-has-files' : 'lora-empty'}
+          label="LoRA"
+          icon={<Wand2 size={13} />}
+          defaultOpen={params.lora_files.length > 0}
+        >
           <LoraPanel
             loraFiles={params.lora_files}
             onChange={files => onParamChange('lora_files', files)}

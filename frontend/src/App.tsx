@@ -492,9 +492,12 @@ export default function App() {
       if (item.img_strength  != null) p.img_strength  = item.img_strength
       if (item.mask_mode     != null) p.mask_mode     = item.mask_mode
       if (item.outpaint_align!= null) p.outpaint_align= item.outpaint_align
-      if (item.lora_files    != null) p.lora_files    = item.lora_files
-      if (item.num_frames    != null) p.num_frames    = item.num_frames
-      if (item.fps           != null) p.fps           = item.fps
+      if (item.lora_files        != null) p.lora_files        = item.lora_files
+      if (item.repeat_count      != null) p.repeat_count      = item.repeat_count
+      if (item.upscale_enabled   != null) p.upscale_enabled   = item.upscale_enabled
+      if (item.upscale_model_path!= null) p.upscale_model_path= item.upscale_model_path
+      if (item.num_frames        != null) p.num_frames        = item.num_frames
+      if (item.fps               != null) p.fps               = item.fps
       dispatch({ type: 'SET_PARAMS', params: p })
 
       // Restore ref images + mask from companion folder

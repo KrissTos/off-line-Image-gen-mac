@@ -1,8 +1,10 @@
 // ── Domain types ──────────────────────────────────────────────────────────────
 
 export interface LoraSlot {
-  path:     string   // absolute path on server (inside lora_uploads/)
-  strength: number   // 0–2
+  path:        string   // absolute path on server (inside lora_uploads/)
+  strength:    number   // 0–2
+  name?:       string   // filename label (for sidecar JSON readability)
+  model_type?: string   // 'flux' | 'zimage' | 'unknown'
 }
 
 export interface AppStatus {
@@ -77,7 +79,8 @@ export interface OutputItem {
   img_strength?:      number
   mask_mode?:         string
   outpaint_align?:    string
-  lora_files?:        { path: string; strength: number }[]
+  lora_files?:        LoraSlot[]
+  repeat_count?:      number
   upscale_enabled?:   boolean
   upscale_model_path?: string
   num_frames?:        number

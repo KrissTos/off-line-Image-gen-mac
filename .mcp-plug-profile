@@ -1,0 +1,27 @@
+# mcp-toggle project profile — commit this file to share with the team
+
+# CC servers
+exa
+firecrawl
+mcp-obsidian
+sequential-thinking
+
+# CC servers (disabled)
+disabled:blender
+disabled:comfyui
+
+# CC plugins
+plugin:caveman@caveman
+plugin:commit-commands@claude-plugins-official
+plugin:context7@claude-plugins-official
+plugin:github@claude-plugins-official
+plugin:superpowers@claude-plugins-official
+
+# CC plugins (disabled)
+disabled:plugin:claude-code-setup@claude-plugins-official
+disabled:plugin:code-review@claude-plugins-official
+disabled:plugin:code-simplifier@claude-plugins-official
+disabled:plugin:comfy@comfyui-mcp
+disabled:plugin:context-mode@context-mode
+disabled:plugin:frontend-design@claude-plugins-official
+disabled:plugin:playground@claude-plugins-official
