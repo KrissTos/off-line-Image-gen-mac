@@ -233,6 +233,7 @@ class PipelineManager:
                 mask_image        = params.get("mask_image"),       # PIL or None
                 mask_mode         = params.get("mask_mode", "Crop & Composite (Fast)"),
                 outpaint_align    = params.get("outpaint_align", "center"),
+                fast_preview      = bool(params.get("fast_preview", False)),
                 progress          = _NoOpProgress(track_tqdm=True),
                 step_callback     = self._make_step_callback(queue, loop),
             )

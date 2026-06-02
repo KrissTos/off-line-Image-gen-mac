@@ -42,7 +42,7 @@ _APP_MODEL_REPOS: dict[str, str] = {
     "FLUX.2-klein-4B (Int8)":                         "aydin99/FLUX.2-klein-4B-int8",
     "Z-Image Turbo (Quantized - Fast)":               "Disty0/Z-Image-Turbo-SDNQ-uint4-svd-r32",
     "Z-Image Turbo (Full - LoRA support)":            "Tongyi-MAI/Z-Image-Turbo",
-    "LTX-Video  (txt2video · img2video with ref)":    "a-r-r-o-w/LTX-Video-0.9.7-diffusers",
+    "LTX-Video  (txt2video · img2video with ref)":    "Lightricks/LTX-Video-0.9.8-13B-distilled",
 }
 
 # ── Standard built-in ComfyUI node types we recognise ───────────────────────

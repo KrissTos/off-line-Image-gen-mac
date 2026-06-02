@@ -1534,6 +1534,13 @@ export default function Sidebar({
             onChange={v => onParamChange('num_frames', v)} />
           <Slider label="FPS"    value={params.fps}        min={4} max={60}
             onChange={v => onParamChange('fps', v)} />
+          <div className="flex items-center gap-1">
+            <div className="flex-1">
+              <Toggle label="Fast preview" value={params.fast_preview}
+                onChange={v => onParamChange('fast_preview', v)} />
+            </div>
+            <HelpTip text="Single-pass distilled render — ~2–3× faster, lower texture detail. Off = multiscale (gen → 2× upsample → denoise) for best quality." />
+          </div>
         </Accordion>
       )}
 

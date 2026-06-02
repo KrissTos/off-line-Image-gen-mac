@@ -37,6 +37,7 @@ export interface GenerateParams {
   upscale_model_path: string
   num_frames:         number
   fps:                number
+  fast_preview:       boolean
   mask_mode:          string
   outpaint_align:     string
   depth_model_repo:   string
@@ -85,6 +86,7 @@ export interface OutputItem {
   upscale_model_path?: string
   num_frames?:        number
   fps?:               number
+  fast_preview?:      boolean
   device?:            string
   ref_image_count?:   number
   has_mask?:          boolean

@@ -1,6 +1,6 @@
 # off-line-Image-gen-mac — Project Notes
 
-<!-- TOC: maintaining · what-is · entry-points · run · architecture · api-table · sse-events · state-slots · iterate-masks · models · deps · gitignore · known-issues · features -->
+<!-- TOC: maintaining · workflow-defaults · what-is · entry-points · run · architecture · api-table · sse-events · state-slots · iterate-masks · models · deps · gitignore · known-issues · features -->
 
 ## Maintaining this file
 - **Single file only** — never split into multiple docs; one file is easier for AI sessions to load and reason about
@@ -14,6 +14,15 @@
 - **`quick:` prefix** — user signals direct implementation; skip brainstorm/plan/subagents entirely, just write the code
 - **1–2 files, clear requirements** → implement directly, no brainstorm/plan needed
 - **3+ files, or design is unclear** → full superpowers flow (brainstorm → spec → plan → subagent-driven-development)
+
+## Workflow defaults (anti-rework)
+> `server.py` was reworked 16× across sessions — these defaults exist to stop that loop.
+- **Plan mode first** for any edit to `server.py` / `app.py` or touching 2+ files — draft + refine the plan before writing code. Large files punish blind edits.
+- **Read before edit** — read the actual target region of `server.py`; never edit it from memory.
+- **Spec/test before code** for new behavior — write a failing test in `tests/` (or a 3-line spec) first, then make it pass.
+- **Commits are test-gated** (both block on `pytest` failure, keep `tests/` green): `.claude/hooks/pre-commit-test-gate.sh` covers Claude Code commits; `.githooks/pre-commit` covers manual terminal commits. Enable the latter once per clone: `git config core.hooksPath .githooks`
+- **One step at a time** — implement → verify → commit incrementally; don't batch many edits before testing.
+- **`/clear` when stuck** — corrected twice on the same issue → write a progress note, `/clear`, restart clean (avoid `/compact`).
 
 ## What this project is
 Fully offline AI image generation for Mac Silicon (MPS). No cloud, no subscriptions. Supports FLUX.2 and Z-Image Turbo models with 4-bit/int8 quantization. Features: text-to-image, image-to-image editing, multi-slot reference images with per-slot rectangle-mask drawing, iterative multi-mask inpainting, multi-LoRA stacking (up to 5, per-slot strength), gallery drag-and-drop into ref slots, inline HelpTip ⓘ tooltips, upscaling (single + batch folder), video generation (LTX-Video), **batch img2img**, **depth map generation** (DA3 16-bit PNG), **watermark removal** (FFT heuristic detect + LaMa inpainting, `core/erase.py`). **Gradio fully removed** — `app.py` is pure backend logic only.
@@ -155,7 +164,7 @@ Actions: `ADD_REF_SLOT` · `REMOVE_REF_SLOT` · `SET_SLOT_MASK` · `CLEAR_SLOT_M
 | FLUX.2-klein-4B (Int8) | ~16 GB | |
 | Z-Image Turbo (Quantized) | ~8 GB | Fastest |
 | Z-Image Turbo (Full) | ~24 GB | LoRA support |
-| LTX-Video | — | txt2video / img2video |
+| LTX-Video 0.9.8-13B-distilled | ~26 GB (bf16) | txt2video / img2video; +`a-r-r-o-w/LTX-0.9.8-Latent-Upsampler` (lazy, multiscale only) |
 
 ## Environment / deps / tooling
 Package manager: **`uv`** (not pip). Lock: `uv.lock`. Metadata: `pyproject.toml`. **Always sync with `UV_PROJECT_ENVIRONMENT=venv uv sync`** — `Launch.command` sets `UV_PROJECT_ENVIRONMENT=venv`; plain `uv sync` targets `.venv/` (wrong env).
@@ -177,7 +186,7 @@ Tailwind tokens: `bg:#0a0a0a` · `surface:#141414` · `card:#1c1c1c` · `border:
 |-------|----------|-------|--------|
 | Z-Image Turbo (any) | **0** | **4** | Step-wise distilled |
 | FLUX.2 (all variants) | **0** | **20** | Step-wise distilled |
-| LTX-Video | **3.0** | **25** | |
+| LTX-Video 0.9.8-distilled | **1.0** | (fixed timesteps) | Guidance+timestep distilled; backend ignores `steps` slider, uses `LTX_BASE_TIMESTEPS`/`LTX_DENOISE_TIMESTEPS` |
 `guidanceForModel(model)` and `stepsForModel(model)` in `App.tsx`. Guidance slider **hidden** in UI; unhide when adding full-precision non-distilled models.
 
 ## Implementation notes
@@ -194,3 +203,4 @@ Tailwind tokens: `bg:#0a0a0a` · `surface:#141414` · `card:#1c1c1c` · `border:
 - **DA3 depth map**: `depth-anything/DA3MONO-LARGE` (official); DA3 = invert, DA2 = no invert; output LANCZOS-resized to source resolution; GS/3D export deps mocked via `sys.modules`
 - **xformers on Apple Silicon**: not installable, not needed — PyTorch MPS has built-in SDPA
 - **`TEMP_DIR` path guard**: all endpoints that accept temp file IDs must check `path.resolve().is_relative_to(TEMP_DIR.resolve())` — see `/api/erase` and `/api/workflow-assets`
+- **LTX-Video 0.9.8-13B-distilled** (`app.py`): `LTXConditionPipeline` (NOT old `LTXPipeline`/`LTXImageToVideoPipeline`). `render_ltx_video()` helper takes pipelines as args (mockable → `tests/test_ltx.py`) and returns PIL frames. **Multiscale (default)**: gen @2/3-res `output_type=latent` → `LTXLatentUpsamplePipeline` (2×, `tone_map_compression_ratio=0.6`) → 4-step denoise (`denoise_strength=0.999`) → resize. **Fast-preview** (`fast_preview` bool, Video accordion toggle): single distilled pass, skips upsampler. i2v = `LTXVideoCondition(image=ref, frame_index=0)` in `conditions=[…]`; txt2video = `conditions=None`. Distilled params: `guidance_scale=1.0`, `guidance_rescale=0.7`, `decode_timestep=0.05`, `image_cond_noise_scale=0.0`; frames=8k+1, dims÷32. Upsampler lazy-loaded only on multiscale runs (`video_upsampler` global, reset on device switch). `fast_preview` flows via `req.model_dump()` — no explicit plumbing needed past request model. **FP8 LTX variants rejected** — not suitable for Apple Silicon.

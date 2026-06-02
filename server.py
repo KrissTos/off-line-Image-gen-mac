@@ -70,7 +70,7 @@ DEFAULT_SOURCES: list[dict] = [
     {"id": "src-003", "name": "FLUX.2-klein-4B (Int8)",        "model_choice": "FLUX.2-klein-4B (Int8)",                              "url": "https://huggingface.co/aydin99/FLUX.2-klein-4B-int8",                        "type": "base",     "description": "~16 GB VRAM · MPS explicit · 4B int8"},
     {"id": "src-005", "name": "Z-Image Turbo (Full)",           "model_choice": "Z-Image Turbo (Full - LoRA support)",                "url": "https://huggingface.co/Tongyi-MAI/Z-Image-Turbo",                           "type": "base",     "description": "~24 GB VRAM · LoRA support"},
     {"id": "src-006", "name": "Z-Image Turbo (Quantized)",      "model_choice": "Z-Image Turbo (Quantized - Fast)",                   "url": "https://huggingface.co/Disty0/Z-Image-Turbo-SDNQ-uint4-svd-r32",            "type": "base",     "description": "~6 GB VRAM · fast"},
-    {"id": "src-007", "name": "LTX-Video",                      "model_choice": "LTX-Video  (txt2video · img2video with ref)",        "url": "https://huggingface.co/Lightricks/LTX-Video",                               "type": "base",     "description": "Official video generation model"},
+    {"id": "src-007", "name": "LTX-Video",                      "model_choice": "LTX-Video  (txt2video · img2video with ref)",        "url": "https://huggingface.co/Lightricks/LTX-Video-0.9.8-13B-distilled",            "type": "base",     "description": "LTX-Video 0.9.8 13B distilled — multiscale video gen"},
     # LoRAs
     {"id": "src-008", "name": "Outpaint LoRA (klein 4B)",       "url": "https://huggingface.co/fal/flux-2-klein-4B-outpaint-lora",                  "type": "lora",     "description": "Outpainting — add green border to image"},
     {"id": "src-009", "name": "Zoom LoRA (klein 4B)",            "url": "https://huggingface.co/fal/flux-2-klein-4B-zoom-lora",                     "type": "lora",     "description": "Zoom into red-highlighted region"},
@@ -285,6 +285,7 @@ class GenerateRequest(BaseModel):
     upscale_model_path: str   = ""
     num_frames:         int   = 25
     fps:                int   = 24
+    fast_preview:       bool  = False   # LTX-Video: single-pass distilled render (skips upsampler)
     mask_mode:          str   = "Crop & Composite (Fast)"
     outpaint_align:     str   = "center"
 
@@ -322,6 +323,7 @@ class SaveWorkflowRequest(BaseModel):
     upscale_model_path: str   = ""
     num_frames:         int   = 25
     fps:                int   = 24
+    fast_preview:       bool  = False
     ref_slots:          list[dict] = []
     mask_mode:          str        = ""
     outpaint_align:     str        = ""
@@ -649,6 +651,7 @@ async def api_generate(req: GenerateRequest):
                             "upscale_model_path": req.upscale_model_path,
                             "num_frames":         req.num_frames,
                             "fps":                req.fps,
+                            "fast_preview":       req.fast_preview,
                             "device":             req.device,
                             "ref_image_count":    len(req.input_image_ids),
                             "has_mask":           bool(req.mask_image_id),

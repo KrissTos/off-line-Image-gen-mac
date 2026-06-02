@@ -56,6 +56,7 @@ last_sync_status = ""
 online_version_cache = {}  # repo_id -> sha string, or None if error
 upscaler_model_cache = {}  # safetensors path -> loaded spandrel model
 video_pipe           = None
+video_upsampler      = None
 current_video_device = None
 
 WORKFLOWS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "workflows")
@@ -806,26 +807,148 @@ def load_lora(lora_file, lora_strength: float, device: str):
 # LTX-Video pipeline
 # =============================================================================
 
+# LTX-Video 0.9.8 distilled custom timestep schedules (guidance & timestep distilled).
+# Base = low-res generation (8 steps); Denoise = post-upsample texture pass (4 steps).
+LTX_BASE_TIMESTEPS    = [1000, 993, 987, 981, 975, 909, 725, 0.03]
+LTX_DENOISE_TIMESTEPS = [1000, 909, 725, 421, 0]
+
+
 def load_ltx_pipeline(device="mps"):
-    """Load LTX-Video for text-to-video (reference image handled at inference time)."""
-    from diffusers import LTXPipeline
+    """Load LTX-Video 0.9.8-13B-distilled (LTXConditionPipeline).
+
+    Handles both text-to-video and image-to-video — the reference image is
+    supplied at inference time via LTXVideoCondition (frame 0).
+    """
+    from diffusers import LTXConditionPipeline
 
     cache_dir = get_active_cache_dir()
-    print(f"Loading LTX-Video on {device}...")
+    print(f"Loading LTX-Video 0.9.8-13B-distilled on {device}...")
     print_memory("Before loading")
     dtype = torch.bfloat16 if device == "mps" else torch.float32
-    p = LTXPipeline.from_pretrained(
-        "Lightricks/LTX-Video",
+    p = LTXConditionPipeline.from_pretrained(
+        "Lightricks/LTX-Video-0.9.8-13B-distilled",
         torch_dtype=dtype,
         cache_dir=cache_dir,
     )
     p.to(device)
-    p.enable_attention_slicing()
-    if hasattr(p, "enable_vae_slicing"):
-        p.enable_vae_slicing()
+    p.vae.enable_tiling()  # required for high-res VAE decode within memory budget
     print_memory("After loading")
     print("  LTX-Video ready!")
     return p
+
+
+def load_ltx_upsampler(condition_pipe, device="mps"):
+    """Load the 2x spatial latent upsampler used by the multiscale render path.
+
+    Shares the VAE with *condition_pipe*. Lazy — only loaded when a multiscale
+    (non fast-preview) generation actually runs.
+    """
+    from diffusers import LTXLatentUpsamplePipeline
+    from diffusers.pipelines.ltx.modeling_latent_upsampler import LTXLatentUpsamplerModel
+
+    cache_dir = get_active_cache_dir()
+    print(f"Loading LTX latent upsampler on {device}...")
+    dtype = torch.bfloat16 if device == "mps" else torch.float32
+    upsampler = LTXLatentUpsamplerModel.from_pretrained(
+        "a-r-r-o-w/LTX-0.9.8-Latent-Upsampler",
+        torch_dtype=dtype,
+        cache_dir=cache_dir,
+    )
+    p = LTXLatentUpsamplePipeline(vae=condition_pipe.vae, latent_upsampler=upsampler)
+    p.to(device)
+    print("  LTX upsampler ready!")
+    return p
+
+
+def render_ltx_video(
+    video_pipe, upsampler_pipe, *,
+    prompt, ref_image, num_frames, width, height,
+    generator, fast_preview, step_callback=None,
+):
+    """Generate LTX-Video frames with the 0.9.8 distilled model.
+
+    Multiscale (default): low-res gen -> 2x latent upsample -> short denoise pass
+    -> resize to target. Fast-preview: single distilled pass at target resolution
+    (lower texture detail, ~2-3x faster, no upsampler).
+
+    *ref_image* None -> text-to-video; a PIL image -> image-to-video conditioned
+    on frame 0. Returns a list of PIL frames. *step_callback(current, total)*
+    receives phase-weighted progress on a 0..100 scale.
+    """
+    n_frames = ((max(9, int(num_frames or 25)) - 1) // 8) * 8 + 1   # LTX needs 8k+1
+    tgt_w = max(256, (int(width)  // 32) * 32)                       # dims must be /32
+    tgt_h = max(256, (int(height) // 32) * 32)
+
+    conditions = None
+    if ref_image is not None:
+        from diffusers.pipelines.ltx.pipeline_ltx_condition import LTXVideoCondition
+        cond_img = ref_image if ref_image.mode == "RGB" else ref_image.convert("RGB")
+        conditions = [LTXVideoCondition(image=cond_img, frame_index=0)]
+
+    def _phase_cb(lo, hi, total):
+        """Map a pipeline's per-step progress into the [lo, hi] slice of 0..100."""
+        if step_callback is None:
+            return None
+        def _cb(pipeline, step_index, timestep, callback_kwargs):
+            frac = (step_index + 1) / max(1, total)
+            step_callback(int((lo + (hi - lo) * frac) * 100), 100)
+            return callback_kwargs
+        return _cb
+
+    common = dict(
+        prompt=prompt,
+        conditions=conditions,
+        num_frames=n_frames,
+        guidance_scale=1.0,
+        guidance_rescale=0.7,
+        decode_timestep=0.05,
+        decode_noise_scale=0.025,
+        image_cond_noise_scale=0.0,
+        generator=generator,
+    )
+
+    if fast_preview:
+        return video_pipe(
+            **common,
+            width=tgt_w, height=tgt_h,
+            timesteps=LTX_BASE_TIMESTEPS,
+            output_type="pil",
+            callback_on_step_end=_phase_cb(0.0, 1.0, len(LTX_BASE_TIMESTEPS)),
+        ).frames[0]
+
+    # ── Multiscale: generate at 2/3 res, upsample 2x, denoise, downscale ──
+    down_w = max(256, (int(tgt_w * 2 / 3) // 32) * 32)
+    down_h = max(256, (int(tgt_h * 2 / 3) // 32) * 32)
+
+    latents = video_pipe(
+        **common,
+        width=down_w, height=down_h,
+        timesteps=LTX_BASE_TIMESTEPS,
+        output_type="latent",
+        callback_on_step_end=_phase_cb(0.0, 0.6, len(LTX_BASE_TIMESTEPS)),
+    ).frames
+
+    up_latents = upsampler_pipe(
+        latents=latents,
+        adain_factor=1.0,
+        tone_map_compression_ratio=0.6,
+        output_type="latent",
+    ).frames
+
+    up_w, up_h = down_w * 2, down_h * 2
+    frames = video_pipe(
+        **common,
+        width=up_w, height=up_h,
+        denoise_strength=0.999,
+        timesteps=LTX_DENOISE_TIMESTEPS,
+        latents=up_latents,
+        output_type="pil",
+        callback_on_step_end=_phase_cb(0.7, 1.0, len(LTX_DENOISE_TIMESTEPS)),
+    ).frames[0]
+
+    if (up_w, up_h) != (tgt_w, tgt_h):
+        frames = [f.resize((tgt_w, tgt_h)) for f in frames]
+    return frames
 
 
 def export_frames_to_video(frames, output_path, fps=24):
@@ -972,8 +1095,9 @@ def generate_image(
     step_callback=None,
     outpaint_align="center",
     lora_files=None,       # list of {path, strength} — multi-LoRA; takes precedence over lora_file/lora_strength
+    fast_preview=False,    # LTX-Video: single-pass distilled render (skips multiscale upsampler)
 ):
-    global pipe, img2img_pipe, inpaint_pipe, video_pipe, current_video_device, model_source
+    global pipe, img2img_pipe, inpaint_pipe, video_pipe, video_upsampler, current_video_device, model_source
 
     # Merge legacy lora_file/lora_strength into lora_files list
     # Also handles lora_files=[] sent by pipeline.py when no new-style LoRAs are set
@@ -1007,13 +1131,18 @@ def generate_image(
             if video_pipe is not None:
                 del video_pipe
             video_pipe = load_ltx_pipeline(device)
+            video_upsampler = None  # stale across device switch — reload lazily
             current_video_device = device
+        # Lazy-load the latent upsampler only for multiscale (non fast-preview) runs
+        if not fast_preview and video_upsampler is None:
+            video_upsampler = load_ltx_upsampler(video_pipe, device)
     else:
         # Unload video pipeline if switching back to image
         if video_pipe is not None:
             import gc
             del video_pipe
             video_pipe = None
+            video_upsampler = None
             current_video_device = None
             if torch.backends.mps.is_available():
                 torch.mps.empty_cache()
@@ -1255,40 +1384,19 @@ def generate_image(
                         _dbg("Z-Image branch: img2img (ref)")
                     video_frames = None
                 elif is_video_model:
-                    n_frames = max(9, int(num_frames or 25))
-                    # LTX requires num_frames = 8k+1
-                    n_frames = ((n_frames - 1) // 8) * 8 + 1
-                    # Width/height must be divisible by 32
-                    ltx_w = max(256, (img_w // 32) * 32)
-                    ltx_h = max(256, (img_h // 32) * 32)
-                    if preprocessed_zimage_ref is not None:
-                        from diffusers import LTXImageToVideoPipeline
-                        i2v = LTXImageToVideoPipeline.from_pipe(video_pipe)
-                        result = i2v(
-                            prompt=prompt,
-                            image=preprocessed_zimage_ref,
-                            num_frames=n_frames,
-                            height=ltx_h,
-                            width=ltx_w,
-                            num_inference_steps=int(steps),
-                            guidance_scale=float(guidance),
-                            generator=generator,
-                            callback_on_step_end=_cb,
-                        )
-                        mode = "img2video"
-                    else:
-                        result = video_pipe(
-                            prompt=prompt,
-                            num_frames=n_frames,
-                            height=ltx_h,
-                            width=ltx_w,
-                            num_inference_steps=int(steps),
-                            guidance_scale=float(guidance),
-                            generator=generator,
-                            callback_on_step_end=_cb,
-                        )
-                        mode = "txt2video"
-                    video_frames = result.frames[0]
+                    video_frames = render_ltx_video(
+                        video_pipe, video_upsampler,
+                        prompt=prompt,
+                        ref_image=preprocessed_zimage_ref,  # None -> txt2video
+                        num_frames=num_frames,
+                        width=img_w, height=img_h,
+                        generator=generator,
+                        fast_preview=bool(fast_preview),
+                        step_callback=step_callback,
+                    )
+                    mode = "img2video" if preprocessed_zimage_ref is not None else "txt2video"
+                    if fast_preview:
+                        mode += " (fast)"
                     image = None
                 else:
                     image = pipe(
@@ -1607,7 +1715,8 @@ KNOWN_MODELS = {
     "Tongyi-MAI/Z-Image-Turbo": "Z-Image Turbo (Full)",
     "Disty0/Z-Image-Turbo-SDNQ-uint4-svd-r32": "Z-Image Turbo (Quantized)",
     "filipstrand/Z-Image-Turbo-mflux-4bit": "Z-Image Turbo (mflux 4bit)",
-    "Lightricks/LTX-Video": "LTX-Video",
+    "Lightricks/LTX-Video-0.9.8-13B-distilled": "LTX-Video",
+    "a-r-r-o-w/LTX-0.9.8-Latent-Upsampler": "LTX-Video Upsampler",
 }
 
 

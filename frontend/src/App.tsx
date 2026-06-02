@@ -58,9 +58,10 @@ function RowDivider({
 }
 
 function guidanceForModel(model: string): number {
-  // Z-Image and FLUX.2-klein are step-wise distilled — guidance_scale is ignored by the pipeline.
-  // LTX-Video uses guidance. Full-precision non-distilled models added in the future should return a real value.
-  if (model.includes('LTX-Video')) return 3.0
+  // Z-Image, FLUX.2-klein and LTX-Video 0.9.8 distilled are guidance-distilled —
+  // guidance_scale is fixed at the pipeline (1.0 for LTX, ignored for the rest).
+  // Full-precision non-distilled models added in the future should return a real value.
+  if (model.includes('LTX-Video')) return 1.0
   return 0
 }
 
@@ -498,6 +499,7 @@ export default function App() {
       if (item.upscale_model_path!= null) p.upscale_model_path= item.upscale_model_path
       if (item.num_frames        != null) p.num_frames        = item.num_frames
       if (item.fps               != null) p.fps               = item.fps
+      if (item.fast_preview      != null) p.fast_preview      = item.fast_preview
       dispatch({ type: 'SET_PARAMS', params: p })
 
       // Restore ref images + mask from companion folder

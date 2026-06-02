@@ -51,6 +51,7 @@ const DEFAULT_PARAMS: GenerateParams = {
   upscale_model_path: '',
   num_frames:         25,
   fps:                24,
+  fast_preview:       false,
   mask_mode:          'Crop & Composite (Fast)',
   outpaint_align:     'center',
   depth_model_repo:   'depth-anything/DA3MONO-LARGE',
