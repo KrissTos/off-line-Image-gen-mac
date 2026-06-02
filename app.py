@@ -123,6 +123,15 @@ MODEL_PRIMARY_REPO = {
 }
 
 
+# Repo-specific files to skip on snapshot_download — never loaded, pure bandwidth/disk waste.
+# The LTX 0.9.8-13B-distilled repo nests a full duplicate transformer (~26 GB) + T5
+# text_encoder (~19 GB) under vae/ that model_index.json never references (diffusers loads
+# vae/ as AutoencoderKLLTXVideo only). Skipping them cuts the download from ~93 GB to ~48 GB.
+DOWNLOAD_IGNORE_PATTERNS = {
+    "Lightricks/LTX-Video-0.9.8-13B-distilled": ["vae/transformer/*", "vae/text_encoder/*", "media/*"],
+}
+
+
 def get_model_snapshot_info(cache_dir, repo_id):
     """Return (commit_hash, mtime) for a model in a cache dir, or (None, None) if absent."""
     refs_main = os.path.join(cache_dir, f"models--{repo_id.replace('/', '--')}", "refs", "main")
@@ -341,7 +350,8 @@ def download_model_update(model_selection):
 
     try:
         print(f"[Online update] Downloading {model_selection}...")
-        snapshot_download(repo_id, cache_dir=get_local_models_dir())
+        snapshot_download(repo_id, cache_dir=get_local_models_dir(),
+                          ignore_patterns=DOWNLOAD_IGNORE_PATTERNS.get(repo_id))
         msg = f"✓ {model_selection}: updated successfully"
     except Exception as e:
         msg = f"⚠ {model_selection}: {e}"
@@ -387,7 +397,8 @@ def download_model_update_stream(model_selection, progress_queue):
 
     try:
         print(f"[Online update] Downloading {model_selection}...")
-        snapshot_download(repo_id, cache_dir=get_local_models_dir(), tqdm_class=_ProgressTqdm)
+        snapshot_download(repo_id, cache_dir=get_local_models_dir(), tqdm_class=_ProgressTqdm,
+                          ignore_patterns=DOWNLOAD_IGNORE_PATTERNS.get(repo_id))
         progress_queue.put({"type": "done", "message": f"✓ {model_selection}: updated successfully"})
     except Exception as e:
         progress_queue.put({"type": "error", "message": str(e)})
@@ -411,7 +422,8 @@ def download_all_online_updates():
         display = KNOWN_MODELS.get(repo_id, repo_id)
         try:
             print(f"[Online update] Downloading {display}...")
-            snapshot_download(repo_id, cache_dir=get_local_models_dir())
+            snapshot_download(repo_id, cache_dir=get_local_models_dir(),
+                              ignore_patterns=DOWNLOAD_IGNORE_PATTERNS.get(repo_id))
             msgs.append(f"✓ {display}: updated")
         except Exception as e:
             msgs.append(f"⚠ {display}: {e}")
