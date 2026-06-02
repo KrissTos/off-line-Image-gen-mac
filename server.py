@@ -65,12 +65,12 @@ MODEL_SOURCES_FILE = ROOT / "model_sources.json"
 
 DEFAULT_SOURCES: list[dict] = [
     # Base models — model_choice must exactly match MODEL_CHOICES in app.py
-    {"id": "src-001", "name": "FLUX.2-klein-4B (4bit SDNQ)",  "model_choice": "FLUX.2-klein-4B (4bit SDNQ - Low VRAM)",              "url": "https://huggingface.co/Disty0/FLUX.2-klein-4B-SDNQ-4bit-dynamic",           "type": "base",     "description": "~8 GB VRAM · MPS optimized · recommended for 16 GB Mac"},
-    {"id": "src-002", "name": "FLUX.2-klein-9B (4bit SDNQ)",  "model_choice": "FLUX.2-klein-9B (4bit SDNQ - Higher Quality)",        "url": "https://huggingface.co/Disty0/FLUX.2-klein-9B-SDNQ-4bit-dynamic-svd-r32",   "type": "base",     "description": "~12 GB VRAM · high quality"},
-    {"id": "src-003", "name": "FLUX.2-klein-4B (Int8)",        "model_choice": "FLUX.2-klein-4B (Int8)",                              "url": "https://huggingface.co/aydin99/FLUX.2-klein-4B-int8",                        "type": "base",     "description": "~16 GB VRAM · MPS explicit · 4B int8"},
-    {"id": "src-005", "name": "Z-Image Turbo (Full)",           "model_choice": "Z-Image Turbo (Full - LoRA support)",                "url": "https://huggingface.co/Tongyi-MAI/Z-Image-Turbo",                           "type": "base",     "description": "~24 GB VRAM · LoRA support"},
-    {"id": "src-006", "name": "Z-Image Turbo (Quantized)",      "model_choice": "Z-Image Turbo (Quantized - Fast)",                   "url": "https://huggingface.co/Disty0/Z-Image-Turbo-SDNQ-uint4-svd-r32",            "type": "base",     "description": "~6 GB VRAM · fast"},
-    {"id": "src-007", "name": "LTX-Video",                      "model_choice": "LTX-Video  (txt2video · img2video with ref)",        "url": "https://huggingface.co/Lightricks/LTX-Video-0.9.8-13B-distilled",            "type": "base",     "description": "LTX-Video 0.9.8 13B distilled — multiscale video gen"},
+    {"id": "src-001", "name": "FLUX.2-klein-4B (4bit SDNQ)",  "model_choice": "FLUX.2-klein-4B (4bit SDNQ - Low VRAM)",              "url": "https://huggingface.co/Disty0/FLUX.2-klein-4B-SDNQ-4bit-dynamic",           "type": "base",     "vram_gb": 8,  "description": "~8 GB VRAM · MPS optimized · recommended for 16 GB Mac"},
+    {"id": "src-002", "name": "FLUX.2-klein-9B (4bit SDNQ)",  "model_choice": "FLUX.2-klein-9B (4bit SDNQ - Higher Quality)",        "url": "https://huggingface.co/Disty0/FLUX.2-klein-9B-SDNQ-4bit-dynamic-svd-r32",   "type": "base",     "vram_gb": 12, "description": "~12 GB VRAM · high quality"},
+    {"id": "src-003", "name": "FLUX.2-klein-4B (Int8)",        "model_choice": "FLUX.2-klein-4B (Int8)",                              "url": "https://huggingface.co/aydin99/FLUX.2-klein-4B-int8",                        "type": "base",     "vram_gb": 16, "description": "~16 GB VRAM · MPS explicit · 4B int8"},
+    {"id": "src-005", "name": "Z-Image Turbo (Full)",           "model_choice": "Z-Image Turbo (Full - LoRA support)",                "url": "https://huggingface.co/Tongyi-MAI/Z-Image-Turbo",                           "type": "base",     "vram_gb": 24, "description": "~24 GB VRAM · LoRA support"},
+    {"id": "src-006", "name": "Z-Image Turbo (Quantized)",      "model_choice": "Z-Image Turbo (Quantized - Fast)",                   "url": "https://huggingface.co/Disty0/Z-Image-Turbo-SDNQ-uint4-svd-r32",            "type": "base",     "vram_gb": 6,  "description": "~6 GB VRAM · fast"},
+    {"id": "src-007", "name": "LTX-Video",                      "model_choice": "LTX-Video  (txt2video · img2video with ref)",        "url": "https://huggingface.co/Lightricks/LTX-Video-0.9.8-13B-distilled",            "type": "base",     "vram_gb": 26, "description": "LTX-Video 0.9.8 13B distilled — multiscale video gen"},
     # LoRAs
     {"id": "src-008", "name": "Outpaint LoRA (klein 4B)",       "url": "https://huggingface.co/fal/flux-2-klein-4B-outpaint-lora",                  "type": "lora",     "description": "Outpainting — add green border to image"},
     {"id": "src-009", "name": "Zoom LoRA (klein 4B)",            "url": "https://huggingface.co/fal/flux-2-klein-4B-zoom-lora",                     "type": "lora",     "description": "Zoom into red-highlighted region"},
@@ -1390,13 +1390,23 @@ def api_get_model_sources():
     for s in sources:
         if "model_choice" not in s and s.get("id") in _defaults_by_id:
             s["model_choice"] = _defaults_by_id[s["id"]].get("model_choice", "")
-    return {"sources": _sort_sources(sources)}
+    return {"sources": _sort_sources(_drop_unusable_base(sources))}
 
 
 _TYPE_ORDER = {"base": 0, "lora": 1, "upscaler": 2}
 
 def _sort_sources(sources: list[dict]) -> list[dict]:
     return sorted(sources, key=lambda s: _TYPE_ORDER.get(s.get("type", "base"), 3))
+
+
+def _drop_unusable_base(sources: list[dict]) -> list[dict]:
+    """Remove base-type entries whose repo the loader can't load.
+
+    The model loader only handles repos in app.KNOWN_MODELS — a base source for any
+    other repo can neither download in-app nor load, so it's dead weight in the UI.
+    LoRAs/upscalers are link-only by design and always kept."""
+    supported = {f"https://huggingface.co/{rid}" for rid in _app().KNOWN_MODELS}
+    return [s for s in sources if s.get("type") != "base" or s.get("url") in supported]
 
 
 @app.get("/api/model-sources/discover")
@@ -1501,6 +1511,8 @@ def api_discover_model_sources():
             next_id += 1
     except Exception:
         pass
+
+    candidates = _drop_unusable_base(candidates)  # never surface base models the loader can't load
 
     if candidates:
         updated = _sort_sources(current + candidates)

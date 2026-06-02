@@ -505,6 +505,18 @@ def get_memory_usage():
         return torch.mps.current_allocated_memory() / 1024**3
     return 0
 
+def get_total_memory_gb():
+    """Total GPU-usable memory in GB — the ceiling for 'which model fits this Mac'.
+
+    On Apple Silicon this is Metal's recommended working-set size (~unified RAM minus
+    OS headroom), not current allocation. Falls back to total physical RAM."""
+    if torch.backends.mps.is_available() and hasattr(torch.mps, "recommended_max_memory"):
+        return torch.mps.recommended_max_memory() / 1024**3
+    try:
+        return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 1024**3
+    except (ValueError, OSError, AttributeError):
+        return 0.0
+
 def print_memory(label):
     """Print memory usage with label."""
     mem = get_memory_usage()

@@ -51,6 +51,7 @@ export interface ModelSource {
   type:         'base' | 'lora' | 'upscaler'
   description:  string
   model_choice?: string   // exact MODEL_CHOICES string for local-cache detection (base type only)
+  vram_gb?:     number    // approx GPU memory the model needs (base type only) — drives Recommended tag
 }
 
 export interface ModelUpdateResult {

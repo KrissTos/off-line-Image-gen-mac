@@ -12,6 +12,24 @@ import {
   type ModelUpdateResult, type ModelExtras, type ModelSource,
 } from '../api'
 import { applyThemeColors } from '../App'
+import { useAppState } from '../store'
+
+const TYPE_GROUPS: { type: ModelSource['type']; label: string }[] = [
+  { type: 'base',     label: 'Models' },
+  { type: 'lora',     label: 'LoRAs' },
+  { type: 'upscaler', label: 'Upscalers' },
+]
+
+// Best image model that fits the Mac: the largest-VRAM base model (excluding video)
+// whose requirement sits within 90% of the GPU-usable memory ceiling.
+function recommendedSourceId(sources: ModelSource[], totalVram: number): string | null {
+  if (!totalVram) return null
+  const fit = sources.filter(
+    s => s.type === 'base' && s.vram_gb != null && !s.name.includes('LTX') && s.vram_gb <= totalVram * 0.9,
+  )
+  if (!fit.length) return null
+  return fit.reduce((best, s) => (s.vram_gb! > best.vram_gb! ? s : best)).id
+}
 
 // Names that match KNOWN_MODELS in app.py — these get an active Download button
 const KNOWN_MODELS_NAMES = new Set([
@@ -37,6 +55,8 @@ interface StorageModel {
 const DEFAULT_OUTPUT_DIR = '~/Pictures/ultra-fast-image-gen'
 
 export default function SettingsDrawer({ open, onClose }: Props) {
+  const { state } = useAppState()
+  const totalVram = state.status.total_vram_gb ?? 0
   const [storage, setStorage]           = useState<{ models: StorageModel[]; summary: string } | null>(null)
   const [hfToken, setHfToken]           = useState('')
   const [hfStatus, setHfStatus]         = useState<string | null>(null)
@@ -803,12 +823,10 @@ export default function SettingsDrawer({ open, onClose }: Props) {
             {!sourcesLoaded ? (
               <p className="text-xs text-muted">Loading…</p>
             ) : (
-              <div className="space-y-2">
-                {sources.map(src => {
-                  const typeBadgeClass =
-                    src.type === 'base'     ? 'bg-blue-900/50 text-blue-300 border-blue-700/50' :
-                    src.type === 'lora'     ? 'bg-accent/20 text-accent border-accent/30' :
-                                              'bg-teal-900/50 text-teal-300 border-teal-700/50'
+              <div className="space-y-4">
+                {(() => {
+                  const recId = recommendedSourceId(sources, totalVram)
+                  const renderCard = (src: ModelSource) => {
                   const canDownload = src.type === 'base' && KNOWN_MODELS_NAMES.has(src.name)
                   const downloadTooltip =
                     src.type === 'lora'     ? 'Download from HuggingFace, then upload via the LoRA panel' :
@@ -818,15 +836,24 @@ export default function SettingsDrawer({ open, onClose }: Props) {
                     src.type === 'base'     ? availableModels.includes(src.model_choice || src.name) :
                     src.type === 'upscaler' ? (extras?.upscale_models.some(m => m.name.replace(/\.[^.]+$/, '') === src.name) ?? false) :
                     false
+                  const isRecommended = src.id === recId
 
                   return (
-                    <div key={src.id} className={`p-2 rounded-lg bg-card border group ${isLocal ? 'border-green-500/60' : 'border-border'}`}>
+                    <div key={src.id} className={`p-2 rounded-lg bg-card border group ${isLocal ? 'border-green-500/60' : isRecommended ? 'border-accent/50' : 'border-border'}`}>
                       <div className="flex items-start gap-2">
-                        <span className={`shrink-0 mt-0.5 text-[9px] font-semibold px-1.5 py-0.5 rounded border uppercase tracking-wide ${typeBadgeClass}`}>
-                          {src.type}
-                        </span>
                         <div className="flex-1 min-w-0">
-                          <div className="text-xs text-white truncate">{src.name}</div>
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-xs text-white truncate">{src.name}</span>
+                            {isRecommended && (
+                              <span title={`Best fit for your ~${Math.round(totalVram)} GB Mac`}
+                                className="shrink-0 text-[9px] font-semibold px-1.5 py-0.5 rounded bg-accent/20 text-accent border border-accent/30">
+                                ★ Recommended
+                              </span>
+                            )}
+                            {src.type === 'base' && src.vram_gb != null && (
+                              <span className="shrink-0 text-[9px] text-muted/60 font-mono">~{src.vram_gb} GB</span>
+                            )}
+                          </div>
                           {src.description && (
                             <div className="text-[10px] text-muted/70 truncate mt-0.5">{src.description}</div>
                           )}
@@ -879,7 +906,19 @@ export default function SettingsDrawer({ open, onClose }: Props) {
                       )}
                     </div>
                   )
-                })}
+                  }
+
+                  return TYPE_GROUPS.map(g => {
+                    const items = sources.filter(s => s.type === g.type)
+                    if (!items.length) return null
+                    return (
+                      <div key={g.type} className="space-y-2">
+                        <h4 className="text-[10px] font-semibold uppercase tracking-wider text-muted/60">{g.label}</h4>
+                        {items.map(renderCard)}
+                      </div>
+                    )
+                  })
+                })()}
 
                 {/* Add new source */}
                 {addingSource ? (

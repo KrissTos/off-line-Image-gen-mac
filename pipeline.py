@@ -125,10 +125,12 @@ class PipelineManager:
                 "busy":    self.is_busy,
                 "is_batch_running": self.is_batch_running,
                 "vram_gb": self._get_vram(),
+                "total_vram_gb": getattr(_app, "get_total_memory_gb", lambda: 0.0)(),
             }
         except Exception:
             return {"model": None, "device": None, "loaded": False,
-                    "busy": self.is_busy, "is_batch_running": self.is_batch_running, "vram_gb": 0.0}
+                    "busy": self.is_busy, "is_batch_running": self.is_batch_running,
+                    "vram_gb": 0.0, "total_vram_gb": 0.0}
 
     def _get_vram(self) -> float:
         try:

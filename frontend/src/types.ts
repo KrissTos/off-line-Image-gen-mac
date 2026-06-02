@@ -13,6 +13,7 @@ export interface AppStatus {
   loaded:             boolean
   busy:               boolean
   vram_gb:            number
+  total_vram_gb?:     number   // GPU-usable memory ceiling — drives the "Recommended" model tag
   is_batch_running?:  boolean
 }
 

@@ -59,7 +59,7 @@ const DEFAULT_PARAMS: GenerateParams = {
 
 export const initialState: State = {
   params:          DEFAULT_PARAMS,
-  status:          { model: null, device: null, loaded: false, busy: false, vram_gb: 0 },
+  status:          { model: null, device: null, loaded: false, busy: false, vram_gb: 0, total_vram_gb: 0 },
   models:          [],
   availableModels: [],
   devices:         [],
