@@ -1534,6 +1534,9 @@ export default function Sidebar({
             onChange={v => onParamChange('num_frames', v)} />
           <Slider label="FPS"    value={params.fps}        min={4} max={60}
             onChange={v => onParamChange('fps', v)} />
+          <div className="text-xs text-muted -mt-1 mb-1">
+            ≈ {(params.num_frames / params.fps).toFixed(2)}s · LTX needs 8k+1 frames (9, 17, 25, … 121)
+          </div>
           <div className="flex items-center gap-1">
             <div className="flex-1">
               <Toggle label="Fast preview" value={params.fast_preview}

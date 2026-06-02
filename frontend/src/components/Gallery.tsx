@@ -99,7 +99,7 @@ export default function Gallery({ outputs, onSelect, onDelete, onLoadParams, ups
               )}
 
               {/* Load params button */}
-              {item.kind !== 'video' && onLoadParams && item.prompt !== undefined && (
+              {onLoadParams && item.prompt !== undefined && (
                 <button
                   onClick={e => { e.stopPropagation(); onLoadParams(item) }}
                   aria-label="Load generation parameters"
