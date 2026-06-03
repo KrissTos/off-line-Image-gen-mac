@@ -884,6 +884,28 @@ def load_ltx_upsampler(condition_pipe, device="mps"):
     return p
 
 
+def _ltx_keyframe_indices(m, n_frames):
+    """Frame indices for *m* LTX keyframes evenly spread over an *n_frames* clip.
+
+    First keyframe at frame 0, last at the final frame; intermediates evenly
+    spaced. Each index is snapped to the LTX latent temporal stride (8) and kept
+    strictly increasing. When *m* exceeds the number of latent-aligned slots, the
+    list is capped (caller drops the surplus refs). 1 keyframe -> [0].
+    """
+    last = n_frames - 1                 # n_frames is 8k+1, so last is a multiple of 8
+    max_kf = last // 8 + 1              # distinct latent-aligned slots available
+    m = max(1, min(m, max_kf))
+    if m == 1:
+        return [0]
+    idxs, prev = [], -8
+    for i in range(m):
+        x = round(i * last / (m - 1) / 8) * 8       # even spread, snapped to /8
+        x = min(last, max(prev + 8, x))             # keep strictly increasing
+        idxs.append(x)
+        prev = x
+    return idxs
+
+
 def render_ltx_video(
     video_pipe, upsampler_pipe, *,
     prompt, ref_image, num_frames, width, height,
@@ -895,9 +917,11 @@ def render_ltx_video(
     -> resize to target. Fast-preview: single distilled pass at target resolution
     (lower texture detail, ~2-3x faster, no upsampler).
 
-    *ref_image* None -> text-to-video; a PIL image -> image-to-video conditioned
-    on frame 0. Returns a list of PIL frames. *step_callback(current, total)*
-    receives phase-weighted progress on a 0..100 scale.
+    *ref_image* None -> text-to-video; a single PIL image -> image-to-video
+    conditioned on frame 0; a list of PIL images -> keyframe-conditioned video
+    with the frames spread across the clip (see _ltx_keyframe_indices). Returns a
+    list of PIL frames. *step_callback(current, total)* receives phase-weighted
+    progress on a 0..100 scale.
     """
     n_frames = ((max(9, int(num_frames or 25)) - 1) // 8) * 8 + 1   # LTX needs 8k+1
     tgt_w = max(256, (int(width)  // 32) * 32)                       # dims must be /32
@@ -906,8 +930,15 @@ def render_ltx_video(
     conditions = None
     if ref_image is not None:
         from diffusers.pipelines.ltx.pipeline_ltx_condition import LTXVideoCondition
-        cond_img = ref_image if ref_image.mode == "RGB" else ref_image.convert("RGB")
-        conditions = [LTXVideoCondition(image=cond_img, frame_index=0)]
+        refs = list(ref_image) if isinstance(ref_image, (list, tuple)) else [ref_image]
+        refs = [(r if r.mode == "RGB" else r.convert("RGB")) for r in refs]
+        frame_idxs = _ltx_keyframe_indices(len(refs), n_frames)
+        # _ltx_keyframe_indices may cap below len(refs) when there aren't enough
+        # latent-aligned slots; zip drops the surplus refs.
+        conditions = [
+            LTXVideoCondition(image=img, frame_index=fi, strength=1.0)
+            for img, fi in zip(refs, frame_idxs)
+        ]
 
     def _phase_cb(lo, hi, total):
         """Map a pipeline's per-step progress into the [lo, hi] slice of 0..100."""
@@ -1200,6 +1231,7 @@ def generate_image(
 
     preprocessed_flux_refs  = None
     preprocessed_zimage_ref = None
+    preprocessed_video_refs = None
     if input_images is not None and len(input_images) > 0:
         if current_model in ("flux2-klein-int8", "flux2-klein-sdnq", "flux2-klein-9b-sdnq"):
             preprocessed_flux_refs = []
@@ -1217,11 +1249,15 @@ def generate_image(
                 preprocessed_zimage_ref = preprocessed_zimage_ref.convert("RGB")
             print(f"  Pre-processed reference image → {img_w}×{img_h}")
         elif is_video_model:
-            raw = input_images[0][0] if isinstance(input_images[0], tuple) else input_images[0]
-            preprocessed_zimage_ref = raw.copy().resize((img_w, img_h), Image.LANCZOS)
-            if preprocessed_zimage_ref.mode != "RGB":
-                preprocessed_zimage_ref = preprocessed_zimage_ref.convert("RGB")
-            print(f"  Pre-processed LTX reference image → {img_w}×{img_h}")
+            preprocessed_video_refs = []
+            for img_data in input_images[:6]:
+                raw = img_data[0] if isinstance(img_data, tuple) else img_data
+                r = raw.copy().resize((img_w, img_h), Image.LANCZOS)
+                if r.mode != "RGB":
+                    r = r.convert("RGB")
+                preprocessed_video_refs.append(r)
+            preprocessed_zimage_ref = preprocessed_video_refs[0]  # img2video mode flag
+            print(f"  Pre-processed {len(preprocessed_video_refs)} LTX reference image(s) → {img_w}×{img_h}")
 
     # ── Masking pre-processing ───────────────────────────────────────────────
     # Runs once before the repeat loop; if crop mode, it overrides
@@ -1411,7 +1447,7 @@ def generate_image(
                     video_frames = render_ltx_video(
                         video_pipe, video_upsampler,
                         prompt=prompt,
-                        ref_image=preprocessed_zimage_ref,  # None -> txt2video
+                        ref_image=preprocessed_video_refs,  # None -> txt2video; list -> keyframes
                         num_frames=num_frames,
                         width=img_w, height=img_h,
                         generator=generator,

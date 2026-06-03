@@ -78,6 +78,50 @@ def test_i2v_builds_condition(monkeypatch):
     assert vp.call_args.kwargs["conditions"] == [cond_sentinel]
 
 
+def test_multi_ref_builds_keyframes(monkeypatch):
+    """Multiple ref images -> one LTXVideoCondition each, frame indices spread
+    across the timeline, latent-aligned (multiple of 8), strictly increasing."""
+    import app
+    calls = []
+    def _fake_cond(**kw):
+        calls.append(kw)
+        return ("cond", kw["frame_index"])
+    monkeypatch.setattr(
+        "diffusers.pipelines.ltx.pipeline_ltx_condition.LTXVideoCondition",
+        _fake_cond,
+    )
+    vp = MagicMock(return_value=_frames_out(1))
+    refs = [Image.new("RGB", (64, 64)) for _ in range(3)]
+    app.render_ltx_video(
+        vp, None, prompt="x", ref_image=refs, num_frames=25,  # last frame = 24
+        width=512, height=512, generator=None, fast_preview=True,
+    )
+    idxs = [c["frame_index"] for c in calls]
+    assert len(idxs) == 3
+    assert idxs[0] == 0 and idxs[-1] == 24          # span whole clip
+    assert idxs == sorted(set(idxs))                # strictly increasing
+    assert all(i % 8 == 0 for i in idxs)            # latent stride
+    assert len(vp.call_args.kwargs["conditions"]) == 3
+
+
+def test_multi_ref_capped_to_available_slots(monkeypatch):
+    """More refs than latent slots -> conditions capped, no duplicate frames."""
+    import app
+    monkeypatch.setattr(
+        "diffusers.pipelines.ltx.pipeline_ltx_condition.LTXVideoCondition",
+        lambda **kw: kw["frame_index"],
+    )
+    vp = MagicMock(return_value=_frames_out(1))
+    refs = [Image.new("RGB", (64, 64)) for _ in range(6)]
+    app.render_ltx_video(
+        vp, None, prompt="x", ref_image=refs, num_frames=9,  # last=8 -> slots {0,8}
+        width=512, height=512, generator=None, fast_preview=True,
+    )
+    conds = vp.call_args.kwargs["conditions"]
+    assert conds == sorted(set(conds))   # no dup frame indices, within {0,8}
+    assert len(conds) <= 2
+
+
 def test_txt2video_passes_no_conditions():
     import app
     vp = MagicMock(return_value=_frames_out(1))
