@@ -13,7 +13,9 @@ import os
 import time
 os.environ["PYTORCH_MPS_FAST_MATH"] = "1"
 os.environ["PYTORCH_MPS_HIGH_WATERMARK_RATIO"] = "0.0"   # let MPS use all available unified memory
-os.environ["HF_HUB_CACHE"] = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
+# HF_HUB_CACHE intentionally NOT overridden — models live in the shared global
+# HuggingFace cache (~/.cache/huggingface/hub) so every HF tool on the machine
+# reuses the same weights. See get_local_models_dir().
 
 import torch
 from PIL import Image
@@ -97,8 +99,10 @@ def get_available_devices():
 # =============================================================================
 
 def get_local_models_dir():
-    """Project-local model cache (ultra-fast-image-gen-main/models)."""
-    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
+    """Model cache dir. Unified with the global HuggingFace cache so downloads,
+    version checks and loads all resolve to one location shared machine-wide.
+    (Name kept for backwards compat with existing callers.)"""
+    return get_hf_global_cache_dir()
 
 
 def get_hf_global_cache_dir():
@@ -170,6 +174,8 @@ def sync_from_hf_cache(repo_id):
     src = os.path.join(get_hf_global_cache_dir(), f"models--{repo_id.replace('/', '--')}")
     dst = os.path.join(get_local_models_dir(), f"models--{repo_id.replace('/', '--')}")
 
+    if os.path.abspath(src) == os.path.abspath(dst):
+        return f"{display}: already in shared cache — nothing to sync"
     if not os.path.exists(src):
         return f"{display}: not found in HF Cache"
     try:

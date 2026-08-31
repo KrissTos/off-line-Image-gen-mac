@@ -16,7 +16,8 @@ import argparse
 
 # Enable fast-math for MPS
 os.environ["PYTORCH_MPS_FAST_MATH"] = "1"
-os.environ["HF_HUB_CACHE"] = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
+# HF_HUB_CACHE intentionally NOT overridden — use the shared global HF cache
+# (~/.cache/huggingface/hub), same as server.py / app.py.
 
 import torch
 from diffusers import ZImagePipeline, FlowMatchEulerDiscreteScheduler
