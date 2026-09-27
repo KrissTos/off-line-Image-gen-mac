@@ -413,23 +413,41 @@ def _record_output(run_dir: Path, event: dict, requested_seed: int) -> None:
     event["url"]  = f"/api/output/{run_dir.name}/outputs/{dst.name}"
 
 
+_RUN_TASKS: set[asyncio.Task] = set()   # generations still running, possibly past their SSE client
+
+
 async def _run_events(run_dir: Path, params: dict, requested_seed: int):
-    """Generate into run_dir/outputs, yielding events with run paths. A run that produced
-    nothing (stopped, failed) is moved to the Trash."""
+    """Generate into run_dir/outputs, yielding events with run paths. The generation runs in its
+    own task, so outputs finishing after the client disconnects (reload, Stop) are still recorded.
+    A run that produced nothing (stopped, failed) is moved to the Trash once generation has ended."""
     params["output_dir"] = str(run_dir / "outputs")
-    produced = 0
-    try:
-        async for event in _mgr().generate(params):
-            if event.get("type") in ("image", "video"):
-                _record_output(run_dir, event, requested_seed)
-                produced += 1
-            yield event
-    finally:
-        if not produced:
-            try:
-                run_store.trash(run_dir)
-            except Exception as e:
-                print(f"[run_store] could not trash empty run {run_dir.name}: {e}")
+    queue: asyncio.Queue = asyncio.Queue()
+
+    async def drive():
+        produced = 0
+        try:
+            async for event in _mgr().generate(params):
+                if event.get("type") in ("image", "video"):
+                    _record_output(run_dir, event, requested_seed)
+                    produced += 1
+                queue.put_nowait(event)
+        except Exception as e:
+            queue.put_nowait(e)
+        finally:
+            if not produced:
+                try:
+                    run_store.trash(run_dir)
+                except Exception as e:
+                    print(f"[run_store] could not trash empty run {run_dir.name}: {e}")
+            queue.put_nowait(None)
+
+    task = asyncio.create_task(drive())
+    _RUN_TASKS.add(task)
+    task.add_done_callback(_RUN_TASKS.discard)
+    while (event := await queue.get()) is not None:
+        if isinstance(event, Exception):
+            raise event
+        yield event
 
 
 # ── Routes: Heartbeat ─────────────────────────────────────────────────────────

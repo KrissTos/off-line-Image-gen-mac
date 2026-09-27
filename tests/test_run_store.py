@@ -214,3 +214,22 @@ def test_save_workflow_overwrite_rejects_bad_target(tmp_path, bad):
     (tmp_path / "wf").mkdir()
     with pytest.raises(ValueError):
         run_store.save_workflow(tmp_path / "wf", {}, [], "n", overwrite=bad)
+
+
+def test_add_output_same_file_replaces_entry(tmp_path):
+    run = _run_with_outputs(tmp_path, "x", [5], NOW)
+    base = next((run / "outputs").glob("*.png"))
+    up = _png(base.with_name(base.stem + "_16x12.png"))
+    run_store.add_output(run, up, "image", upscaled_from=f"outputs/{base.name}")
+    run_store.add_output(run, up, "image", upscaled_from=f"outputs/{base.name}")   # upscaled again
+    files = [o["file"] for o in json.loads((run / "workflow.json").read_text())["outputs"]]
+    assert files == [f"outputs/{base.name}", f"outputs/{up.name}"]
+
+
+def test_upscale_keeps_seed_after_source_is_deleted(tmp_path):
+    run = _run_with_outputs(tmp_path, "x", [5], NOW)
+    base = next((run / "outputs").glob("*.png"))
+    up = _png(base.with_name(base.stem + "_16x12.png"))
+    run_store.add_output(run, up, "image", upscaled_from=f"outputs/{base.name}")
+    run_store.remove_output(run, f"outputs/{base.name}")
+    assert [i["seed"] for i in run_store.list_outputs(tmp_path)] == [5]

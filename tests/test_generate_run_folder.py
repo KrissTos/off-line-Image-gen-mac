@@ -106,3 +106,30 @@ def test_batch_generate_one_run_per_image(api, tmp_path):
     for run in runs:
         data = json.loads((run / "workflow.json").read_text())
         assert len(data["outputs"]) == 1 and data["ref_slots"][0]["image"] == "refs/slot_1.png"
+
+
+class ProgressFirstManager(FakeManager):
+    async def generate(self, params):
+        yield {"type": "progress", "message": "step 1"}
+        async for e in super().generate(params):
+            yield e
+
+
+def test_client_disconnect_keeps_recording_the_run(api):
+    import asyncio
+    import server
+    from core import run_store
+    client_with, out, trashed = api
+    client_with(ProgressFirstManager())         # installs the fake manager
+    run = run_store.create_run(out, {"prompt": "late"}, [])
+
+    async def scenario():
+        gen = server._run_events(run, {"prompt": "late"}, -1)
+        assert (await gen.__anext__())["type"] == "progress"
+        await gen.aclose()                      # client disconnects before any output
+        await asyncio.gather(*getattr(server, "_RUN_TASKS", ()))
+
+    asyncio.run(scenario())
+    assert trashed == []
+    data = json.loads((run / "workflow.json").read_text())
+    assert [o["seed"] for o in data["outputs"]] == [111, 222]

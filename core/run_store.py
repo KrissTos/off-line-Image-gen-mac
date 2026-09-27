@@ -119,13 +119,17 @@ def add_output(run_dir, file_path, kind: str, seed: int | None = None,
                upscaled_from: str | None = None) -> dict:
     run_dir = Path(run_dir)
     data = read_workflow(run_dir)
+    outputs = data.setdefault("outputs", [])
     entry: dict = {"file": Path(file_path).resolve().relative_to(run_dir.resolve()).as_posix(),
                    "kind": kind}
+    if seed is None and upscaled_from:    # upscale keeps its source's seed, even if the source goes
+        seed = next((o.get("seed") for o in outputs if o.get("file") == upscaled_from), None)
     if seed is not None:
         entry["seed"] = int(seed)
     if upscaled_from:
         entry["upscaled_from"] = upscaled_from
-    data.setdefault("outputs", []).append(entry)
+    # Same file again (e.g. upscaled twice at the same size) replaces its entry
+    data["outputs"] = [o for o in outputs if o.get("file") != entry["file"]] + [entry]
     _write_json(run_dir / "workflow.json", data)
     return entry
 
