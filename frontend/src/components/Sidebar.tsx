@@ -6,6 +6,7 @@ import {
   Eraser,
 } from 'lucide-react'
 import type { GenerateParams, RefImageSlot, LoraSlot } from '../types'
+import type { WorkflowData } from '../workflow'
 import { importComfyUI, loadWorkflow, saveWorkflow, uploadLora, uploadUpscaleModel, streamBatchUpscale, streamBatchGenerate, openFolderDialog, openFileDialog, upscaleSingleImage, updateSettings, openWorkflowFolderDialog, listLoras, stopGeneration, generateDepthMap, eraseDetect, eraseRemove } from '../api'
 import HelpTip from './HelpTip'
 import { canvasForRef, sizeFamily } from '../canvasSize'
@@ -819,7 +820,7 @@ interface WorkflowPanelProps {
   workflows:    string[]
   params:       GenerateParams
   refSlots:     RefImageSlot[]
-  onLoad:       (wf: Record<string, unknown>) => Promise<void>
+  onLoad:       (wf: WorkflowData, name: string) => Promise<void>
   onRefresh:    () => void
   onImportComfyUI: (wf: Record<string, unknown>, notes: string) => void
   onStatus:     (msg: string) => void
@@ -833,7 +834,7 @@ function WorkflowPanel({ workflows, params, refSlots, onLoad, onRefresh, onImpor
     if (!selected) return
     try {
       const wf = await loadWorkflow(selected)
-      await onLoad(wf)
+      await onLoad(wf, selected)
     } catch (e: unknown) {
       onStatus(`Error loading workflow: ${(e as Error).message}`)
     }
@@ -846,7 +847,7 @@ function WorkflowPanel({ workflows, params, refSlots, onLoad, onRefresh, onImpor
       const name = path.split('/').filter(Boolean).pop() ?? ''
       if (!name) return
       const wf = await loadWorkflow(name)
-      await onLoad(wf)
+      await onLoad(wf, name)
       setSelected(name)
     } catch (e: unknown) {
       onStatus(`Error loading workflow: ${(e as Error).message}`)
@@ -1397,7 +1398,9 @@ interface SidebarProps {
   onGenerate:           () => void
   onStop:               () => void
   onIterate:            () => void
-  onWorkflowLoad:       (wf: Record<string, unknown>) => Promise<void>
+  onWorkflowLoad:       (wf: WorkflowData, name: string) => Promise<void>
+  loadedWorkflow:       string | null            // saved workflow Save would overwrite
+  onWorkflowSaved:      (name: string) => void
   onWorkflowRefresh:    () => void
   onRefresh:            () => void
   onStatus:             (msg: string) => void

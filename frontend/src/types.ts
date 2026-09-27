@@ -17,6 +17,9 @@ export interface AppStatus {
   is_batch_running?:  boolean
 }
 
+/** A ref slot as recorded in the run folder (sent with every generate). */
+export interface SlotRecord { imageId: string; maskId: string | null; strength: number }
+
 export interface GenerateParams {
   prompt:             string
   height:             number
@@ -42,6 +45,7 @@ export interface GenerateParams {
   mask_mode:          string
   outpaint_align:     string
   depth_model_repo:   string
+  ref_slots?:         SlotRecord[]
 }
 
 /** One reference-image slot — image + optional per-slot mask, labeled #1/#2/… */
@@ -70,7 +74,9 @@ export interface OutputItem {
   url:                string
   mtime:              number
   kind:               'image' | 'video'
-  /** All fields below come from the sidecar JSON saved at generation time */
+  run?:               string
+  file?:              string
+  /** All fields below come from the run's workflow.json */
   prompt?:            string
   model_choice?:      string
   model_source?:      string
@@ -78,7 +84,7 @@ export interface OutputItem {
   height?:            number
   steps?:             number
   guidance?:          number
-  seed?:              number
+  seed?:              number | null
   img_strength?:      number
   mask_mode?:         string
   outpaint_align?:    string
@@ -90,8 +96,6 @@ export interface OutputItem {
   fps?:               number
   fast_preview?:      boolean
   device?:            string
-  ref_image_count?:   number
-  has_mask?:          boolean
 }
 
 export interface Workflow {

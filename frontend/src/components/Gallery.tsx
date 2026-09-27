@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react'
-import { Film, Trash2, Info, ArrowUpCircle, Loader2, RotateCcw, LayoutGrid, GalleryHorizontal } from 'lucide-react'
+import { Film, Trash2, Info, ArrowUpCircle, Loader2, LayoutGrid, GalleryHorizontal } from 'lucide-react'
 import type { OutputItem } from '../types'
 
 type Layout = 'strip' | 'grid'
@@ -11,15 +11,14 @@ function readLayout(): Layout {
 
 interface Props {
   outputs:          OutputItem[]
-  onSelect:         (item: OutputItem) => void
+  onSelect:         (item: OutputItem) => void | Promise<void>
   onDelete:         (filename: string) => void
-  onLoadParams?:    (item: OutputItem) => void
   upscaleModelPath?: string
   onUpscale?:        (item: OutputItem) => void
   upscalingItem?:    string | null   // url of item currently being upscaled
 }
 
-export default function Gallery({ outputs, onSelect, onDelete, onLoadParams, upscaleModelPath, onUpscale, upscalingItem }: Props) {
+export default function Gallery({ outputs, onSelect, onDelete, upscaleModelPath, onUpscale, upscalingItem }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const [imgDims, setImgDims] = useState<Record<string, { w: number; h: number }>>({})
   const [showInfo, setShowInfo] = useState<string | null>(null)   // url of item with visible info tooltip
@@ -124,17 +123,6 @@ export default function Gallery({ outputs, onSelect, onDelete, onLoadParams, ups
                       ? <Loader2 size={16} className="animate-spin" aria-hidden="true" />
                       : <ArrowUpCircle size={16} aria-hidden="true" />
                     }
-                  </button>
-                )}
-
-                {/* Load params button */}
-                {onLoadParams && item.prompt !== undefined && (
-                  <button
-                    onClick={e => { e.stopPropagation(); onLoadParams(item) }}
-                    aria-label="Load generation parameters"
-                    className="bg-black/70 hover:bg-emerald-600 rounded-full p-1.5 transition-colors"
-                  >
-                    <RotateCcw size={16} aria-hidden="true" />
                   </button>
                 )}
 

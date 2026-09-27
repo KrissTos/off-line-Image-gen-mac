@@ -4,8 +4,9 @@ import type { GenerateParams, SSEEvent, OutputItem } from './types'
 import {
   fetchStatus, fetchModels, fetchDevices, fetchWorkflows,
   fetchOutputs, uploadImage, uploadFromUrl, streamGenerate, pingServer,
-  fetchSettings, deleteOutput, upscaleSingleImage, stopGeneration,
+  fetchSettings, deleteOutput, upscaleSingleImage, stopGeneration, loadRun,
 } from './api'
+import { workflowToParams, type WorkflowData } from './workflow'
 
 function hexToRgbVar(hex: string): string {
   const h = hex.replace('#', '')
@@ -77,6 +78,7 @@ export default function App() {
   const isRestoringWorkflow   = useRef(false)
   const [statusMsg, setStatusMsg] = useState('')
   const [upscalingGalleryUrl, setUpscalingGalleryUrl] = useState<string | null>(null)
+  const [loadedWorkflow, setLoadedWorkflow] = useState<string | null>(null)   // saved workflow the panel would overwrite
   const centerRef   = useRef<HTMLDivElement>(null)
   const [rowPcts, setRowPcts] = useState<[number, number, number]>([50, 36, 14])
 
@@ -224,7 +226,10 @@ export default function App() {
     dispatch({ type: 'START_GENERATE' })
 
     abortRef.current = new AbortController()
-    const params: GenerateParams = { ...state.params }
+    const params: GenerateParams = {
+      ...state.params,
+      ref_slots: state.refSlots.map(s => ({ imageId: s.imageId, maskId: s.maskId, strength: s.strength })),
+    }
 
     try {
       const onEvent = (e: SSEEvent) => {
@@ -257,7 +262,7 @@ export default function App() {
       dispatch({ type: 'STOP_GENERATE' })
       abortRef.current = null
     }
-  }, [state.isGenerating, state.params, dispatch, refreshOutputs])
+  }, [state.isGenerating, state.params, state.refSlots, dispatch, refreshOutputs])
 
   const handleStop = useCallback(() => {
     stopGeneration()
@@ -416,126 +421,55 @@ export default function App() {
     }
   }, [state.params.upscale_model_path, dispatch, refreshOutputs])
 
-  // ── Gallery select: load result + inject prompt/model ─────────────────────
+  // ── Workflow restore: one path for gallery runs and saved workflows ───────
 
-  const handleSelectGallery = useCallback((item: OutputItem) => {
+  const applyWorkflow = useCallback(async (wf: WorkflowData, opts: { seed?: number | null; label: string }) => {
+    if (isRestoringWorkflow.current) return
+    isRestoringWorkflow.current = true
+    try {
+      dispatch({ type: 'SET_PARAMS', params: workflowToParams(wf, opts) })
+      dispatch({ type: 'CLEAR_ALL_SLOTS' })
+      const slots = wf.ref_slots ?? []
+      if (slots.length) setStatusMsg(`Restoring ${slots.length} ref slot(s)…`)
+      let slotId = 0
+      for (const slot of slots) {
+        try {
+          const { id, url } = await uploadFromUrl(slot.imageUrl)
+          dispatch({ type: 'ADD_REF_SLOT', imageId: id, imageUrl: url, keepSize: true })
+          slotId += 1
+          dispatch({ type: 'UPDATE_SLOT_STRENGTH', slotId, strength: slot.strength })
+          if (slot.maskUrl) {
+            const { id: mId, url: mUrl } = await uploadFromUrl(slot.maskUrl)
+            dispatch({ type: 'SET_SLOT_MASK', slotId, maskId: mId, maskUrl: mUrl })
+          }
+        } catch (err) {
+          console.error(`Workflow restore: failed to restore ${slot.imageUrl}`, err)
+        }
+      }
+      const warn = wf.warnings?.length ? ` — ${wf.warnings.join('; ')}` : ''
+      setStatusMsg(`✓ Loaded ${opts.label}${warn}`)
+    } finally {
+      isRestoringWorkflow.current = false
+    }
+  }, [dispatch, setStatusMsg])
+
+  // Gallery click: preview + reload the run's whole workflow with this output's seed
+  const handleSelectGallery = useCallback(async (item: OutputItem) => {
     dispatch({ type: 'SET_RESULT_URL', url: item.url })
-    if (item.prompt) {
-      dispatch({ type: 'SET_PARAM', key: 'prompt', value: item.prompt })
-    }
-    if (item.model_choice) {
-      dispatch({ type: 'SET_PARAM', key: 'model_choice', value: item.model_choice })
-    }
-  }, [dispatch])
-
-  // ── Workflow ──────────────────────────────────────────────────────────────
-
-  const handleWorkflowLoad = useCallback(async (wf: Record<string, unknown>) => {
-    if (isRestoringWorkflow.current) return
-    isRestoringWorkflow.current = true
+    if (state.isGenerating || !item.run) return
     try {
-      const p: Partial<GenerateParams> = {}
-      if (wf.prompt)       p.prompt       = String(wf.prompt)
-      if (wf.height)       p.height       = Number(wf.height)
-      if (wf.width)        p.width        = Number(wf.width)
-      if (wf.steps)        p.steps        = Number(wf.steps)
-      if (wf.seed)         p.seed         = Number(wf.seed)
-      if (wf.guidance)     p.guidance     = Number(wf.guidance)
-      if (wf.model_choice) p.model_choice = String(wf.model_choice)
-      if (wf.device)       p.device       = String(wf.device)
-      dispatch({ type: 'SET_PARAMS', params: p })
-
-      const slots = wf.ref_slots as Array<{ imageUrl: string; maskUrl: string | null; strength: number }> | undefined
-      if (slots?.length) {
-        setStatusMsg(`Restoring ${slots.length} ref slot(s)…`)
-        dispatch({ type: 'CLEAR_ALL_SLOTS' })
-        for (let i = 0; i < slots.length; i++) {
-          const slot = slots[i]
-          const slotId = i + 1
-          try {
-            const { id, url } = await uploadFromUrl(slot.imageUrl)
-            dispatch({ type: 'ADD_REF_SLOT', imageId: id, imageUrl: url, keepSize: true })
-            dispatch({ type: 'UPDATE_SLOT_STRENGTH', slotId, strength: slot.strength })
-            if (slot.maskUrl) {
-              const { id: mId, url: mUrl } = await uploadFromUrl(slot.maskUrl)
-              dispatch({ type: 'SET_SLOT_MASK', slotId, maskId: mId, maskUrl: mUrl })
-            }
-          } catch (err) {
-            console.error(`Workflow restore: failed to upload slot ${slotId}`, err)
-          }
-        }
-        setStatusMsg(`✓ Loaded workflow with ${slots.length} ref slot(s)`)
-      }
-      if (wf.mask_mode)      dispatch({ type: 'SET_PARAM', key: 'mask_mode',      value: wf.mask_mode as string })
-      if (wf.outpaint_align) dispatch({ type: 'SET_PARAM', key: 'outpaint_align', value: wf.outpaint_align as string })
-      if (Array.isArray(wf.lora_files)) dispatch({ type: 'SET_PARAM', key: 'lora_files', value: wf.lora_files })
-    } finally {
-      isRestoringWorkflow.current = false
+      const wf = await loadRun(item.run)
+      setLoadedWorkflow(null)
+      await applyWorkflow(wf, { seed: item.seed, label: item.run })
+    } catch (err: unknown) {
+      setStatusMsg(`Could not load run ${item.run}: ${(err as Error).message}`)
     }
-  }, [dispatch, setStatusMsg])
+  }, [state.isGenerating, dispatch, applyWorkflow, setStatusMsg])
 
-  // ── Load params from gallery image ────────────────────────────────────────
-
-  const handleLoadParams = useCallback(async (item: OutputItem) => {
-    if (isRestoringWorkflow.current) return
-    isRestoringWorkflow.current = true
-    try {
-      // Restore scalar params from sidecar fields
-      const p: Partial<GenerateParams> = {}
-      if (item.prompt        != null) p.prompt        = item.prompt
-      if (item.model_choice  != null) p.model_choice  = item.model_choice
-      if (item.model_source  != null) p.model_source  = item.model_source
-      if (item.width         != null) p.width         = item.width
-      if (item.height        != null) p.height        = item.height
-      if (item.steps         != null) p.steps         = item.steps
-      if (item.guidance      != null) p.guidance      = item.guidance
-      if (item.seed          != null) p.seed          = item.seed
-      if (item.img_strength  != null) p.img_strength  = item.img_strength
-      if (item.mask_mode     != null) p.mask_mode     = item.mask_mode
-      if (item.outpaint_align!= null) p.outpaint_align= item.outpaint_align
-      if (item.lora_files        != null) p.lora_files        = item.lora_files
-      if (item.repeat_count      != null) p.repeat_count      = item.repeat_count
-      if (item.upscale_enabled   != null) p.upscale_enabled   = item.upscale_enabled
-      if (item.upscale_model_path!= null) p.upscale_model_path= item.upscale_model_path
-      if (item.num_frames        != null) p.num_frames        = item.num_frames
-      if (item.fps               != null) p.fps               = item.fps
-      if (item.fast_preview      != null) p.fast_preview      = item.fast_preview
-      dispatch({ type: 'SET_PARAMS', params: p })
-
-      // Restore ref images + mask from companion folder
-      const stem = item.name.replace(/\.[^.]+$/, '')
-      const refCount = item.ref_image_count ?? 0
-      if (refCount > 0 || item.has_mask) {
-        setStatusMsg(`Restoring ${refCount} ref image(s)…`)
-        dispatch({ type: 'CLEAR_ALL_SLOTS' })
-        for (let i = 0; i < refCount; i++) {
-          const refUrl = `/api/output/${stem}/ref_slot_${i + 1}.png`
-          const slotId = i + 1
-          try {
-            const { id, url } = await uploadFromUrl(refUrl)
-            dispatch({ type: 'ADD_REF_SLOT', imageId: id, imageUrl: url, keepSize: true })
-            if (i === 0 && item.img_strength != null) {
-              dispatch({ type: 'UPDATE_SLOT_STRENGTH', slotId, strength: item.img_strength })
-            }
-            if (i === 0 && item.has_mask) {
-              const maskUrl = `/api/output/${stem}/mask.png`
-              try {
-                const { id: mId, url: mUrl } = await uploadFromUrl(maskUrl)
-                dispatch({ type: 'SET_SLOT_MASK', slotId, maskId: mId, maskUrl: mUrl })
-              } catch { /* mask may not exist */ }
-            }
-          } catch (err) {
-            console.error(`Load params: failed to upload ref slot ${slotId}`, err)
-          }
-        }
-        setStatusMsg(`✓ Params loaded from ${item.name}`)
-      } else {
-        setStatusMsg(`✓ Params loaded from ${item.name}`)
-      }
-    } finally {
-      isRestoringWorkflow.current = false
-    }
-  }, [dispatch, setStatusMsg])
+  const handleWorkflowLoad = useCallback(async (wf: WorkflowData, name: string) => {
+    setLoadedWorkflow(name)
+    await applyWorkflow(wf, { label: name })
+  }, [applyWorkflow])
 
   // ── Render ────────────────────────────────────────────────────────────────
 
@@ -578,6 +512,8 @@ export default function App() {
           onStop={handleStop}
           onIterate={handleIterateGenerate}
           onWorkflowLoad={handleWorkflowLoad}
+          loadedWorkflow={loadedWorkflow}
+          onWorkflowSaved={setLoadedWorkflow}
           onWorkflowRefresh={refreshWorkflows}
           onRefresh={refreshOutputs}
           onStatus={setStatusMsg}
@@ -633,7 +569,6 @@ export default function App() {
               outputs={state.outputs}
               onSelect={handleSelectGallery}
               onDelete={handleDeleteOutput}
-              onLoadParams={handleLoadParams}
               upscaleModelPath={state.params.upscale_model_path}
               onUpscale={handleUpscaleGalleryItem}
               upscalingItem={upscalingGalleryUrl}

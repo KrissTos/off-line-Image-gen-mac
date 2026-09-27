@@ -1,4 +1,5 @@
 import type { AppStatus, GenerateParams, OutputItem, SSEEvent } from './types'
+import type { WorkflowData } from './workflow'
 
 const BASE = ''   // same-origin; Vite proxies /api in dev
 
@@ -260,9 +261,10 @@ export const deleteOutput = (filename: string) =>
 // ── Workflows ─────────────────────────────────────────────────────────────────
 
 export const fetchWorkflows   = () => get<{ workflows: string[] }>('/api/workflows')
-export const loadWorkflow     = (name: string) => get<Record<string, unknown>>(`/api/workflows/${encodeURIComponent(name)}`)
+export const loadRun          = (run: string) => get<WorkflowData>(`/api/runs/${encodeURIComponent(run)}`)
+export const loadWorkflow     = (name: string) => get<WorkflowData>(`/api/workflows/${encodeURIComponent(name)}`)
 export const saveWorkflow     = (data: Record<string, unknown>) =>
-  post<{ status: string }>('/api/workflows/save', data)
+  post<{ status: string; name: string }>('/api/workflows/save', data)
 
 export async function importComfyUI(file: File) {
   const fd = new FormData()
