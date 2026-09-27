@@ -333,6 +333,7 @@ class SaveWorkflowRequest(BaseModel):
     ref_slots:          list[dict] = []
     mask_mode:          str        = ""
     outpaint_align:     str        = ""
+    overwrite:          str | None = None   # existing folder name → rewrite in place
 
 
 class UpdateSettingsRequest(BaseModel):
@@ -832,155 +833,35 @@ async def api_open_workflow_folder_dialog():
 
 
 @app.post("/api/workflows/save")
-async def api_save_workflow(req: SaveWorkflowRequest):
+def api_save_workflow(req: SaveWorkflowRequest):
     a = _app()
-    Path(a.WORKFLOWS_DIR).mkdir(parents=True, exist_ok=True)
-    date_str    = datetime.now().strftime("%y-%m-%d")
-    custom      = (req.name or "").strip().replace(" ", "_")
-    folder_name = f"{date_str}_{custom}" if custom else date_str
-    wf_dir      = Path(a.WORKFLOWS_DIR) / folder_name
-    wf_dir.mkdir(parents=True, exist_ok=True)
-
-    saved_slots = []
-    for idx, slot in enumerate(req.ref_slots, start=1):
-        img_id = slot.get("imageId") or ""
-        if not img_id:
-            continue
-        img_src = TEMP_DIR / img_id
-        try:
-            img_src = img_src.resolve()
-        except OSError:
-            continue
-        if not img_src.is_relative_to(TEMP_DIR.resolve()):
-            continue
-        if not img_src.exists():
-            continue
-        img_dst = wf_dir / f"slot_{idx}_image.png"
-        shutil.copy2(img_src, img_dst)
-        mask_fname = None
-        mask_id = slot.get("maskId") or ""
-        if mask_id:
-            mask_src = TEMP_DIR / mask_id
-            try:
-                mask_src = mask_src.resolve()
-            except OSError:
-                pass
-            else:
-                if mask_src.is_relative_to(TEMP_DIR.resolve()) and mask_src.exists():
-                    mask_dst = wf_dir / f"slot_{idx}_mask.png"
-                    shutil.copy2(mask_src, mask_dst)
-                    mask_fname = f"slot_{idx}_mask.png"
-        saved_slots.append({
-            "image":    f"slot_{idx}_image.png",
-            "mask":     mask_fname,
-            "strength": float(slot.get("strength", 1.0)),
-        })
-
-    data = {
-        "name":               req.name or folder_name,
-        "timestamp":          datetime.now().strftime("%Y%m%d_%H%M%S"),
-        "prompt":             req.prompt,
-        "height":             req.height,
-        "width":              req.width,
-        "steps":              req.steps,
-        "seed":               req.seed,
-        "guidance":           req.guidance,
-        "device":             req.device,
-        "model_choice":       req.model_choice,
-        "model_source":       req.model_source,
-        "lora_files":         req.lora_files,
-        "lora_file":          req.lora_file,   # legacy fallback
-        "lora_strength":      req.lora_strength,
-        "img_strength":       req.img_strength,
-        "repeat_count":       req.repeat_count,
-        "upscale_enabled":    req.upscale_enabled,
-        "upscale_model_path": req.upscale_model_path,
-        "num_frames":         req.num_frames,
-        "fps":                req.fps,
-        "ref_slots":          saved_slots,
-        "mask_mode":          req.mask_mode,
-        "outpaint_align":     req.outpaint_align,
-    }
-    with open(wf_dir / "workflow.json", "w") as f:
-        json.dump(data, f, indent=2)
-
-    return {"status": f"✓ Saved: {folder_name}", "name": folder_name}
+    slots = []
+    for s in req.ref_slots:
+        img = _guarded_temp(s.get("imageId"))
+        if img is not None:
+            slots.append({"image_path": img, "mask_path": _guarded_temp(s.get("maskId")),
+                          "strength": float(s.get("strength", 1.0))})
+    try:
+        name = run_store.save_workflow(Path(a.WORKFLOWS_DIR), req.model_dump(), slots, req.name,
+                                       overwrite=req.overwrite)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"status": f"✓ Saved: {name}", "name": name}
 
 
 @app.get("/api/workflows/{name:path}")
-async def api_load_workflow(name: str):
-    a         = _app()
-    wf_dir    = Path(a.WORKFLOWS_DIR) / name
-    json_path = wf_dir / "workflow.json"
-    # Guard: ensure name doesn't escape WORKFLOWS_DIR
-    wf_base = Path(a.WORKFLOWS_DIR).resolve()
-    try:
-        wf_resolved = wf_dir.resolve()
-    except OSError:
+def api_load_workflow(name: str):
+    a = _app()
+    base = Path(a.WORKFLOWS_DIR)
+    wf_dir = run_store.safe_join(base, name)
+    if wf_dir is None or wf_dir == base.resolve():
         raise HTTPException(400, "Invalid workflow name")
-    if not wf_resolved.is_relative_to(wf_base):
-        raise HTTPException(400, "Invalid workflow name")
-    if not json_path.exists():
+    if not (wf_dir / "workflow.json").is_file():
         raise HTTPException(404, f"Workflow not found: {name}")
     try:
-        result = a.load_workflow(name)
-        # result is an 18-tuple matching _wf_load_outputs; last element is status
-        keys = ["prompt", "height", "width", "steps", "seed", "guidance",
-                "device", "model_choice", "model_source", "lora_strength",
-                "img_strength", "repeat_count", "upscale_enabled",
-                "upscale_model_path", "num_frames", "fps", "input_images", "status"]
-        d = dict(zip(keys, result))
-    except Exception as e:
-        raise HTTPException(500, str(e))
-    d.pop("input_images", None)
-
-    try:
-        with open(json_path) as fh:
-            raw = json.load(fh)
-    except Exception as e:
+        return run_store.load(wf_dir, f"/api/workflow-assets/{name}")
+    except ValueError as e:
         raise HTTPException(500, f"Failed to read workflow.json: {e}")
-
-    ref_slots_out = []
-    wf_dir_resolved = wf_dir.resolve()
-    for slot in raw.get("ref_slots", []):
-        img_file = slot.get("image")
-        if not img_file:
-            continue
-        # Guard against traversal in stored filenames
-        try:
-            img_resolved = (wf_dir / img_file).resolve()
-        except OSError:
-            continue
-        if not img_resolved.is_relative_to(wf_dir_resolved):
-            continue
-        if not img_resolved.exists():
-            continue
-        mask_name = slot.get("mask")
-        mask_url = None
-        if mask_name:
-            try:
-                mask_resolved = (wf_dir / mask_name).resolve()
-            except OSError:
-                mask_resolved = None
-            if mask_resolved and mask_resolved.is_relative_to(wf_dir_resolved) and mask_resolved.exists():
-                mask_url = f"/api/workflow-assets/{name}/{mask_name}"
-        ref_slots_out.append({
-            "imageUrl":  f"/api/workflow-assets/{name}/{img_file}",
-            "maskUrl":   mask_url,
-            "strength":  slot.get("strength", 1.0),
-        })
-
-    d["ref_slots"]      = ref_slots_out
-    d["mask_mode"]      = raw.get("mask_mode", "")
-    d["outpaint_align"] = raw.get("outpaint_align", "")
-    # Multi-LoRA: prefer lora_files array; fall back to legacy lora_file/lora_strength
-    if raw.get("lora_files"):
-        d["lora_files"] = raw["lora_files"]
-    elif raw.get("lora_file"):
-        d["lora_files"] = [{"path": raw["lora_file"], "strength": raw.get("lora_strength", 1.0)}]
-    else:
-        d["lora_files"] = []
-    return d
 
 
 @app.post("/api/workflows/import")
@@ -1726,14 +1607,14 @@ async def api_save_log():
 
 # ── Routes: Workflow assets ───────────────────────────────────────────────────
 
-@app.get("/api/workflow-assets/{name}/{filename}")
+@app.get("/api/workflow-assets/{name}/{filename:path}")
 async def api_workflow_asset(name: str, filename: str):
     a    = _app()
     base = Path(a.WORKFLOWS_DIR).resolve()
     path = (base / name / filename).resolve()
     if not path.is_relative_to(base):
         raise HTTPException(400, "Invalid path")
-    if not path.exists():
+    if not path.is_file():
         raise HTTPException(404, "Asset not found")
     return FileResponse(str(path))
 
