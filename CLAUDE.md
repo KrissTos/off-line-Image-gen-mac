@@ -71,12 +71,12 @@ venv/bin/python -m pytest -q   # full suite
 2. Pass FLUX refs #2+ at native size (`prepare_flux_refs()`); the pipeline keeps their aspect.
 3. In crop mode swap only slot #1 for its crop (`crop_flux_refs()`); keep material refs.
 4. Keep `app._SNAP_REL` (3%) and the Sidebar size-note tolerance in sync.
-8. FLUX 4B + padding → outpaint LoRA path (green pad, auto LoRA, trigger prompt); don't send it for 9B/Z-Image.
-9. Load FLUX LoRAs only through `core/lora_flux2` (own BFL converter) and `sync_loras()`; never ignore a load status.
 5. Auto-size lives in the store reducer (`autoSizeParams()`), never in a `SizePanel` effect.
 <!-- Accordion renders {open && children}: effects there miss collapsed state and re-fire on reopen -->
 6. Mark slots restored from Load Params / workflows with `keepSize: true`.
 7. All current models are distilled: guidance 0 (LTX 1.0), steps 20 FLUX / 4 Z-Image; guidance slider stays hidden.
+8. FLUX 4B + padding → outpaint LoRA path (green pad, auto LoRA, trigger prompt); don't send it for 9B/Z-Image.
+9. Load FLUX LoRAs only through `core/lora_flux2` (own BFL converter) and `sync_loras()`; never ignore a load status.
 
 ## 8. Video (LTX) rules
 1. Use `LTXConditionPipeline` only.
