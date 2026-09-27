@@ -109,6 +109,7 @@ Actions: `ADD_REF_SLOT` · `REMOVE_REF_SLOT` · `SET_SLOT_MASK` · `CLEAR_SLOT_M
 
 ### Iterative multi-mask inpainting
 `handleIterateGenerate` in `App.tsx` chains one `/api/generate` call per masked slot. Pass N: `inputs=[prev_out, slotN.image], mask=slotN.maskId, strength=slotN.strength`. `uploadFromUrl(url)` re-uploads between passes.
+**Crop & Composite + FLUX refs**: crop mode swaps only slot #1 for its bbox crop; slots #2+ (material/style refs) pass through untouched via `crop_flux_refs()` (`tests/test_mask_crop.py`). Used to replace ALL refs with the crop → masked edits ignored material refs and invented textures. "Inpainting Pipeline" mode on FLUX = plain img2img, no composite (FluxInpaintPipeline incompatible) — mask has no effect there.
 
 ### API endpoints
 | Method | Path | Notes |
