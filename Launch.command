@@ -55,7 +55,7 @@ if [[ "$1" == "--debug" ]]; then
         (cd frontend && npm install && npm run build)
     fi
 
-    (sleep 5 && open -a "Google Chrome" http://127.0.0.1:7860) &
+    (sleep 5 && open -a "Google Chrome" http://127.0.0.1:7860 2>/dev/null || open http://127.0.0.1:7860) &
     UV_PROJECT_ENVIRONMENT=venv "$UV" run python server.py --port 7860 --debug --no-auto-shutdown
     osascript -e 'delay 0.3
 tell application "Terminal" to close front window' 2>/dev/null &
@@ -124,7 +124,7 @@ else
     echo "(Press Ctrl+C to stop)"
     echo ""
 
-    (sleep 5 && open -a "Google Chrome" http://127.0.0.1:7860) &
+    (sleep 5 && open -a "Google Chrome" http://127.0.0.1:7860 2>/dev/null || open http://127.0.0.1:7860) &
     UV_PROJECT_ENVIRONMENT=venv "$UV" run python server.py --port 7860
     osascript -e 'delay 0.3
 tell application "Terminal" to close front window' 2>/dev/null &
