@@ -10,7 +10,6 @@ __pycache__/
 *.pt
 *.pth
 .DS_Store
-CLAUDE.md
 requirements.txt
 workflows/
 lora_uploads/
@@ -27,3 +26,5 @@ docs/superpowers/
 node-compile-cache/
 node-jiti/
 uv-setuptools-*.lock
+.pytest_cache/
+work/

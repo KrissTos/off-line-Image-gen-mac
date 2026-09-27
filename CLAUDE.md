@@ -1,211 +1,89 @@
-# off-line-Image-gen-mac — Project Notes
+# off-line-Image-gen-mac
 
-<!-- TOC: maintaining · workflow-defaults · what-is · entry-points · run · architecture · api-table · sse-events · state-slots · iterate-masks · models · deps · gitignore · known-issues · features -->
+Offline AI image/video generation for Apple Silicon (MPS): FLUX.2-klein, Z-Image Turbo, LTX-Video.
+FastAPI backend + React frontend. UI brand "Local AI Image Gen".
 
-## Maintaining this file
-- **Single file only** — never split into multiple docs; one file is easier for AI sessions to load and reason about
-- **Keep it short** — target ≤ 200 lines; when adding new content, trim or compress something else
-- **Update after every session** — reflect actual code state; stale docs are worse than no docs
-- **TOC comment** — keep the `<!-- TOC: … -->` line at the top updated with section anchors
-- **Dense format** — prefer tables, inline code, and one-liner bullets over prose paragraphs; avoid restating things the code makes obvious
-- **Proactive `/ukn` prompts** — after fixing a non-obvious bug, adding a significant architectural piece, or resolving a tricky gotcha, proactively suggest "worth running `/ukn` to save this" before context fills up
+## Pointers
+- Backend/frontend files, components, API endpoints, SSE events → docs/architecture.md
+- Models, VRAM, sizing/fit, masking, LoRA, LTX, depth-map internals → docs/models.md
+- Open issues and ideas → docs/TODO.md
+- History, past bugs, "why we did X" → CHANGELOG.md
 
-## When to use superpowers vs direct implementation
-- **`quick:` prefix** — user signals direct implementation; skip brainstorm/plan/subagents entirely, just write the code
-- **1–2 files, clear requirements** → implement directly, no brainstorm/plan needed
-- **3+ files, or design is unclear** → full superpowers flow (brainstorm → spec → plan → subagent-driven-development)
+## 1. Maintaining this file
+1. Keep it ≤ 200 lines, operational only; follow `~/.claude/docs/claudemd-hygiene.md`.
+2. Route content: long reference → `docs/architecture.md` or `docs/models.md`; open items → `docs/TODO.md`; done/dated → `CHANGELOG.md`.
+3. Update the matching doc in the same session as the code change.
+4. Suggest `/ukn` after a non-obvious bug fix or a new architectural piece.
 
-## Workflow defaults (anti-rework)
-> `server.py` was reworked 16× across sessions — these defaults exist to stop that loop.
-- **Plan mode first** for any edit to `server.py` / `app.py` or touching 2+ files — draft + refine the plan before writing code. Large files punish blind edits.
-- **Read before edit** — read the actual target region of `server.py`; never edit it from memory.
-- **Spec/test before code** for new behavior — write a failing test in `tests/` (or a 3-line spec) first, then make it pass.
-- **Commits are test-gated** (both block on `pytest` failure, keep `tests/` green): `.claude/hooks/pre-commit-test-gate.sh` covers Claude Code commits; `.githooks/pre-commit` covers manual terminal commits. Enable the latter once per clone: `git config core.hooksPath .githooks`
-- **One step at a time** — implement → verify → commit incrementally; don't batch many edits before testing.
-- **`/clear` when stuck** — corrected twice on the same issue → write a progress note, `/clear`, restart clean (avoid `/compact`).
+## 2. Workflow
+1. `quick:` prefix → implement directly, no brainstorm/plan.
+2. 1–2 files with clear requirements → implement directly.
+3. 3+ files or unclear design → superpowers flow (brainstorm → spec → plan → subagents).
+4. Plan first for any edit to `server.py` / `app.py` or touching 2+ files.
+<!-- server.py was reworked 16× across sessions; large files punish blind edits -->
+5. Read the target region before editing `server.py` / `app.py`; never edit from memory.
+6. Write a failing test in `tests/` before new behavior, then make it pass.
+7. Implement → verify → commit one step at a time.
+8. Corrected twice on the same issue → write a progress note, `/clear`, restart (avoid `/compact`).
 
-## What this project is
-Fully offline AI image generation for Mac Silicon (MPS). No cloud, no subscriptions. Supports FLUX.2 and Z-Image Turbo models with 4-bit/int8 quantization. Features: text-to-image, image-to-image editing, multi-slot reference images with per-slot rectangle-mask drawing, iterative multi-mask inpainting, multi-LoRA stacking (up to 5, per-slot strength), gallery drag-and-drop into ref slots, inline HelpTip ⓘ tooltips, upscaling (single + batch folder), video generation (LTX-Video), **batch img2img**, **depth map generation** (DA3 16-bit PNG), **watermark removal** (FFT heuristic detect + LaMa inpainting, `core/erase.py`). **Gradio fully removed** — `app.py` is pure backend logic only.
+## 3. Folders
+1. Put per-job scratch in `work/<job>/` (gitignored); trash it when the job is done.
+2. Put project docs in `docs/` (max 3 topic files + `TODO.md`); never in `~/Downloads/Claude AI/`.
+3. Never commit runtime data: `models/`, `venv/`, `huggingface/`, `lora_uploads/`, `upscale_models/`, `workflows/`, `logs/`, `.tmp_uploads/`, `model_sources.json`.
+4. `app_settings.json` is tracked but holds local runtime settings; leave its diffs uncommitted unless asked.
 
-**Renamed from** `ultra-fast-image-gen` → `off-line-Image-gen-mac`. Brand name in UI: **"Local AI Image Gen"** (TopBar + browser tab title).
-
-## Entry points
-| File | Purpose |
-|------|---------|
-| `server.py` | **FastAPI backend** — production API + static file server |
-| `app.py` | Pure backend logic — Gradio UI fully removed |
-| `generate.py` | CLI — **Z-Image Turbo only**, does NOT support FLUX/LTX |
-| `Launch.command` | Double-click Mac launcher (3 modes below) |
-
-## How to run
+## 4. Run
 ```bash
-./Launch.command              # production: builds frontend/dist, serves :7860
-./Launch.command --dev        # dev: FastAPI :7861 + Vite HMR at :5173
-
-# Manual
-source venv/bin/activate
-python server.py --port 7860 --no-auto-shutdown
-cd frontend && npm run build  # rebuild after any frontend change
+./Launch.command               # production: builds frontend/dist, serves :7860
+./Launch.command --dev         # FastAPI :7861 + Vite HMR :5173
+venv/bin/python server.py --port 7860 --no-auto-shutdown
+cd frontend && npm run build   # after any frontend change
+venv/bin/python -m pytest -q   # full suite
 ```
+1. Server exits 60 s after the last browser ping; use `--no-auto-shutdown` for headless/API testing.
+2. Restart the server after backend changes (no auto-reload).
+3. `generate.py` CLI is Z-Image Turbo only.
 
-**Browser heartbeat / auto-shutdown**: server shuts down 60 s after last ping. Frontend sends `POST /api/ping` every 5s AND fires `navigator.sendBeacon('/api/shutdown')` on `beforeunload`. `api_shutdown` starts a **4 s cancellable countdown** (`_shutdown_task`); the next `/api/ping` cancels it — so a page **refresh survives** (reconnects in <1s), while a real tab close shuts down after 4s. Watcher skips shutdown if `manager.is_busy`. Disable: `--no-auto-shutdown` (passed via env `IMAGEGEN_NO_AUTO_SHUTDOWN=1` — `uvicorn.run("server:app")` re-imports the module, so a `__main__` global never reached the served app; flag was a no-op before, `tests/test_auto_shutdown_flag.py`).
+## 5. Environment
+1. Use `uv`, never pip; sync with `UV_PROJECT_ENVIRONMENT=venv uv sync`.
+<!-- plain `uv sync` targets .venv/, the wrong env; Launch.command sets the variable -->
+2. Use `venv/bin/python` for everything (tests, server, scripts).
+3. `diffusers` and `sdnq` come from git main (FLUX.2-klein LoRA needs it).
+4. xformers is not needed on Apple Silicon (MPS has SDPA); don't try to install it.
+5. HF token lives in `huggingface/token` (gitignored, Read type); gated models need terms accepted on their page.
+6. Models live in the global HF cache `~/.cache/huggingface/hub`, not `./models/`.
+7. Enable the terminal commit gate once per clone: `git config core.hooksPath .githooks`.
+8. Commits are test-gated (`.claude/hooks/pre-commit-test-gate.sh` + `.githooks/pre-commit`); keep `tests/` green.
 
-## HuggingFace token
-Stored in `huggingface/token` (gitignored). Type: **Read** (fine-grained, gated repos). Login via Settings drawer in UI, or `python -c "from huggingface_hub import login; login()"`. Must also accept terms on each gated model page.
+## 6. Backend rules
+1. Keep the SPA wildcard route `/{path:path}` LAST in `server.py`; routes after it are unreachable.
+2. Make endpoints with blocking calls (HF `whoami()`, `os.walk`) sync `def`, not `async def`.
+3. Guard every endpoint taking a temp file id: `path.resolve().is_relative_to(TEMP_DIR.resolve())`.
+4. Use `manager.stop_requested`, never `_stop_event`, from `server.py`.
+5. Use `core/lora_zimage.load_lora_for_pipeline()` for Z-Image LoRA; never `pipe.load_lora_weights()`.
+6. Never use `FluxInpaintPipeline` with Flux2Klein (incompatible); masked FLUX = img2img + composite.
+7. Model keys: internal `current_model` → `startswith("flux2")`; display `model_choice` → `startsWith('FLUX')`. Never mix.
+8. Resize binary masks with `Image.NEAREST`, never LANCZOS.
+9. Default model = `default_model` in `app_settings.json`, read in `App.tsx` bootstrap after `fetchSettings()`.
 
-## Architecture
+## 7. Image pipeline rules
+1. Never stretch slot #1: fit it with `fit_ref_to_canvas()` and give its mask the same transform.
+2. Pass FLUX refs #2+ at native size (`prepare_flux_refs()`); the pipeline keeps their aspect.
+3. In crop mode swap only slot #1 for its crop (`crop_flux_refs()`); keep material refs.
+4. Keep `app._SNAP_REL` (3%) and the Sidebar size-note tolerance in sync.
+5. Auto-size lives in the store reducer (`autoSizeParams()`), never in a `SizePanel` effect.
+<!-- Accordion renders {open && children}: effects there miss collapsed state and re-fire on reopen -->
+6. Mark slots restored from Load Params / workflows with `keepSize: true`.
+7. All current models are distilled: guidance 0 (LTX 1.0), steps 20 FLUX / 4 Z-Image; guidance slider stays hidden.
 
-### Backend key files
-**`pipeline.py`** — `PipelineManager` singleton wrapping `app.generate_image()` in `asyncio.Lock` + `ThreadPoolExecutor(1)`. Yields SSE event dicts. `auto_save=False` prevents double-saving. Stop: `threading.Event` + `_GenerationStopped` raised from step callback; `finally` always runs `gc.collect()` + `torch.mps.empty_cache()`. `is_batch_running: bool` flag; `stop_requested` property (public accessor for `_stop_event.is_set()`).
+## 8. Video (LTX) rules
+1. Use `LTXConditionPipeline` only.
+2. Frames must be 8k+1, dims multiples of 32.
+3. Keep `app.DOWNLOAD_IGNORE_PATTERNS`; never delete `vae/transformer` / `vae/text_encoder` blobs of an existing copy (deduped with the real weights).
+4. Don't add FP8 LTX variants (unsuitable for Apple Silicon).
 
-**`server.py`** — FastAPI. Serves `frontend/dist/`. All routes `/api/*`. SSE via `StreamingResponse`. HTTP 423 when pipeline busy. Writes `.json` sidecar alongside each output image. Suppresses resource_tracker semaphore warning at import time via `warnings.filterwarnings`.
-
-**`app.py`** — pure backend logic (Gradio fully removed). `generate_image()` initialises `image = None` and `video_frames = None` before each repeat-loop iteration. `lora_files: list[dict]` replaces `lora_file/lora_strength`; legacy single-LoRA args still accepted and merged at call time. `current_lora_paths: list` replaces `current_lora_path`. FLUX LoRA now loaded during generation (was previously skipped — pre-existing bug).
-
-Output filename: `{YYYYMMDD}_{slug}.png` (date + slug, no seed/time; collision → `_2`, `_3` suffix). Sidecar `…{slug}.json` has ALL params. Companion folder `{slug}/` holds `params.json` + `ref_slot_N.png` + `mask.png` when refs/mask exist. Saved to `~/Pictures/ultra-fast-image-gen/` (`app.DEFAULT_OUTPUT_DIR`).
-
-### Frontend (`frontend/`)
-Vite + React + TypeScript + Tailwind CSS v3 → `frontend/dist/`. Browser tab title: `Local AI Image Gen` (`index.html`).
-
-Key source files:
-| File | Role |
-|------|------|
-| `src/App.tsx` | Root: bootstrap, 4 s status poll, 5 s heartbeat, SSE handler, ref-slot handlers, iterate loop |
-| `src/store.ts` | `useReducer` global state; `useAppState()` → `{ state, dispatch }` |
-| `src/types.ts` | `AppStatus`, `GenerateParams`, `SSEEvent`, `OutputItem`, `RefImageSlot`, `Workflow` |
-| `src/api.ts` | Typed fetch helpers: `streamGenerate`, `streamBatchGenerate`, `uploadImage`, `uploadFromUrl`, `streamBatchUpscale`, `eraseDetect`, `eraseRemove`, … |
-
-3-row center layout: Canvas (flex 5) / RefImagesRow (flex 4) / Gallery (flex 1) → 50/40/10 % via `style={{ flex: 'N 0 0%' }}`.
-
-### Component details
-
-**`Sidebar.tsx`** (`w-[576px]`) — Accordions: Model, Parameters, Size, LoRA (Z-Image Full + FLUX.2), Upscale (single + batch), **Batch Img2Img**, **Depth Map**, **Watermark Remover**, Video (LTX only), Workflows.
-
-**`RefImagesRow.tsx`** — Horizontal strip (flex 4). Each slot: 80×80 thumbnail with role badge, 56×56 mask target (pencil → `MaskEditorModal`), per-slot strength slider.
-
-**`MaskEditorModal`** — rectangle drag-select canvas. Always shows slot #1's image. Window-level `mousemove`/`mouseup` listeners. Escape/Enter shortcuts.
-
-**`EraseEditorModal.tsx`** — full-screen canvas editor for watermark mask. Two-canvas: detached offscreen `maskRef` (full-res, natural image dims) + `displayRef` (scaled to ≤760×560 for display). Rectangle tool + brush tool (Shift=erase). 45% red tint overlay. `handleConfirm` → `canvas.toBlob` → `POST /api/upload` → `onConfirm(maskId, maskUrl)`. Error shown inline if upload fails.
-
-**`HelpTip.tsx`** — inline ⓘ icon with hover tooltip. Uses `position:fixed` + `getBoundingClientRect()`. `pointer-events-none`, `z-50`.
-
-**`Canvas.tsx`** — flex 5. Result image/video + generating overlay with spinner + progress %.
-
-**`Gallery.tsx`** — flex 1, horizontal scroll. Thumbnails: `draggable` for gallery→ref slot drag. Hover: Info, Load Params, Upscale ×4, Delete. Video thumbs get only Load Params + Delete (Info=pixel dims via `<img>`, Upscale=spandrel — both image-only). Do NOT use `title` on outer div — causes native browser tooltip.
-
-**`SettingsDrawer.tsx`** — `w-96`. Output folder, Default Model, HF login, model list, upscale model list, storage summary, Server Log, Model Sources.
-
-**`TopBar.tsx`** — "Local AI Image Gen" brand, model, device, VRAM, "generating…" pulse, settings gear.
-
-### State — ref image slots
-```typescript
-interface RefImageSlot {
-  slotId: number; imageId: string; imageUrl: string
-  maskId: string | null; maskUrl: string | null
-  strength: number; w?: number; h?: number
-}
-```
-Actions: `ADD_REF_SLOT` · `REMOVE_REF_SLOT` · `SET_SLOT_MASK` · `CLEAR_SLOT_MASK` · `CLEAR_ALL_SLOTS` · `UPDATE_SLOT_STRENGTH` · `SET_SLOT_DIMS`
-
-### Iterative multi-mask inpainting
-`handleIterateGenerate` in `App.tsx` chains one `/api/generate` call per masked slot. Pass N: `inputs=[prev_out, slotN.image], mask=slotN.maskId, strength=slotN.strength`. `uploadFromUrl(url)` re-uploads between passes.
-**Crop & Composite + FLUX refs**: crop mode swaps only slot #1 for its bbox crop; slots #2+ (material/style refs) pass through untouched via `crop_flux_refs()` (`tests/test_mask_crop.py`). Used to replace ALL refs with the crop → masked edits ignored material refs and invented textures. "Inpainting Pipeline" mode on FLUX = full-frame img2img (FluxInpaintPipeline incompatible) + pixel composite (`masked-composite`) so only the mask changes.
-**Output auto-size** (`frontend/src/canvasSize.ts` `canvasForRef()`, applied in `store.ts` `autoSizeParams()`): output w/h = slot #1 aspect at the family budget — FLUX/Z-Image ~1 MP /16, LTX 768×512 /32. Fires ONLY on: slot #1 first dims (`SET_SLOT_DIMS`, `!prev.w` — thumbnail re-renders resend dims), slot #1 removed/replaced, model **family** change (4B↔9B keeps size). A preset picked afterwards = outpaint and is kept. Slots restored by Load Params / workflow carry `keepSize` → saved size kept. Lives in the reducer, NOT a `SizePanel` effect: `Accordion` renders `{open && children}`, so an effect there missed collapsed-panel refs and re-fired on reopen (undid presets). Backend `_SNAP_REL=0.03` fills ≤3% aspect drift (the /16 rounding) instead of outpainting a sliver — keep the UI note's tolerance in sync. Verify: `node --experimental-strip-types` on a script importing `canvasSize.ts` (no frontend test runner).
-**Slot #1 fit / auto-outpaint** (`fit_ref_to_canvas()`, `tests/test_fit_canvas.py`): slot #1 is never stretched — scaled to fit the output (up or down) at `outpaint_align`; uncovered area = blurred cover-scaled copy of the ref (not black) and unioned into the mask; padded → mode forced to Inpainting (full-frame + composite). User mask gets the SAME transform (editor masks = slot #1 aspect). Mask aspect ≠ slot #1 → stretched + `⚠` in result info; except when slot #1 is already canvas-size (Iterate pass ≥2) → mask fitted on its own aspect. FLUX slots #2+ go at native size (`prepare_flux_refs()`; pipeline keeps ref aspect, ≤1 MP). Limit: FLUX.2 edit copies the ref, so outpaint bands fill in-style but may seam — `fal/flux-2-klein-4B-outpaint-lora` (green-border) is the untried quality path, 4B only.
-
-### API endpoints
-| Method | Path | Notes |
-|--------|------|-------|
-| POST | `/api/ping` | Heartbeat |
-| POST | `/api/stop` | Signal stop at next step boundary |
-| POST | `/api/shutdown` | Immediate shutdown (sendBeacon on tab close); 4s delay; no-op if `--no-auto-shutdown` |
-| GET | `/api/status` | `{model, device, loaded, busy, is_batch_running, vram_gb, total_vram_gb}`. `vram_gb`=current alloc; `total_vram_gb`=GPU-usable ceiling (`app.get_total_memory_gb()`: MPS `recommended_max_memory`, sysconf fallback) |
-| GET/POST | `/api/models` / `/api/models/load` | List / load model |
-| DELETE | `/api/models/{name}` | Delete cached model |
-| GET | `/api/models/check-updates` | Query HF Hub for latest hashes |
-| POST | `/api/generate` | SSE stream |
-| POST | `/api/batch/generate` | SSE stream — folder of images; yields `batch_progress` |
-| POST | `/api/upload` | Upload temp image → `{id, url}` |
-| GET | `/api/temp/{id}` | Serve temp file |
-| GET | `/api/outputs` | Recent outputs (with sidecar data) |
-| GET/POST | `/api/workflows` / `/api/workflows/{name}` / `/api/workflows/save` / `/api/workflows/import` | Workflow CRUD + ComfyUI import |
-| GET | `/api/lora/list` | `{files:[{name,path,model_type}]}` — `model_type`: `"flux"|"zimage"|"unknown"` |
-| POST/POST/POST | `/api/upscale/upload` · `/api/upscale/batch` · `/api/upscale/single` | Upscale |
-| GET | `/api/open-file-dialog` | macOS image picker → `{path, cancelled}` |
-| GET | `/api/open-folder-dialog` | macOS folder picker → `{path, cancelled}` |
-| POST | `/api/logs/save` | Snapshot `logs/server.log` → timestamped file |
-| GET/POST | `/api/settings` | App settings |
-| GET | `/api/storage` | Directory sizes |
-| GET/POST/POST | `/api/hf/status` · `/api/hf/login` · `/api/hf/logout` | HF auth |
-| POST | `/api/depth-map` | DA3/DA2 depth map; `{filename, model_repo}`; runs in `ThreadPoolExecutor(1)` |
-| POST | `/api/erase/detect` | FFT watermark heuristic → `{image_id, image_url, mask_id, mask_url}`; `ThreadPoolExecutor` |
-| POST | `/api/erase` | LaMa inpainting fill → `{url, filename}`; `mask_id` path-traversal guarded; `_erased_2.png` collision suffix |
-| GET | `/api/model-sources/discover` | Scan known HF orgs + `mps` tag; auto-merge new entries → `{added, sources}`. Base candidates filtered to `app.KNOWN_MODELS` repos (loadable only) — LoRAs/upscalers unaffected |
-
-### SSE event format
-```json
-{"type":"progress","message":"Step 5/20","step":5,"total":20}
-{"type":"image","url":"/api/output/foo.png","info":"512×512 · seed 42"}
-{"type":"done"}  {"type":"error","message":"…"}
-{"type":"batch_progress","current":3,"total":12,"filename":"photo_003.jpg"}
-```
-
-## Key Python modules
-- `pipeline.py` — `PipelineManager`, SSE generation loop
-- `core/depth_map.py` — DA3/DA2 depth estimation; `generate_depth_map(path, repo_id, invert=True)` → 16-bit PNG bytes; white=near; module-level model cache
-- `core/erase.py` — `detect_watermark(path) → bytes` (Laplacian+brightness anomaly, `np.bincount` for CC sizing); `remove_watermark(path, mask_bytes) → bytes` (LaMa, `_lama_cache`); mask resize uses `Image.NEAREST` (binary mask — LANCZOS would anti-alias edges)
-- `core/lora_zimage.py` — LoRA injection for Linear/Conv2d; `load_lora_for_pipeline()` — NEVER use `pipe.load_lora_weights()` for Z-Image
-- `core/lora_flux2.py` — LoRA for FLUX.2-klein: PEFT/fal prefix remap; requires diffusers git main
-- `core/quantized_flux2.py` — 4-bit SDNQ + int8 quantization utilities
-- `core/workflow_utils.py` — workflow parse/save/load, ComfyUI importer
-
-## Models (cached in `~/.cache/huggingface/hub`)
-> Shared global HF cache — NOT `./models/` anymore. `HF_HUB_CACHE` override removed from `app.py`/`generate.py` (2026-08-31); `get_local_models_dir()` returns `get_hf_global_cache_dir()` so downloads/version-checks/loads all resolve there, and other HF tools on the machine reuse the same blobs. `./models/` now holds only `da3mono-large/` (flat DA3 weights, non-HF-layout) + `CACHEDIR.TAG` + `.locks/`. `sync_from_hf_cache()` has a `src==dst` guard (paths are equal now). Model auto-update on next load still works (no revision pin).
-| Model | VRAM | Notes |
-|-------|------|-------|
-| FLUX.2-klein-4B (4bit SDNQ) | <8 GB @ 512px | Fast |
-| FLUX.2-klein-9B (4bit SDNQ) | ~12 GB @ 512px | Higher quality |
-| FLUX.2-klein-4B (Int8) | ~16 GB | |
-| Z-Image Turbo (Quantized) | ~8 GB | Fastest |
-| Z-Image Turbo (Full) | ~24 GB | LoRA support |
-| LTX-Video 0.9.8-13B-distilled | ~26 GB (bf16) | txt2video / img2video; +`a-r-r-o-w/LTX-0.9.8-Latent-Upsampler` (lazy, multiscale only) |
-
-## Environment / deps / tooling
-Package manager: **`uv`** (not pip). Lock: `uv.lock`. Metadata: `pyproject.toml`. **Always sync with `UV_PROJECT_ENVIRONMENT=venv uv sync`** — `Launch.command` sets `UV_PROJECT_ENVIRONMENT=venv`; plain `uv sync` targets `.venv/` (wrong env).
-
-Key deps: `torch`, `transformers`, `diffusers` (git), `sdnq` (git), `peft>=0.17`, `optimum-quanto>=0.2.7`, `fastapi>=0.115`, `uvicorn[standard]>=0.30`, `python-multipart>=0.0.12`, `aiofiles>=24.0`, `spandrel>=0.4.0` (upscaler), `simple-lama-inpainting>=0.1.1` (watermark removal), `imageio>=2.34`+`imageio-ffmpeg>=0.5` (LTX MP4 export, libx264)
-
-Tailwind tokens: `bg:#0a0a0a` · `surface:#141414` · `card:#1c1c1c` · `border:#2a2a2a` · `accent:#7c3aed` · `muted:#6b7280` · `label:#6b7280`
-
-## .gitignore key exclusions
-`models/` · `venv/` · `huggingface/` · `lora_uploads/` · `upscale_models/` · `__pycache__/` · `*.safetensors *.bin *.gguf *.pt *.pth` · `*.env .env*` · `.DS_Store`
-
-## Known issues / TODOs
-- **`generate.py`**: Z-Image Turbo only; does not work with FLUX or LTX-Video
-- **`slotsToParams()`**: single-pass only sends slot #1's mask; use Iterate Masks (Pipeline mode) for per-slot masks
-- **No CLIP loader** — text encoders are bundled per model, loaded at model-load time
-
-## Guidance scale + Steps per model
-| Model | guidance | steps | Reason |
-|-------|----------|-------|--------|
-| Z-Image Turbo (any) | **0** | **4** | Step-wise distilled |
-| FLUX.2 (all variants) | **0** | **20** | Step-wise distilled |
-| LTX-Video 0.9.8-distilled | **1.0** | (fixed timesteps) | Guidance+timestep distilled; backend ignores `steps` slider, uses `LTX_BASE_TIMESTEPS`/`LTX_DENOISE_TIMESTEPS` |
-`guidanceForModel(model)` and `stepsForModel(model)` in `App.tsx`. Guidance slider **hidden** in UI; unhide when adding full-precision non-distilled models.
-
-## Implementation notes
-- **FLUX LoRA detection**: `current_model` (internal key) uses `startswith("flux2")`; `model_choice` (display name) uses `startsWith('FLUX')` — never mix
-- **diffusers git main required** for FLUX.2-klein LoRA — stable release had hardcoded block count (48 vs actual 20)
-- **FluxInpaintPipeline incompatible with Flux2Klein** — `app.py` skips it; falls to img2img for masked FLUX.2-klein generations
-- **FastAPI route order**: SPA wildcard `/{path:path}` must be LAST — routes after it are unreachable
-- **HF auth endpoints must be sync `def`**: blocking calls (`whoami()`, `os.walk`) — `async def` blocks event loop
-- **Multi-LoRA stacking**: `lora_files: LoraSlot[]` (up to 5); named adapters in `load_loras()`; `if not lora_files` (not `is None`) for legacy fallback
-- **LoRA in Sidebar**: `LoraSlot` has `name?`/`model_type?`; populated on select/upload for sidecar completeness. LoRA `Accordion` uses `key={lora_files.length > 0 ? 'lora-has-files' : 'lora-empty'}` + `defaultOpen={lora_files.length > 0}` — forces re-mount to auto-open when params loaded from gallery (`useState(defaultOpen)` only reads at mount)
-- **Gallery "Load Params"** (`handleLoadParams` in `App.tsx`): restores prompt, model, size, steps, seed, lora_files, repeat_count, upscale_enabled, upscale_model_path, num_frames, fps. `repeat_count` must be declared in `OutputItem` (not auto-typed from API). device not restored (always MPS)
-- **Batch img2img stop**: `stop_requested` is the public property — never access `_stop_event` directly from `server.py`
-- **Default model**: stored as `default_model` in `app_settings.json`; bootstrap in `App.tsx` reads it after `fetchSettings()`
-- **Model Sources UX** (`SettingsDrawer.tsx`): list shows ONLY loadable base models. `server._drop_unusable_base()` filters base entries to repos in `app.KNOWN_MODELS` — applied on read (hides dead entries already in `model_sources.json`) AND to discover candidates (self-heals the file on next Update). Reason: discover used to scrape arbitrary HF base repos (SDXL/Qwen/FLUX.1-dev/text-encoders) the loader can't run. Entries grouped under **Models/LoRAs/Upscalers** headers (`TYPE_GROUPS`). Each base source has structured `vram_gb`; `recommendedSourceId()` tags the largest-VRAM image model (LTX excluded) fitting within 90% of `total_vram_gb` as **★ Recommended**. `vram_gb`/`total_vram_gb` are distinct: old `vram_gb`=current alloc (~0 idle, wrong for "fits")
-- **DA3 depth map**: code default repo is `istiakiat/DA3MONO-LARGE` (`core/depth_map.py:103`, `server.py:1212`) — a mirror, NOT the official `depth-anything/DA3MONO-LARGE`. Weights actually load from flat `./models/da3mono-large/` (1.2 GB, `config.json`+`model.safetensors`) which `_load_da3` (`core/depth_map.py:54`) prefers over any HF download; delete it → falls back to downloading `istiakiat/…` into the global cache. DA3 = invert, DA2 = no invert; output LANCZOS-resized to source resolution; GS/3D export deps mocked via `sys.modules`
-- **xformers on Apple Silicon**: not installable, not needed — PyTorch MPS has built-in SDPA
-- **`TEMP_DIR` path guard**: all endpoints that accept temp file IDs must check `path.resolve().is_relative_to(TEMP_DIR.resolve())` — see `/api/erase` and `/api/workflow-assets`
-- **LTX-Video 0.9.8-13B-distilled** (`app.py`): `LTXConditionPipeline` (NOT old `LTXPipeline`/`LTXImageToVideoPipeline`). `render_ltx_video()` helper takes pipelines as args (mockable → `tests/test_ltx.py`) and returns PIL frames. **Multiscale (default)**: gen @2/3-res `output_type=latent` → `LTXLatentUpsamplePipeline` (2×, `tone_map_compression_ratio=0.6`) → 4-step denoise (`denoise_strength=0.999`) → resize. **Fast-preview** (`fast_preview` bool, Video accordion toggle): single distilled pass, skips upsampler. i2v = `LTXVideoCondition(image=ref, frame_index=0)` in `conditions=[…]`; txt2video = `conditions=None`. **Multi-ref keyframes**: `render_ltx_video(ref_image=…)` accepts `None | PIL | list[PIL]`; list → one condition per ref, `frame_index` from `_ltx_keyframe_indices(m, n_frames)` (first→0, last→final frame, evenly spread, snapped to /8 latent stride, strictly increasing, capped to `last//8+1` slots — surplus refs dropped via `zip`). Call site preprocesses all `input_images[:6]`→`preprocessed_video_refs`. Ref slots always reached backend (`slotsToParams`→`input_image_ids`); LTX branch used to discard slot #2+. Keyframes interpolate over time (A→B→C morph), **NOT** spatial blend. Per-slot strength slider NOT sent (slotsToParams drops it) — all keyframes use 1.0. **LTX "blend" (ltx.io blog) is not a video-model feature**: it's multi-image→fused-still image gen (our FLUX.2 multi-ref `preprocessed_flux_refs` is that half), then the still feeds i2v as a keyframe. Distilled params: `guidance_scale=1.0`, `guidance_rescale=0.7`, `decode_timestep=0.05`, `image_cond_noise_scale=0.0`; frames=8k+1, dims÷32. Upsampler lazy-loaded only on multiscale runs (`video_upsampler` global, reset on device switch). `fast_preview` flows via `req.model_dump()` — no explicit plumbing needed past request model. **FP8 LTX variants rejected** — not suitable for Apple Silicon. **Download footprint**: repo is 93 GB but ~45 GB is a duplicate transformer + text_encoder nested under `vae/` that `model_index.json` never references. `app.DOWNLOAD_IGNORE_PATTERNS` skips `vae/transformer/*`, `vae/text_encoder/*`, `media/*` on `snapshot_download` → real footprint ~48 GB (transformer 26 + T5 19 + VAE ~2.5), loads fine on 128 GB. Other repos pass `ignore_patterns=None` (unchanged). **MP4 export**: `export_frames_to_video()` does function-local `import imageio` (libx264) — easy to omit from deps; absence surfaces only at generation time as `No module named 'imageio'` (added `imageio`+`imageio-ffmpeg`). **Frame count = 8k+1 only** (9,17,25,…,121); backend re-snaps via `((max(9,n)-1)//8)*8+1`. So exact second-durations are usually impossible (50 frames invalid → 49 ≈ 1.96 s @ 25 fps, or 57 ≈ 2.28 s). Frames slider `step={8}` is correct, not a bug; Video accordion shows a `≈ Ns` duration readout (`Sidebar.tsx`) to make the tradeoff visible. **Dupe-blob reclaim trap**: on an already-downloaded copy, the `vae/transformer`+`vae/text_encoder` symlinks point to the *same* blobs as the real transformer/text_encoder (content-identical → HF dedups to one blob). Deleting those blobs to "reclaim 45 GB" destroys the real weights — verify symlink targets first; the savings are download-only, not on-disk. **Canvas/stretch (Option B)**: LTX output dims come from the selected size **preset**, never the ref aspect — `render_ltx_video(width=img_w,height=img_h)` and the pipeline resizes the ref *into* that canvas. Aspect mismatch (e.g. 768×1365 photo + Square 512×512) = stretched/messy video — this was the root cause. Fix: auto-size to ref aspect — now generic for all models, see **Output auto-size** below. 768×1365→480×832, 1920×1080→832×480, 1024×1024→640×640. LTX has no fixed resolution: any /32 dims + 8k+1 frames work; matching aspect = no stretch, budget caps VRAM/time.
+## 9. Frontend rules
+1. Tailwind tokens: `bg:#0a0a0a` · `surface:#141414` · `card:#1c1c1c` · `border:#2a2a2a` · `accent:#7c3aed` · `muted/label:#6b7280`.
+2. Never put `title` on a Gallery thumbnail's outer div (native tooltip).
+3. Declare every field Load Params restores in `OutputItem` (e.g. `repeat_count`).
+4. No frontend test runner: verify pure TS modules with `node --experimental-strip-types`, UI via agent-browser.

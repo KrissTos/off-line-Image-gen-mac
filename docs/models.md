@@ -1,0 +1,54 @@
+# Models & generation pipeline reference
+
+Per-model behaviour, sizing and masking internals. Rules that bite every session are in `CLAUDE.md`;
+this file holds the detail. Update in the same session as the code.
+
+## Models
+Cached in the shared global HF cache `~/.cache/huggingface/hub` (`get_local_models_dir()` → `get_hf_global_cache_dir()`; no `HF_HUB_CACHE` override). `./models/` holds only `da3mono-large/` + `CACHEDIR.TAG` + `.locks/`. `sync_from_hf_cache()` has a `src==dst` guard. No revision pin → auto-update on next load.
+
+| Model | VRAM | guidance | steps | Notes |
+|-------|------|----------|-------|-------|
+| FLUX.2-klein-4B (4bit SDNQ) | <8 GB @ 512px | 0 | 20 | fast |
+| FLUX.2-klein-9B (4bit SDNQ) | ~12 GB @ 512px | 0 | 20 | higher quality |
+| FLUX.2-klein-4B (Int8) | ~16 GB | 0 | 20 | |
+| Z-Image Turbo (Quantized) | ~8 GB | 0 | 4 | fastest; no ref/img2img path (refs ignored) |
+| Z-Image Turbo (Full) | ~24 GB | 0 | 4 | LoRA, img2img, inpaint |
+| LTX-Video 0.9.8-13B-distilled | ~26 GB bf16 | 1.0 | fixed timesteps | + `a-r-r-o-w/LTX-0.9.8-Latent-Upsampler` (lazy) |
+
+All distilled → guidance slider hidden; defaults from `guidanceForModel()` / `stepsForModel()` (`App.tsx`). LTX ignores the steps slider (`LTX_BASE_TIMESTEPS` / `LTX_DENOISE_TIMESTEPS`).
+
+## Output size & slot #1 fit
+- **UI auto-size** (`frontend/src/canvasSize.ts` `canvasForRef()`, applied in `store.ts` `autoSizeParams()`): output w/h = slot #1 aspect at the family budget — FLUX/Z-Image ~1 MP /16, LTX 768×512 /32. E.g. 4000×3000→1184×880, 1080×1920→768×1360; LTX 768×1365→480×832, 1920×1080→832×480, 1024×1024→640×640.
+- Fires only on: slot #1 first dims (`SET_SLOT_DIMS` with `!prev.w`), slot #1 removed/replaced, model **family** change (4B↔9B keeps size). A preset picked afterwards is kept (= outpaint). Restored slots (`keepSize`) keep the saved size.
+- **Backend fit** (`app.fit_ref_to_canvas()`, `tests/test_fit_canvas.py`): slot #1 scaled to fit (up or down) at `outpaint_align`, never stretched. Uncovered area = blurred cover-scaled copy of the ref, unioned into the mask; padded → mask mode forced to Inpainting (full-frame + composite). `_SNAP_REL=0.03`: ≤3% aspect drift fills instead of outpainting a sliver.
+- User mask gets the same transform. Mask aspect ≠ slot #1 → stretched + `⚠` in result info, except when slot #1 is already canvas-size (Iterate pass ≥2) → mask fitted on its own aspect.
+- FLUX slots #2+ go at native size (`prepare_flux_refs()`); `Flux2KleinPipeline` keeps ref aspect itself (≤1 MP, /16).
+- Limit: FLUX.2 edit copies the ref, so outpaint bands fill in-style but can seam. See `docs/TODO.md` (outpaint LoRA).
+- LTX has no fixed resolution: any /32 dims + 8k+1 frames; mismatched aspect stretches the ref into the canvas.
+
+## Masking
+- **Crop & Composite**: generate only the mask bbox (`get_mask_bbox`, +32 px, /64), paste back with a blurred mask. Only slot #1 is swapped for its crop; slots #2+ pass through (`crop_flux_refs()`, `tests/test_mask_crop.py`).
+- **Inpainting Pipeline**: Z-Image Full uses `ZImageInpaintPipeline`; FLUX has no compatible inpaint pipeline (`FluxInpaintPipeline` ≠ Flux2Klein) → full-frame img2img + pixel composite (`masked-composite`). Composite skipped for txt2img results (model never saw the ref).
+- **Iterate Masks** (`handleIterateGenerate`, `App.tsx`): one `/api/generate` per masked slot; pass N inputs = `[prev_out, slotN.image]`, mask = slotN mask, strength = slotN strength; `uploadFromUrl()` re-uploads between passes.
+
+## LoRA
+- Multi-LoRA: `lora_files: LoraSlot[]` (≤5), named adapters in `load_loras()`; `if not lora_files` (not `is None`) for legacy fallback. `LoraSlot` carries `name?` / `model_type?` for sidecars.
+- FLUX.2-klein LoRA needs diffusers git main (stable had hardcoded 48 blocks vs actual 20). FLUX LoRA is loaded during generation.
+- LoRA accordion `key={lora_files.length > 0 ? 'lora-has-files' : 'lora-empty'}` + `defaultOpen` → remounts to auto-open when params are loaded (`useState(defaultOpen)` reads only at mount).
+
+## LTX-Video 0.9.8-13B-distilled (`app.py`)
+- Pipeline: `LTXConditionPipeline` (not `LTXPipeline` / `LTXImageToVideoPipeline`). `render_ltx_video()` takes pipelines as args (mockable, `tests/test_ltx.py`), returns PIL frames.
+- Multiscale (default): gen @2/3 res `output_type=latent` → `LTXLatentUpsamplePipeline` (2×, `tone_map_compression_ratio=0.6`) → 4-step denoise (`denoise_strength=0.999`) → resize. `fast_preview` = single distilled pass, no upsampler. Upsampler lazy (`video_upsampler`, reset on device switch). `fast_preview` flows via `req.model_dump()`.
+- i2v = `LTXVideoCondition(image=ref, frame_index=0)` in `conditions=[…]`; txt2video = `conditions=None`.
+- Multi-ref keyframes: `ref_image` = `None | PIL | list[PIL]`; list → one condition per ref, `frame_index` from `_ltx_keyframe_indices(m, n_frames)` (first→0, last→final, even spread, /8 stride, strictly increasing, capped at `last//8+1` — surplus dropped). Call site preprocesses `input_images[:6]` → `preprocessed_video_refs`. Keyframes morph over time (A→B→C), not a spatial blend. All keyframes strength 1.0 (per-slot strength not sent).
+- "Blend" (ltx.io blog) = multi-image → fused still (our FLUX.2 multi-ref) → i2v keyframe; not a video-model feature.
+- Distilled params: `guidance_scale=1.0`, `guidance_rescale=0.7`, `decode_timestep=0.05`, `image_cond_noise_scale=0.0`.
+- Frames = 8k+1 only (9, 17, …, 121); backend re-snaps `((max(9,n)-1)//8)*8+1`. Slider `step={8}` is correct; Video accordion shows a `≈ Ns` readout.
+- MP4 export `export_frames_to_video()` imports `imageio` lazily (libx264) → needs `imageio` + `imageio-ffmpeg` deps.
+- Download: repo is 93 GB but ~45 GB is a duplicate transformer + text_encoder under `vae/`; `app.DOWNLOAD_IGNORE_PATTERNS` skips `vae/transformer/*`, `vae/text_encoder/*`, `media/*` → ~48 GB. Other repos pass `ignore_patterns=None`.
+- Never delete the `vae/transformer` / `vae/text_encoder` blobs of an existing copy: they are HF-deduped with the real weights.
+- FP8 variants rejected (not suitable for Apple Silicon).
+
+## Depth map (DA3 / DA2)
+- Default repo `istiakiat/DA3MONO-LARGE` (mirror, not official `depth-anything/…`) in `core/depth_map.py` and `server.py`. Weights load first from flat `./models/da3mono-large/` (`_load_da3`); delete it → downloads the mirror into the global cache.
+- DA3 = invert, DA2 = no invert; output LANCZOS-resized to source; GS/3D export deps mocked via `sys.modules`.
