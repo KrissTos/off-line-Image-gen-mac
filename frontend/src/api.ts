@@ -428,3 +428,27 @@ export async function discoverModelSources(): Promise<{ added: number; sources: 
   if (!r.ok) throw new Error(`Discovery failed: ${r.status}`)
   return r.json()
 }
+
+// ── SAM click-to-mask ─────────────────────────────────────────────────────────
+
+export async function segmentPrepare(imageId: string): Promise<{ ready: boolean; ms: number }> {
+  return post('/api/segment/prepare', { image_id: imageId })
+}
+
+export async function segmentMask(
+  imageId: string,
+  points: { x: number; y: number; label: 0 | 1 }[],
+  box: { x0: number; y0: number; x1: number; y1: number } | null,
+): Promise<Blob> {
+  const r = await fetch('/api/segment', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ image_id: imageId, points, box }),
+  })
+  if (!r.ok) {
+    let detail = `${r.status}`
+    try { detail = (await r.json()).detail ?? detail } catch { /* non-JSON error */ }
+    throw new Error(`Segment failed: ${detail}`)
+  }
+  return r.blob()
+}
