@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { Brush, Hexagon, MousePointerClick, SquareDashed, X } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Brush, Hexagon, Loader2, MousePointerClick, SquareDashed, X } from 'lucide-react'
 import type { RefImageSlot } from '../types'
 import { segmentMask, segmentPrepare } from '../api'
 import {
-  coverage, createMask, fillPolygon, fromRgba, grow, invert, paintStroke, shrink,
-  subtract, toRgba, union, type Mask, type Pt,
+  coverage, createMask, fillPolygon, fromRgba, grow, invert, paintOverlayFull, paintOverlayRect,
+  paintStroke, shrink, strokeRect, subtract, toRgba, union, type Mask, type Pt,
 } from '../mask/maskOps'
 import { MaskHistory } from '../mask/history'
 import { fitView, imageToScreen, inImage, screenToImage, zoomAt, type View } from '../mask/viewMath'
@@ -64,6 +64,12 @@ export default function MaskEditor({ slot, baseImageId, baseImageUrl, onClose, o
   const spaceDown = useRef(false)
   const panning   = useRef<{ x: number; y: number; v: View } | null>(null)
   const painting  = useRef<{ last: Pt; value: 0 | 255 } | null>(null)
+  const maskRef   = useRef<Mask | null>(null)               // always the latest mask, for async callbacks
+  const overlayImgData = useRef<ImageData | null>(null)
+  const overlayMaskData = useRef<Uint8Array | null>(null)   // which mask.data the overlay buffer reflects
+  const strokeDirtyRect = useRef<{ x0: number; y0: number; x1: number; y1: number } | null>(null)
+
+  useEffect(() => { maskRef.current = mask }, [mask])
 
   const w = imgRef.current?.naturalWidth ?? 0
   const h = imgRef.current?.naturalHeight ?? 0
@@ -104,15 +110,28 @@ export default function MaskEditor({ slot, baseImageId, baseImageUrl, onClose, o
   }, [mask, box])
 
   // ── Mask → red overlay (only when the mask changes) ─────────────────────────
+  // During a brush stroke `mask.data` is mutated in place (same Uint8Array across
+  // pointermoves), so we repaint only the stroke's dirty rect into a persistent
+  // ImageData instead of rebuilding+re-allocating the whole overlay every move.
   useEffect(() => {
     if (!mask) return
-    const oc = overlayRef.current; oc.width = mask.w; oc.height = mask.h
+    const oc = overlayRef.current
+    const sizeChanged = oc.width !== mask.w || oc.height !== mask.h
     const ctx = oc.getContext('2d')!
-    const id = ctx.createImageData(mask.w, mask.h)
-    for (let i = 0; i < mask.data.length; i++) {
-      if (mask.data[i]) { id.data[i * 4] = 239; id.data[i * 4 + 1] = 68; id.data[i * 4 + 2] = 68; id.data[i * 4 + 3] = 115 }
+    const sameBuffer = overlayMaskData.current === mask.data && !sizeChanged
+    const rect = strokeDirtyRect.current
+    if (sameBuffer && overlayImgData.current && rect) {
+      paintOverlayRect(overlayImgData.current.data, mask, rect.x0, rect.y0, rect.x1, rect.y1)
+      ctx.putImageData(overlayImgData.current, 0, 0, rect.x0, rect.y0, rect.x1 - rect.x0 + 1, rect.y1 - rect.y0 + 1)
+    } else {
+      if (sizeChanged) { oc.width = mask.w; oc.height = mask.h }
+      const id = ctx.createImageData(mask.w, mask.h)
+      paintOverlayFull(id.data, mask)
+      ctx.putImageData(id, 0, 0)
+      overlayImgData.current = id
     }
-    ctx.putImageData(id, 0, 0)
+    overlayMaskData.current = mask.data
+    strokeDirtyRect.current = null
   }, [mask])
 
   // ── Draw ─────────────────────────────────────────────────────────────────────
@@ -120,7 +139,8 @@ export default function MaskEditor({ slot, baseImageId, baseImageUrl, onClose, o
     const c = canvasRef.current, img = imgRef.current
     if (!c || !img || !mask || box.w === 0) return
     const dpr = window.devicePixelRatio || 1
-    c.width = Math.round(box.w * dpr); c.height = Math.round(box.h * dpr)
+    const cw = Math.round(box.w * dpr), ch = Math.round(box.h * dpr)
+    if (c.width !== cw || c.height !== ch) { c.width = cw; c.height = ch }
     const ctx = c.getContext('2d')!
     ctx.setTransform(1, 0, 0, 1, 0, 0)
     ctx.clearRect(0, 0, c.width, c.height)
@@ -157,25 +177,33 @@ export default function MaskEditor({ slot, baseImageId, baseImageUrl, onClose, o
   }, [])
 
   const runSam = useCallback(async (points: SamPoint[], b: LastSam['box'], op: 'add' | 'sub', refine: boolean) => {
-    if (!mask || samBusy.current || sam !== 'ready') return
-    samBusy.current = true; setSam('running')
+    if (!maskRef.current || samBusy.current || sam !== 'ready') return
+    const mw = maskRef.current.w, mh = maskRef.current.h
+    samBusy.current = true; setSam('running'); setSamError('')
     try {
-      const obj = await blobToMask(await segmentMask(baseImageId, points, b), mask.w, mask.h)
-      const base = refine && lastSam.current ? lastSam.current.before : mask
+      const obj = await blobToMask(await segmentMask(baseImageId, points, b), mw, mh)
+      // Read the mask fresh: brush/polygon/invert/grow/clear/undo may have run during
+      // the 150–400 ms round trip, and their result must not be clobbered. Those edits
+      // also null out lastSam.current directly, so a still-truthy lastSam here means no
+      // intervening edit happened and the refine base is still valid.
+      const current = maskRef.current
+      if (!current) { setSam('ready'); return }
+      const base = refine && lastSam.current ? lastSam.current.before : current
       const next = op === 'add' ? union(base, obj) : subtract(base, obj)
       if (refine && lastSam.current) {
         setMask(next); setDirty(true)                     // replaces the previous result of the same object
       } else {
-        commit(next, mask, true)
+        commit(next, current, true)
       }
       lastSam.current = { points, box: b, op, before: base }
       setSam('ready')
     } catch (e) {
-      setSam('error'); setSamError((e as Error).message)
+      setSamError((e as Error).message)
+      setSam('ready')                                       // a click failure isn't fatal — only prepare failure locks SAM
     } finally {
       samBusy.current = false
     }
-  }, [mask, sam, baseImageId, commit])
+  }, [sam, baseImageId, commit])
 
   const closePolygon = useCallback((subtractIt: boolean) => {
     if (!mask) return
@@ -202,6 +230,8 @@ export default function MaskEditor({ slot, baseImageId, baseImageUrl, onClose, o
 
   const act = useCallback((f: (m: Mask) => Mask) => { if (mask) commit(f(mask), mask) }, [mask, commit])
 
+  const maskCoverage = useMemo(() => (mask ? coverage(mask) : 0), [mask])
+
   // ── Pointer ──────────────────────────────────────────────────────────────────
   const local = (e: { clientX: number; clientY: number }) => {
     const r = canvasRef.current!.getBoundingClientRect()
@@ -223,9 +253,11 @@ export default function MaskEditor({ slot, baseImageId, baseImageUrl, onClose, o
       setDrag({ a: p, b: p })
     } else if (tool === 'brush') {
       const value: 0 | 255 = e.altKey ? 0 : 255
+      const r = brush / 2 / view.scale
       history.current.push(mask); lastSam.current = null
       const next = { ...mask, data: mask.data.slice() }
-      paintStroke(next, [p], brush / 2 / view.scale, value)
+      paintStroke(next, [p], r, value)
+      strokeDirtyRect.current = strokeRect([p], r, mask.w, mask.h)
       painting.current = { last: p, value }
       setMask(next); setDirty(true)
     } else if (tool === 'poly') {
@@ -246,8 +278,10 @@ export default function MaskEditor({ slot, baseImageId, baseImageUrl, onClose, o
     const p = screenToImage(view, s.x, s.y)
     if (drag) setDrag({ ...drag, b: p })
     if (painting.current && mask) {
+      const r = brush / 2 / view.scale
       const next = { ...mask, data: mask.data }            // same buffer: stroke in progress
-      paintStroke(next, [painting.current.last, p], brush / 2 / view.scale, painting.current.value)
+      paintStroke(next, [painting.current.last, p], r, painting.current.value)
+      strokeDirtyRect.current = strokeRect([painting.current.last, p], r, mask.w, mask.h)
       painting.current.last = p
       setMask({ ...next })
     }
@@ -294,6 +328,7 @@ export default function MaskEditor({ slot, baseImageId, baseImageUrl, onClose, o
         return
       }
       if (k === 'enter') { if (poly.length) closePolygon(e.altKey); else apply(); return }
+      if (e.metaKey || e.ctrlKey) return                    // don't hijack Cmd/Ctrl shortcuts (e.g. Cmd+S)
       if (k === 's') setTool('sam')
       else if (k === 'd') setTool('box')
       else if (k === 'b') setTool('brush')
@@ -323,8 +358,12 @@ export default function MaskEditor({ slot, baseImageId, baseImageUrl, onClose, o
       {label}
     </button>
   )
+  // sam === 'error' means segmentPrepare failed and SAM is locked; a click failure
+  // (caught in runSam) leaves sam 'ready' — usable again — but still shows samError
+  // until the next click clears it.
+  const samShowsError = sam === 'error' || (sam === 'ready' && !!samError)
   const samLabel = sam === 'loading' ? 'SAM loading…' : sam === 'running' ? 'SAM running…'
-    : sam === 'error' ? `SAM error: ${samError}` : 'SAM ready'
+    : samShowsError ? `SAM error: ${samError}` : 'SAM ready'
 
   return (
     <div className="fixed inset-0 z-50 bg-bg flex flex-col" role="dialog" aria-modal="true" aria-label="Mask editor">
@@ -375,8 +414,11 @@ export default function MaskEditor({ slot, baseImageId, baseImageUrl, onClose, o
       </div>
       <div className="h-7 px-4 border-t border-border flex items-center gap-4 text-[11px] text-muted">
         <span className="text-white">{tool.toUpperCase()}</span>
-        <span className={sam === 'error' ? 'text-red-400' : sam === 'ready' ? 'text-green-400' : 'text-amber-300'}>{samLabel}</span>
-        <span>Mask {mask ? (coverage(mask) * 100).toFixed(1) : '0'}%</span>
+        <span className={`flex items-center gap-1 ${samShowsError ? 'text-red-400' : sam === 'ready' ? 'text-green-400' : 'text-amber-300'}`}>
+          {(sam === 'loading' || sam === 'running') && <Loader2 size={11} className="animate-spin" />}
+          {samLabel}
+        </span>
+        <span>Mask {mask ? (maskCoverage * 100).toFixed(1) : '0'}%</span>
         <span>Zoom {Math.round(view.scale * 100)}%</span>
         {tool === 'brush' && <span>Brush {brush}px</span>}
         <span className="truncate">{HINTS[tool]} · Wheel zoom · Space+drag pan · 0 fit · M mask · I invert</span>
