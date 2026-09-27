@@ -54,6 +54,7 @@ export interface RefImageSlot {
   strength: number        // per-slot inpaint strength (0–1); also drives img_strength for slot #1
   w?:       number        // natural image width (populated on thumbnail load)
   h?:       number        // natural image height
+  keepSize?: boolean      // restored with its saved output size → skip auto-size
 }
 
 export type SSEEvent =

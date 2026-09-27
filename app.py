@@ -449,7 +449,9 @@ class CanvasFit(NamedTuple):
 
 
 _ASPECT_TOL = 0.01   # relative aspect difference treated as "same shape"
-_SNAP_PX    = 2      # fitted side within this many px of the canvas side → fill it (no sliver padding)
+_SNAP_REL   = 0.03   # fitted side within 3% of the canvas side → fill it (≤3% squash, invisible)
+                     # instead of outpainting a sliver. Covers UI auto-size /16 rounding
+                     # (frontend/src/canvasSize.ts), which drifts aspect ≤~2% at ≥267 px sides.
 
 
 def _fit_rect(sw, sh, tw, th, align="center"):
@@ -457,9 +459,9 @@ def _fit_rect(sw, sh, tw, th, align="center"):
     Returns (x, y, fitted_w, fitted_h). Align: top-left … center … bottom-right."""
     scale = min(tw / sw, th / sh)
     fw, fh = round(sw * scale), round(sh * scale)
-    if abs(fw - tw) <= _SNAP_PX:
+    if abs(fw - tw) <= max(2, tw * _SNAP_REL):
         fw = tw
-    if abs(fh - th) <= _SNAP_PX:
+    if abs(fh - th) <= max(2, th * _SNAP_REL):
         fh = th
     parts = align.split("-")
     x = 0 if "left" in parts else (tw - fw if "right" in parts else (tw - fw) // 2)

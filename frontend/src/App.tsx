@@ -454,7 +454,7 @@ export default function App() {
           const slotId = i + 1
           try {
             const { id, url } = await uploadFromUrl(slot.imageUrl)
-            dispatch({ type: 'ADD_REF_SLOT', imageId: id, imageUrl: url })
+            dispatch({ type: 'ADD_REF_SLOT', imageId: id, imageUrl: url, keepSize: true })
             dispatch({ type: 'UPDATE_SLOT_STRENGTH', slotId, strength: slot.strength })
             if (slot.maskUrl) {
               const { id: mId, url: mUrl } = await uploadFromUrl(slot.maskUrl)
@@ -513,7 +513,7 @@ export default function App() {
           const slotId = i + 1
           try {
             const { id, url } = await uploadFromUrl(refUrl)
-            dispatch({ type: 'ADD_REF_SLOT', imageId: id, imageUrl: url })
+            dispatch({ type: 'ADD_REF_SLOT', imageId: id, imageUrl: url, keepSize: true })
             if (i === 0 && item.img_strength != null) {
               dispatch({ type: 'UPDATE_SLOT_STRENGTH', slotId, strength: item.img_strength })
             }

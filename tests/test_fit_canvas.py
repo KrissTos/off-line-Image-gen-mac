@@ -127,3 +127,21 @@ def test_flux_extra_refs_keep_native_size():
     assert refs[0] is canvas
     assert refs[1].size == (300, 900)
     assert refs[1].mode == "RGB"
+
+
+def test_ui_auto_size_rounding_does_not_trigger_outpaint():
+    """UI auto-size snaps to /16 (4000×3000 → 1184×880, aspect off by ~1%);
+    that rounding must fill the canvas, not outpaint a few-px sliver."""
+    import app
+    for (rw, rh), (tw, th) in [((4000, 3000), (1184, 880)),
+                               ((1080, 1920), (768, 1360)),
+                               ((5000, 1000), (2288, 464))]:
+        fit = app.fit_ref_to_canvas(_solid(rw, rh), tw, th)
+        assert not fit.padded, (rw, rh, tw, th)
+        assert fit.mask is None
+
+
+def test_real_aspect_change_still_outpaints():
+    import app
+    fit = app.fit_ref_to_canvas(_solid(1000, 950), 1024, 1024)  # ~5% off → real change
+    assert fit.padded

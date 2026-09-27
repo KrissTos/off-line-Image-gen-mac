@@ -8,6 +8,7 @@ import {
 import type { GenerateParams, RefImageSlot, LoraSlot } from '../types'
 import { importComfyUI, loadWorkflow, saveWorkflow, uploadLora, uploadUpscaleModel, streamBatchUpscale, streamBatchGenerate, openFolderDialog, openFileDialog, upscaleSingleImage, updateSettings, openWorkflowFolderDialog, listLoras, stopGeneration, generateDepthMap, eraseDetect, eraseRemove } from '../api'
 import HelpTip from './HelpTip'
+import { canvasForRef, sizeFamily } from '../canvasSize'
 import EraseEditorModal from './EraseEditorModal'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -178,21 +179,6 @@ function presetsForModel(model: string): SizePreset[] {
   return PRESETS_FLUX
 }
 
-function snapTo64(n: number): number {
-  return Math.max(64, Math.round(n / 64) * 64)
-}
-
-// LTX canvas auto-sizing: derive /32-snapped dims that match the ref photo's
-// aspect within a fixed pixel budget (≈ Wide 768×512). LTX resizes the ref into
-// this canvas internally — matching aspect = no stretch. Budget caps VRAM/time
-// so a large portrait (e.g. 768×1365) maps to 480×832, not 768×1344.
-const LTX_BUDGET = 768 * 512
-function ltxCanvasFromAspect(w: number, h: number, budget = LTX_BUDGET) {
-  const ratio = w / h
-  const snap32 = (n: number) => Math.max(256, Math.round(n / 32) * 32)
-  return { w: snap32(Math.sqrt(budget * ratio)), h: snap32(Math.sqrt(budget / ratio)) }
-}
-
 const ALIGN_GRID = [
   'top-left',    'top',    'top-right',
   'left',        'center', 'right',
@@ -234,20 +220,16 @@ function SizePanel({
   refImageSize?: { w: number; h: number }
 }) {
   const presets = presetsForModel(params.model_choice)
-  const isLTX = params.model_choice.includes('LTX')
-
-  // Option B: auto-match LTX canvas to the ref photo's aspect (budget-capped,
-  // /32-snapped) when a ref is present. Fires on ref-dims / model change only,
-  // so later manual width/height edits are preserved.
-  useEffect(() => {
-    if (!isLTX || !refImageSize) return
-    const c = ltxCanvasFromAspect(refImageSize.w, refImageSize.h)
-    if (params.width !== c.w || params.height !== c.h) {
-      onChange('width', c.w)
-      onChange('height', c.h)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isLTX, refImageSize?.w, refImageSize?.h])
+  // Auto-size itself lives in the store (autoSizeParams) — this panel unmounts
+  // when its accordion is closed, so an effect here would miss/undo changes.
+  const refFit = refImageSize
+    ? canvasForRef(refImageSize.w, refImageSize.h, sizeFamily(params.model_choice))
+    : null
+  const matchesRef = !!refFit && params.width === refFit.w && params.height === refFit.h
+  // Same 3% tolerance as the backend fit (app._SNAP_REL): within it the ref just fills
+  const sameShape  = !!refImageSize && Math.abs(
+    (params.width / params.height) / (refImageSize.w / refImageSize.h) - 1) <= 0.03
+  const isLTX = sizeFamily(params.model_choice) === 'ltx'
 
   return (
     <div className="space-y-3">
@@ -274,15 +256,10 @@ function SizePanel({
         <NumberInput label="Height" value={params.height} onChange={v => onChange('height', v)} />
         {refImageSize && (
           <button
-            title={isLTX
-              ? `Match ref aspect (${refImageSize.w}×${refImageSize.h}) within LTX budget`
-              : `Set to ref image size (${refImageSize.w}×${refImageSize.h} → snapped to 64)`}
+            title={`Match ref shape (${refImageSize.w}×${refImageSize.h}) at this model's best size → ${refFit!.w}×${refFit!.h}`}
             onClick={() => {
-              const c = isLTX
-                ? ltxCanvasFromAspect(refImageSize.w, refImageSize.h)
-                : { w: snapTo64(refImageSize.w), h: snapTo64(refImageSize.h) }
-              onChange('width',  c.w)
-              onChange('height', c.h)
+              onChange('width',  refFit!.w)
+              onChange('height', refFit!.h)
             }}
             className="shrink-0 mb-[1px] px-2 py-1 rounded bg-card border border-border text-[10px] text-muted
                        hover:text-white hover:border-accent transition-colors whitespace-nowrap"
@@ -291,6 +268,17 @@ function SizePanel({
           </button>
         )}
       </div>
+      {refFit && (
+        <p className="text-[10px] text-label">
+          {matchesRef
+            ? `Matched to ref shape (${refFit.w}×${refFit.h}) — pick a preset to ${isLTX ? 'change it' : 'outpaint to another shape'}`
+            : sameShape
+              ? `Same shape as ref — ↕ ref size sets this model's best size (${refFit.w}×${refFit.h})`
+              : isLTX
+                ? `Ref shape differs from ${params.width}×${params.height} — video will be stretched; ↕ ref size fixes it`
+                : `Ref shape differs from ${params.width}×${params.height} — extra area will be generated (outpaint)`}
+        </p>
+      )}
       {hasRefImage && (
         <AlignPicker
           value={params.outpaint_align}

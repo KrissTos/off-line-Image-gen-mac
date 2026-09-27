@@ -1,5 +1,6 @@
 import { useReducer } from 'react'
 import type { GenerateParams, OutputItem, AppStatus, RefImageSlot } from './types'
+import { canvasForRef, sizeFamily } from './canvasSize'
 
 // ── State ─────────────────────────────────────────────────────────────────────
 
@@ -95,7 +96,7 @@ export type Action =
   | { type: 'SET_ERROR';       message: string }
   | { type: 'TOGGLE_SETTINGS' }
   // Reference image slots
-  | { type: 'ADD_REF_SLOT';         imageId: string; imageUrl: string }
+  | { type: 'ADD_REF_SLOT';         imageId: string; imageUrl: string; keepSize?: boolean }
   | { type: 'REMOVE_REF_SLOT';      slotId: number }
   | { type: 'SET_SLOT_MASK';        slotId: number; maskId: string; maskUrl: string }
   | { type: 'CLEAR_SLOT_MASK';      slotId: number }
@@ -113,13 +114,33 @@ function slotsToParams(slots: RefImageSlot[]): Pick<GenerateParams, 'input_image
   }
 }
 
+/**
+ * Auto-size: output width/height = slot #1's aspect at the model family's best
+ * resolution (see canvasSize.ts). Runs only on real events — slot #1 gets its
+ * first dims, slot #1 is removed, model family changes — so a preset picked
+ * afterwards (e.g. to outpaint) is kept. Skipped for slots restored with their
+ * saved size (Load Params / workflow), which carry keepSize.
+ */
+function autoSizeParams(params: GenerateParams, slot1: RefImageSlot | undefined): GenerateParams {
+  if (!slot1?.w || !slot1?.h || slot1.keepSize) return params
+  const c = canvasForRef(slot1.w, slot1.h, sizeFamily(params.model_choice))
+  return { ...params, width: c.w, height: c.h }
+}
+
 // ── Reducer ───────────────────────────────────────────────────────────────────
 
 function reducer(state: State, action: Action): State {
   switch (action.type) {
 
-    case 'SET_PARAM':
-      return { ...state, params: { ...state.params, [action.key]: action.value } }
+    case 'SET_PARAM': {
+      const params = { ...state.params, [action.key]: action.value }
+      // Budgets differ per family (LTX 768×512 vs FLUX 1 MP) → re-fit on family switch
+      if (action.key === 'model_choice'
+          && sizeFamily(String(action.value)) !== sizeFamily(state.params.model_choice)) {
+        return { ...state, params: autoSizeParams(params, state.refSlots[0]) }
+      }
+      return { ...state, params }
+    }
 
     case 'SET_PARAMS':
       return { ...state, params: { ...state.params, ...action.params } }
@@ -178,6 +199,7 @@ function reducer(state: State, action: Action): State {
         maskId:   null,
         maskUrl:  null,
         strength: state.params.img_strength,  // inherit current global strength
+        keepSize: action.keepSize,
       }
       const slots = [...state.refSlots, newSlot]
       return { ...state, refSlots: slots, params: { ...state.params, ...slotsToParams(slots) } }
@@ -187,7 +209,11 @@ function reducer(state: State, action: Action): State {
       const slots = state.refSlots
         .filter(s => s.slotId !== action.slotId)
         .map((s, i) => ({ ...s, slotId: i + 1 }))   // re-number
-      return { ...state, refSlots: slots, params: { ...state.params, ...slotsToParams(slots) } }
+      let params = { ...state.params, ...slotsToParams(slots) }
+      if (slots[0] && slots[0].imageId !== state.refSlots[0]?.imageId) {
+        params = autoSizeParams(params, slots[0])   // a different image became slot #1
+      }
+      return { ...state, refSlots: slots, params }
     }
 
     case 'SET_SLOT_MASK': {
@@ -223,10 +249,18 @@ function reducer(state: State, action: Action): State {
     }
 
     case 'SET_SLOT_DIMS': {
+      const prev  = state.refSlots.find(s => s.slotId === action.slotId)
       const slots = state.refSlots.map(s =>
         s.slotId === action.slotId ? { ...s, w: action.w, h: action.h } : s
       )
-      return { ...state, refSlots: slots }
+      // First dims for slot #1 = a new image just loaded (thumbnail re-renders re-send
+      // the same dims and must not undo a preset picked since)
+      const isNewSlot1 = action.slotId === 1 && !prev?.w
+      return {
+        ...state,
+        refSlots: slots,
+        params: isNewSlot1 ? autoSizeParams(state.params, slots[0]) : state.params,
+      }
     }
 
     default:
