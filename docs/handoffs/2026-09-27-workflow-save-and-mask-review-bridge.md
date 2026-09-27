@@ -1,5 +1,7 @@
 # Handoff: workflow save fix and mask-review bridge for `/generate`
 
+Status: tasks 1-4 superseded by run folders (see docs/architecture.md); task 1 fixed in da004a4.
+
 Date: 2026-09-27 · From: ai-generate session (`/generate` local provider) · Start with `cd ~/Projects/off-line-Image-gen-mac && claude`
 
 ## Why
