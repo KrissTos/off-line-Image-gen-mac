@@ -11,3 +11,4 @@
 - `.tmp_uploads/` grows without cleanup.
 - Text-to-mask (SAM 3 / Grounded-SAM) = phase 2.
 - `/generate` local provider (Task B, `~/.claude/skills/generate/`): see `docs/handoffs/2026-09-27-sam-click-mask-and-generate-local-provider.md`.
+- `_load_pil` (`server.py:343`) doesn't apply `exif_transpose`: a phone JPEG with EXIF orientation gets its SAM mask built upright (frontend transposes for display) but generation loads the untransposed pixels, so the mask can land misaligned with the actual image content.
