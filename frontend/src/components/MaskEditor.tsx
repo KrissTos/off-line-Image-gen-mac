@@ -1,0 +1,387 @@
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { Brush, Hexagon, MousePointerClick, SquareDashed, X } from 'lucide-react'
+import type { RefImageSlot } from '../types'
+import { segmentMask, segmentPrepare } from '../api'
+import {
+  coverage, createMask, fillPolygon, fromRgba, grow, invert, paintStroke, shrink,
+  subtract, toRgba, union, type Mask, type Pt,
+} from '../mask/maskOps'
+import { MaskHistory } from '../mask/history'
+import { fitView, imageToScreen, inImage, screenToImage, zoomAt, type View } from '../mask/viewMath'
+
+type Tool = 'sam' | 'box' | 'brush' | 'poly'
+type SamState = 'loading' | 'ready' | 'running' | 'error'
+type SamPoint = { x: number; y: number; label: 0 | 1 }
+type LastSam = { points: SamPoint[]; box: { x0: number; y0: number; x1: number; y1: number } | null; op: 'add' | 'sub'; before: Mask }
+
+interface Props {
+  slot:         RefImageSlot
+  baseImageId:  string        // slot #1 temp id — SAM runs on this image
+  baseImageUrl: string
+  onClose:      () => void
+  onApply:      (maskFile: File) => void
+}
+
+const HINTS: Record<Tool, string> = {
+  sam:   'Click = add object · Alt+click = remove object · Shift+click = refine last object',
+  box:   'Drag a box around an object · Alt = remove',
+  brush: 'Paint to add · Alt = erase · [ ] size',
+  poly:  'Click points · Enter or click first point to close · Alt+close = subtract',
+}
+
+async function blobToMask(blob: Blob, w: number, h: number): Promise<Mask> {
+  const bmp = await createImageBitmap(blob)
+  const c = document.createElement('canvas'); c.width = w; c.height = h
+  const ctx = c.getContext('2d')!
+  ctx.drawImage(bmp, 0, 0, w, h)
+  return fromRgba(ctx.getImageData(0, 0, w, h).data, w, h, w, h)
+}
+
+export default function MaskEditor({ slot, baseImageId, baseImageUrl, onClose, onApply }: Props) {
+  const wrapRef    = useRef<HTMLDivElement>(null)
+  const canvasRef  = useRef<HTMLCanvasElement>(null)
+  const imgRef     = useRef<HTMLImageElement | null>(null)
+  const overlayRef = useRef<HTMLCanvasElement>(document.createElement('canvas'))
+  const history    = useRef(new MaskHistory())
+
+  const [mask, setMask]         = useState<Mask | null>(null)
+  const [view, setView]         = useState<View>({ scale: 1, tx: 0, ty: 0 })
+  const [box, setBox]           = useState({ w: 0, h: 0 })
+  const [tool, setTool]         = useState<Tool>('sam')
+  const [brush, setBrush]       = useState(24)
+  const [growPx, setGrowPx]     = useState(3)
+  const [showMask, setShowMask] = useState(true)
+  const [sam, setSam]           = useState<SamState>('loading')
+  const [samError, setSamError] = useState('')
+  const [dirty, setDirty]       = useState(false)
+  const [confirmDiscard, setConfirmDiscard] = useState(false)
+  const [poly, setPoly]         = useState<Pt[]>([])
+  const [drag, setDrag]         = useState<{ a: Pt; b: Pt } | null>(null)   // box tool, image px
+  const [cursor, setCursor]     = useState<{ x: number; y: number } | null>(null) // screen px
+  const [, forceRender]         = useState(0)
+  const lastSam   = useRef<LastSam | null>(null)
+  const samBusy   = useRef(false)
+  const spaceDown = useRef(false)
+  const panning   = useRef<{ x: number; y: number; v: View } | null>(null)
+  const painting  = useRef<{ last: Pt; value: 0 | 255 } | null>(null)
+
+  const w = imgRef.current?.naturalWidth ?? 0
+  const h = imgRef.current?.naturalHeight ?? 0
+
+  // ── Load image + existing mask, warm SAM ────────────────────────────────────
+  useEffect(() => {
+    const img = new Image()
+    img.onload = async () => {
+      imgRef.current = img
+      let m = createMask(img.naturalWidth, img.naturalHeight)
+      if (slot.maskUrl) {
+        try {
+          const blob = await (await fetch(slot.maskUrl)).blob()
+          m = await blobToMask(blob, img.naturalWidth, img.naturalHeight)
+        } catch { /* start empty if the old mask can't be read */ }
+      }
+      setMask(m)
+    }
+    img.src = baseImageUrl
+    segmentPrepare(baseImageId)
+      .then(() => setSam('ready'))
+      .catch(e => { setSam('error'); setSamError((e as Error).message) })
+  }, [baseImageId, baseImageUrl, slot.maskUrl])
+
+  // ── Size canvas to its box, fit on first layout ─────────────────────────────
+  useEffect(() => {
+    const el = wrapRef.current
+    if (!el) return
+    const ro = new ResizeObserver(() => setBox({ w: el.clientWidth, h: el.clientHeight }))
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+  const fitted = useRef(false)
+  useEffect(() => {
+    if (!fitted.current && mask && box.w > 0) {
+      setView(fitView(mask.w, mask.h, box.w, box.h)); fitted.current = true
+    }
+  }, [mask, box])
+
+  // ── Mask → red overlay (only when the mask changes) ─────────────────────────
+  useEffect(() => {
+    if (!mask) return
+    const oc = overlayRef.current; oc.width = mask.w; oc.height = mask.h
+    const ctx = oc.getContext('2d')!
+    const id = ctx.createImageData(mask.w, mask.h)
+    for (let i = 0; i < mask.data.length; i++) {
+      if (mask.data[i]) { id.data[i * 4] = 239; id.data[i * 4 + 1] = 68; id.data[i * 4 + 2] = 68; id.data[i * 4 + 3] = 115 }
+    }
+    ctx.putImageData(id, 0, 0)
+  }, [mask])
+
+  // ── Draw ─────────────────────────────────────────────────────────────────────
+  useEffect(() => {
+    const c = canvasRef.current, img = imgRef.current
+    if (!c || !img || !mask || box.w === 0) return
+    const dpr = window.devicePixelRatio || 1
+    c.width = Math.round(box.w * dpr); c.height = Math.round(box.h * dpr)
+    const ctx = c.getContext('2d')!
+    ctx.setTransform(1, 0, 0, 1, 0, 0)
+    ctx.clearRect(0, 0, c.width, c.height)
+    ctx.setTransform(dpr * view.scale, 0, 0, dpr * view.scale, dpr * view.tx, dpr * view.ty)
+    ctx.imageSmoothingEnabled = view.scale < 2
+    ctx.drawImage(img, 0, 0)
+    if (showMask) ctx.drawImage(overlayRef.current, 0, 0)
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)            // screen-space overlays
+    ctx.lineWidth = 1.5
+    if (drag) {
+      const a = imageToScreen(view, drag.a.x, drag.a.y), b = imageToScreen(view, drag.b.x, drag.b.y)
+      ctx.strokeStyle = '#7c3aed'; ctx.setLineDash([5, 4])
+      ctx.strokeRect(Math.min(a.x, b.x), Math.min(a.y, b.y), Math.abs(b.x - a.x), Math.abs(b.y - a.y))
+      ctx.setLineDash([])
+    }
+    if (poly.length) {
+      ctx.strokeStyle = '#facc15'; ctx.fillStyle = '#facc15'
+      ctx.beginPath()
+      poly.forEach((p, i) => { const s = imageToScreen(view, p.x, p.y); if (i) ctx.lineTo(s.x, s.y); else ctx.moveTo(s.x, s.y) })
+      if (cursor) ctx.lineTo(cursor.x, cursor.y)
+      ctx.stroke()
+      poly.forEach(p => { const s = imageToScreen(view, p.x, p.y); ctx.fillRect(s.x - 3, s.y - 3, 6, 6) })
+    }
+    if (tool === 'brush' && cursor) {
+      ctx.strokeStyle = '#ffffff'; ctx.beginPath(); ctx.arc(cursor.x, cursor.y, brush / 2, 0, Math.PI * 2); ctx.stroke()
+    }
+  }, [mask, view, box, showMask, drag, poly, cursor, tool, brush])
+
+  // ── Edit helpers ─────────────────────────────────────────────────────────────
+  const commit = useCallback((next: Mask, before: Mask, keepSam = false) => {
+    history.current.push(before)
+    if (!keepSam) lastSam.current = null
+    setMask(next); setDirty(true); forceRender(n => n + 1)
+  }, [])
+
+  const runSam = useCallback(async (points: SamPoint[], b: LastSam['box'], op: 'add' | 'sub', refine: boolean) => {
+    if (!mask || samBusy.current || sam !== 'ready') return
+    samBusy.current = true; setSam('running')
+    try {
+      const obj = await blobToMask(await segmentMask(baseImageId, points, b), mask.w, mask.h)
+      const base = refine && lastSam.current ? lastSam.current.before : mask
+      const next = op === 'add' ? union(base, obj) : subtract(base, obj)
+      if (refine && lastSam.current) {
+        setMask(next); setDirty(true)                     // replaces the previous result of the same object
+      } else {
+        commit(next, mask, true)
+      }
+      lastSam.current = { points, box: b, op, before: base }
+      setSam('ready')
+    } catch (e) {
+      setSam('error'); setSamError((e as Error).message)
+    } finally {
+      samBusy.current = false
+    }
+  }, [mask, sam, baseImageId, commit])
+
+  const closePolygon = useCallback((subtractIt: boolean) => {
+    if (!mask) return
+    if (poly.length >= 3) {
+      const next = { ...mask, data: mask.data.slice() }
+      fillPolygon(next, poly, subtractIt ? 0 : 255)
+      commit(next, mask)
+    }
+    setPoly([])
+  }, [mask, poly, commit])
+
+  const apply = useCallback(() => {
+    if (!mask) return
+    const c = document.createElement('canvas'); c.width = mask.w; c.height = mask.h
+    c.getContext('2d')!.putImageData(new ImageData(new Uint8ClampedArray(toRgba(mask)), mask.w, mask.h), 0, 0)
+    c.toBlob(b => { if (b) onApply(new File([b], 'mask.png', { type: 'image/png' })) }, 'image/png')
+  }, [mask, onApply])
+
+  const doUndo = useCallback((redo: boolean) => {
+    if (!mask) return
+    const m = redo ? history.current.redo(mask) : history.current.undo(mask)
+    if (m) { lastSam.current = null; setMask(m); setDirty(true) }
+  }, [mask])
+
+  const act = useCallback((f: (m: Mask) => Mask) => { if (mask) commit(f(mask), mask) }, [mask, commit])
+
+  // ── Pointer ──────────────────────────────────────────────────────────────────
+  const local = (e: { clientX: number; clientY: number }) => {
+    const r = canvasRef.current!.getBoundingClientRect()
+    return { x: e.clientX - r.left, y: e.clientY - r.top }
+  }
+
+  function onPointerDown(e: React.PointerEvent) {
+    if (!mask) return
+    const s = local(e), p = screenToImage(view, s.x, s.y)
+    if (spaceDown.current || e.button === 1) { panning.current = { x: s.x, y: s.y, v: view }; return }
+    if (e.button !== 0) return
+    ;(e.target as Element).setPointerCapture(e.pointerId)
+    if (tool === 'sam') {
+      if (!inImage(p, mask.w, mask.h)) return
+      const pt: SamPoint = { x: p.x, y: p.y, label: e.altKey ? 0 : 1 }
+      if (e.shiftKey && lastSam.current) runSam([...lastSam.current.points, pt], lastSam.current.box, lastSam.current.op, true)
+      else runSam([{ ...pt, label: 1 }], null, e.altKey ? 'sub' : 'add', false)
+    } else if (tool === 'box') {
+      setDrag({ a: p, b: p })
+    } else if (tool === 'brush') {
+      const value: 0 | 255 = e.altKey ? 0 : 255
+      history.current.push(mask); lastSam.current = null
+      const next = { ...mask, data: mask.data.slice() }
+      paintStroke(next, [p], brush / 2 / view.scale, value)
+      painting.current = { last: p, value }
+      setMask(next); setDirty(true)
+    } else if (tool === 'poly') {
+      if (poly.length >= 3) {
+        const first = imageToScreen(view, poly[0].x, poly[0].y)
+        if (Math.hypot(first.x - s.x, first.y - s.y) < 8) { closePolygon(e.altKey); return }
+      }
+      setPoly([...poly, p])
+    }
+  }
+
+  function onPointerMove(e: React.PointerEvent) {
+    const s = local(e); setCursor(s)
+    if (panning.current) {
+      const pn = panning.current
+      setView({ ...pn.v, tx: pn.v.tx + s.x - pn.x, ty: pn.v.ty + s.y - pn.y }); return
+    }
+    const p = screenToImage(view, s.x, s.y)
+    if (drag) setDrag({ ...drag, b: p })
+    if (painting.current && mask) {
+      const next = { ...mask, data: mask.data }            // same buffer: stroke in progress
+      paintStroke(next, [painting.current.last, p], brush / 2 / view.scale, painting.current.value)
+      painting.current.last = p
+      setMask({ ...next })
+    }
+  }
+
+  function onPointerUp(e: React.PointerEvent) {
+    panning.current = null
+    painting.current = null
+    if (drag && mask) {
+      const a = drag.a, b = drag.b
+      const x0 = Math.max(0, Math.min(a.x, b.x)), y0 = Math.max(0, Math.min(a.y, b.y))
+      const x1 = Math.min(mask.w, Math.max(a.x, b.x)), y1 = Math.min(mask.h, Math.max(a.y, b.y))
+      setDrag(null)
+      if ((x1 - x0) * view.scale > 4 && (y1 - y0) * view.scale > 4) runSam([], { x0, y0, x1, y1 }, e.altKey ? 'sub' : 'add', false)
+    }
+  }
+
+  // ── Wheel zoom (non-passive) ──────────────────────────────────────────────────
+  useEffect(() => {
+    const c = canvasRef.current
+    if (!c) return
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault()
+      const r = c.getBoundingClientRect()
+      setView(v => zoomAt(v, e.clientX - r.left, e.clientY - r.top, Math.exp(-e.deltaY * 0.0015)))
+    }
+    c.addEventListener('wheel', onWheel, { passive: false })
+    return () => c.removeEventListener('wheel', onWheel)
+  }, [])
+
+  // ── Keyboard ─────────────────────────────────────────────────────────────────
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if ((e.target as HTMLElement).tagName === 'INPUT') return
+      if (e.code === 'Space') { spaceDown.current = e.type === 'keydown'; e.preventDefault(); return }
+      if (e.type !== 'keydown') return
+      const k = e.key.toLowerCase()
+      if ((e.metaKey || e.ctrlKey) && k === 'z') { e.preventDefault(); doUndo(e.shiftKey); return }
+      if (k === 'escape') {
+        if (poly.length) setPoly([])
+        else if (confirmDiscard) setConfirmDiscard(false)
+        else if (dirty) setConfirmDiscard(true)
+        else onClose()
+        return
+      }
+      if (k === 'enter') { if (poly.length) closePolygon(e.altKey); else apply(); return }
+      if (k === 's') setTool('sam')
+      else if (k === 'd') setTool('box')
+      else if (k === 'b') setTool('brush')
+      else if (k === 'p') setTool('poly')
+      else if (k === 'i') act(invert)
+      else if (k === 'm') setShowMask(v => !v)
+      else if (k === '0' && mask && box.w) setView(fitView(mask.w, mask.h, box.w, box.h))
+      else if (k === '[') setBrush(b => Math.max(4, b - 4))
+      else if (k === ']') setBrush(b => Math.min(200, b + 4))
+    }
+    window.addEventListener('keydown', onKey)
+    window.addEventListener('keyup', onKey)
+    return () => { window.removeEventListener('keydown', onKey); window.removeEventListener('keyup', onKey) }
+  }, [poly, dirty, confirmDiscard, onClose, closePolygon, apply, act, doUndo, mask, box])
+
+  // ── UI ───────────────────────────────────────────────────────────────────────
+  const toolBtn = (t: Tool, label: string, key: string, icon: React.ReactNode) => (
+    <button
+      key={t} onClick={() => setTool(t)} title={`${label} (${key})`} aria-pressed={tool === t}
+      className={`w-10 h-10 rounded flex items-center justify-center transition-colors
+        ${tool === t ? 'bg-accent text-white' : 'text-muted hover:text-white hover:bg-card'}`}
+    >{icon}</button>
+  )
+  const actBtn = (label: string, onClick: () => void, title: string, disabled = false) => (
+    <button onClick={onClick} title={title} disabled={disabled}
+      className="w-full px-1 py-1 rounded text-[10px] text-muted hover:text-white hover:bg-card disabled:opacity-40">
+      {label}
+    </button>
+  )
+  const samLabel = sam === 'loading' ? 'SAM loading…' : sam === 'running' ? 'SAM running…'
+    : sam === 'error' ? `SAM error: ${samError}` : 'SAM ready'
+
+  return (
+    <div className="fixed inset-0 z-50 bg-bg flex flex-col" role="dialog" aria-modal="true" aria-label="Mask editor">
+      <div className="flex items-center justify-between px-4 h-10 border-b border-border text-xs">
+        <span className="text-white font-semibold">
+          Mask — {slot.slotId === 1 ? 'base image (#1)' : `pass #${slot.slotId}, drawn on base image (#1)`}
+        </span>
+        <div className="flex items-center gap-2">
+          {confirmDiscard && (
+            <span className="flex items-center gap-2 text-amber-300">
+              Discard changes?
+              <button className="px-2 py-0.5 rounded bg-card border border-border hover:text-white" onClick={onClose}>Discard</button>
+              <button className="px-2 py-0.5 rounded bg-card border border-border hover:text-white" onClick={() => setConfirmDiscard(false)}>Keep editing</button>
+            </span>
+          )}
+          <button onClick={apply} disabled={!mask} className="px-3 py-1 rounded bg-accent text-white disabled:opacity-40">Apply (Enter)</button>
+          <button onClick={() => (dirty ? setConfirmDiscard(true) : onClose())} aria-label="Close mask editor" className="text-muted hover:text-white">
+            <X size={16} />
+          </button>
+        </div>
+      </div>
+      <div className="flex flex-1 min-h-0">
+        <div className="w-14 border-r border-border flex flex-col items-center gap-1 py-2">
+          {toolBtn('sam', 'SAM click', 'S', <MousePointerClick size={18} />)}
+          {toolBtn('box', 'SAM box', 'D', <SquareDashed size={18} />)}
+          {toolBtn('brush', 'Brush', 'B', <Brush size={18} />)}
+          {toolBtn('poly', 'Polygon', 'P', <Hexagon size={18} />)}
+          <div className="w-10 border-t border-border my-1" />
+          {actBtn('Invert', () => act(invert), 'Invert mask (I)', !mask)}
+          <input type="number" min={1} max={50} value={growPx} aria-label="Grow/shrink pixels"
+            onChange={e => setGrowPx(Math.max(1, Math.min(50, Number(e.target.value) || 1)))}
+            className="w-11 bg-card border border-border rounded text-[10px] text-center text-white" />
+          {actBtn('Grow', () => act(m => grow(m, growPx)), `Grow mask by ${growPx} px`, !mask)}
+          {actBtn('Shrink', () => act(m => shrink(m, growPx)), `Shrink mask by ${growPx} px`, !mask)}
+          {actBtn('Clear', () => act(m => createMask(m.w, m.h)), 'Clear mask', !mask)}
+          {actBtn('Undo', () => doUndo(false), 'Undo (Cmd+Z)', !history.current.canUndo)}
+          {actBtn('Redo', () => doUndo(true), 'Redo (Shift+Cmd+Z)', !history.current.canRedo)}
+        </div>
+        <div ref={wrapRef} className="flex-1 min-w-0 relative overflow-hidden">
+          <canvas
+            ref={canvasRef}
+            style={{ width: box.w, height: box.h, cursor: tool === 'brush' ? 'none' : 'crosshair' }}
+            onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp}
+            onPointerLeave={() => setCursor(null)}
+          />
+          {!mask && <div className="absolute inset-0 flex items-center justify-center text-muted text-sm">Loading image…</div>}
+        </div>
+      </div>
+      <div className="h-7 px-4 border-t border-border flex items-center gap-4 text-[11px] text-muted">
+        <span className="text-white">{tool.toUpperCase()}</span>
+        <span className={sam === 'error' ? 'text-red-400' : sam === 'ready' ? 'text-green-400' : 'text-amber-300'}>{samLabel}</span>
+        <span>Mask {mask ? (coverage(mask) * 100).toFixed(1) : '0'}%</span>
+        <span>Zoom {Math.round(view.scale * 100)}%</span>
+        {tool === 'brush' && <span>Brush {brush}px</span>}
+        <span className="truncate">{HINTS[tool]} · Wheel zoom · Space+drag pan · 0 fit · M mask · I invert</span>
+        <span className="ml-auto">{w}×{h}</span>
+      </div>
+    </div>
+  )
+}
