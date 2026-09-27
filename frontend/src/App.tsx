@@ -423,10 +423,16 @@ export default function App() {
 
   // ── Workflow restore: one path for gallery runs and saved workflows ───────
 
-  const applyWorkflow = useCallback(async (wf: WorkflowData, opts: { seed?: number | null; label: string }) => {
-    if (isRestoringWorkflow.current) return
+  // opts.loaded = saved-workflow name Save would overwrite (null for gallery runs); set only once
+  // this restore owns the guard, so a skipped restore never retargets Save.
+  const applyWorkflow = useCallback(async (wf: WorkflowData, opts: { seed?: number | null; label: string; loaded: string | null }) => {
+    if (isRestoringWorkflow.current) {
+      setStatusMsg('A restore is already in progress — try again when it finishes')
+      return
+    }
     isRestoringWorkflow.current = true
     try {
+      setLoadedWorkflow(opts.loaded)
       dispatch({ type: 'SET_PARAMS', params: workflowToParams(wf, opts) })
       dispatch({ type: 'CLEAR_ALL_SLOTS' })
       const slots = wf.ref_slots ?? []
@@ -459,16 +465,14 @@ export default function App() {
     if (state.isGenerating || !item.run) return
     try {
       const wf = await loadRun(item.run)
-      setLoadedWorkflow(null)
-      await applyWorkflow(wf, { seed: item.seed, label: item.run })
+      await applyWorkflow(wf, { seed: item.seed, label: item.run, loaded: null })
     } catch (err: unknown) {
       setStatusMsg(`Could not load run ${item.run}: ${(err as Error).message}`)
     }
   }, [state.isGenerating, dispatch, applyWorkflow, setStatusMsg])
 
   const handleWorkflowLoad = useCallback(async (wf: WorkflowData, name: string) => {
-    setLoadedWorkflow(name)
-    await applyWorkflow(wf, { label: name })
+    await applyWorkflow(wf, { label: name, loaded: name })
   }, [applyWorkflow])
 
   // ── Render ────────────────────────────────────────────────────────────────
