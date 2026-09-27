@@ -23,7 +23,9 @@ All distilled → guidance slider hidden; defaults from `guidanceForModel()` / `
 - **Backend fit** (`app.fit_ref_to_canvas()`, `tests/test_fit_canvas.py`): slot #1 scaled to fit (up or down) at `outpaint_align`, never stretched. Uncovered area = blurred cover-scaled copy of the ref, unioned into the mask; padded → mask mode forced to Inpainting (full-frame + composite). `_SNAP_REL=0.03`: ≤3% aspect drift fills instead of outpainting a sliver.
 - User mask gets the same transform. Mask aspect ≠ slot #1 → stretched + `⚠` in result info, except when slot #1 is already canvas-size (Iterate pass ≥2) → mask fitted on its own aspect.
 - FLUX slots #2+ go at native size (`prepare_flux_refs()`); `Flux2KleinPipeline` keeps ref aspect itself (≤1 MP, /16).
-- Limit: FLUX.2 edit copies the ref, so outpaint bands fill in-style but can seam. See `docs/TODO.md` (outpaint LoRA).
+- **Outpaint LoRA (FLUX 4B only, automatic)**: when slot #1 needs padding on `flux2-klein-sdnq`/`-int8` (`wants_outpaint_lora()`), the pad is pure green (`pad_fill="green"`), `fal/flux-2-klein-4B-outpaint-lora` is appended to the request's LoRAs at 1.1 (`get_outpaint_lora_path()`, HF cache, one-time 76 MB download; failure → blur pad), and the prompt becomes `outpaint_prompt()` = trigger "Fill the green spaces according to the image. " + user prompt. Seamless fills; the LoRA was trained on klein-4B *base* but works on our distilled 4B.
+- 9B / Z-Image: blurred-image pad. FLUX 9B often copies the blur (weak outpaint) — prefer 4B for outpaint.
+- `apply_mask_composite` soft mask = max(hard mask, blurred): masked/pad pixels stay 100% generated, the ramp falls on the original side (else the pad fill bleeds in as a line).
 - LTX has no fixed resolution: any /32 dims + 8k+1 frames; mismatched aspect stretches the ref into the canvas.
 
 ## Masking
@@ -33,7 +35,8 @@ All distilled → guidance slider hidden; defaults from `guidanceForModel()` / `
 
 ## LoRA
 - Multi-LoRA: `lora_files: LoraSlot[]` (≤5), named adapters in `load_loras()`; `if not lora_files` (not `is None`) for legacy fallback. `LoraSlot` carries `name?` / `model_type?` for sidecars.
-- FLUX.2-klein LoRA needs diffusers git main (stable had hardcoded 48 blocks vs actual 20). FLUX LoRA is loaded during generation.
+- FLUX.2-klein LoRA needs diffusers git main. BFL-native LoRAs (`double_blocks.N.img_attn.qkv`, `single_blocks.N.linear1`) go through our `convert_bfl_flux2_lora()` (`core/lora_flux2.py`): diffusers' converter hardcodes FLUX.2-dev 8/48 blocks, requires MLP keys and rejects embedder/modulation keys. Unmapped key → error, never a half-applied LoRA.
+- `sync_loras()` loads requested LoRAs (failure → `ensure_loras_loaded()` raises → UI error) and unloads leftovers when a request has none.
 - LoRA accordion `key={lora_files.length > 0 ? 'lora-has-files' : 'lora-empty'}` + `defaultOpen` → remounts to auto-open when params are loaded (`useState(defaultOpen)` reads only at mount).
 
 ## LTX-Video 0.9.8-13B-distilled (`app.py`)

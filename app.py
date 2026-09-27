@@ -469,7 +469,8 @@ def _fit_rect(sw, sh, tw, th, align="center"):
     return x, y, fw, fh
 
 
-def fit_ref_to_canvas(ref, target_w, target_h, align="center", mask=None) -> CanvasFit:
+def fit_ref_to_canvas(ref, target_w, target_h, align="center", mask=None,
+                      pad_fill="blur") -> CanvasFit:
     """
     Fit slot #1 into the output canvas WITHOUT stretching (scale to fit, up or down,
     placed per *align*). Uncovered area is filled with a blurred cover-scaled copy of
@@ -491,7 +492,10 @@ def fit_ref_to_canvas(ref, target_w, target_h, align="center", mask=None) -> Can
     padded = (fw, fh) != (tw, th)
 
     fitted = ref.resize((fw, fh), Image.LANCZOS) if (fw, fh) != (rw, rh) else ref.copy()
-    if padded:
+    if padded and pad_fill == "green":
+        canvas = Image.new("RGB", (tw, th), (0, 255, 0))   # outpaint LoRA contract
+        canvas.paste(fitted, (x, y))
+    elif padded:
         cs = max(tw / rw, th / rh)
         cw, ch = max(tw, round(rw * cs)), max(th, round(rh * cs))
         left, top = (cw - tw) // 2, (ch - th) // 2
@@ -525,6 +529,42 @@ def fit_ref_to_canvas(ref, target_w, target_h, align="center", mask=None) -> Can
     if out_mask.getbbox() is None:
         out_mask = None
     return CanvasFit(canvas, out_mask, padded, warning)
+
+
+# ── FLUX 4B outpaint LoRA ─────────────────────────────────────────────────────
+# fal/flux-2-klein-4B-outpaint-lora fills pure-green borders (trained on klein-4B
+# base; verified seamless on our distilled 4B SDNQ). No 9B / Z-Image equivalent →
+# those keep the blurred-image pad.
+OUTPAINT_LORA_REPO     = "fal/flux-2-klein-4B-outpaint-lora"
+OUTPAINT_LORA_FILE     = "flux-outpaint-lora.safetensors"
+OUTPAINT_LORA_STRENGTH = 1.1            # model card value
+OUTPAINT_LORA_TRIGGER  = "Fill the green spaces according to the image"
+OUTPAINT_LORA_MODELS   = ("flux2-klein-sdnq", "flux2-klein-int8")
+
+
+def wants_outpaint_lora(model_key, is_video, ref_size, target_w, target_h, align="center") -> bool:
+    """True when slot #1 will be padded (same rule as fit_ref_to_canvas) on a 4B model."""
+    if is_video or model_key not in OUTPAINT_LORA_MODELS:
+        return False
+    _, _, fw, fh = _fit_rect(ref_size[0], ref_size[1], int(target_w), int(target_h), align)
+    return (fw, fh) != (int(target_w), int(target_h))
+
+
+def outpaint_prompt(prompt: str) -> str:
+    """Trigger phrase first (as trained), the user's prompt after it."""
+    p = (prompt or "").strip()
+    return f"{OUTPAINT_LORA_TRIGGER}. {p}" if p else OUTPAINT_LORA_TRIGGER
+
+
+def get_outpaint_lora_path():
+    """Cached LoRA path, downloading it once (76 MB) if missing; None if unavailable
+    (offline, HF down) — caller falls back to the blurred-image pad."""
+    from huggingface_hub import hf_hub_download
+    try:
+        return hf_hub_download(OUTPAINT_LORA_REPO, OUTPAINT_LORA_FILE)
+    except Exception as e:
+        print(f"  Outpaint LoRA unavailable ({e}) — using blurred-image pad")
+        return None
 
 
 def prepare_flux_refs(slot1_canvas, input_images, max_refs=6) -> list:
@@ -1156,15 +1196,18 @@ def apply_mask_composite(
     """
     Paste *generated* (the inpainted crop) back onto *original* using *mask_l*
     (grayscale, already sized to *original*).  *bbox* = (x0, y0, x1, y1).
-    A Gaussian blur softens the mask edges for a natural blend.
+    A Gaussian blur softens the mask edges for a natural blend; max(hard, blurred)
+    keeps masked pixels fully generated so the ramp falls only on the original side
+    (otherwise the pad fill — green or blurred — bleeds in as a line at the seam).
     """
-    from PIL import ImageFilter
+    from PIL import ImageChops, ImageFilter
     x0, y0, x1, y1 = bbox
     target_size = (x1 - x0, y1 - y0)
     if generated.size != target_size:
         generated = generated.resize(target_size, Image.LANCZOS)
     mask_crop = mask_l.crop(bbox)
-    mask_soft = mask_crop.filter(ImageFilter.GaussianBlur(radius=blur_radius))
+    mask_soft = ImageChops.lighter(
+        mask_crop, mask_crop.filter(ImageFilter.GaussianBlur(radius=blur_radius)))
     result = original.copy()
     result.paste(generated, (x0, y0), mask_soft)
     return result
@@ -1301,6 +1344,20 @@ def generate_image(
             model_choice = "Z-Image Turbo (Full - LoRA support)"
         pipe = load_pipeline(model_choice, device)
 
+    # FLUX 4B + slot #1 needs padding → fill it with the outpaint LoRA (green pad)
+    outpaint_lora = False
+    if input_images:
+        _raw0 = input_images[0][0] if isinstance(input_images[0], tuple) else input_images[0]
+        if wants_outpaint_lora(current_model, is_video_model, _raw0.size,
+                               width, height, outpaint_align):
+            yield None, None, "Preparing outpaint LoRA…"
+            _lp = get_outpaint_lora_path()
+            if _lp:
+                outpaint_lora = True
+                lora_files = list(lora_files or []) + [
+                    {"path": _lp, "strength": OUTPAINT_LORA_STRENGTH, "name": "outpaint (auto)"}]
+                prompt = outpaint_prompt(prompt)
+
     if not is_video_model and (current_model == "zimage-full" or (current_model and current_model.startswith("flux2"))):
         sync_loras(lora_files, device)
 
@@ -1314,7 +1371,8 @@ def generate_image(
     fit_warning  = None
     if input_images is not None and len(input_images) > 0 and not is_video_model:
         raw0 = input_images[0][0] if isinstance(input_images[0], tuple) else input_images[0]
-        fit = fit_ref_to_canvas(raw0, img_w, img_h, outpaint_align, mask=mask_image)
+        fit = fit_ref_to_canvas(raw0, img_w, img_h, outpaint_align, mask=mask_image,
+                                pad_fill="green" if outpaint_lora else "blur")
         slot1_canvas = fit.canvas
         mask_image   = fit.mask
         fit_warning  = fit.warning
@@ -1322,7 +1380,8 @@ def generate_image(
             print(f"  ⚠ {fit_warning}")
         if fit.padded:
             mask_mode = "Inpainting Pipeline (Quality)"
-            print(f"  Auto-outpaint: {raw0.size[0]}×{raw0.size[1]} → {img_w}×{img_h} (align={outpaint_align})")
+            print(f"  Auto-outpaint: {raw0.size[0]}×{raw0.size[1]} → {img_w}×{img_h} "
+                  f"(align={outpaint_align}, {'outpaint LoRA' if outpaint_lora else 'blur pad'})")
 
     preprocessed_flux_refs  = None
     preprocessed_zimage_ref = None

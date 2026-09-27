@@ -3,6 +3,9 @@
 History and "why we did X". Operational rules live in `CLAUDE.md`; reference in `docs/`.
 
 ## 2026-09-27
+- FLUX 4B outpaint LoRA path (auto green pad + `fal/flux-2-klein-4B-outpaint-lora`); blur pad on 9B often just copied the blur.
+- Three LoRA bugs: BFL-native FLUX.2 LoRAs never loaded (diffusers converter hardcodes FLUX.2-dev 8/48 blocks); load failures were swallowed and the result info still listed the LoRA; removing all LoRAs didn't unload them.
+- Composite seam: soft mask blur reached into the pad → pad fill bled in as a line. Now max(hard, blurred).
 - Output auto-size to slot #1 aspect for all model families (`canvasSize.ts`, `store.ts autoSizeParams`). The earlier LTX-only version was a `SizePanel` effect: the accordion unmounts its children, so it never ran while collapsed and re-fired on reopen, undoing presets. Restored slots carry `keepSize`.
 - Slot #1 + mask are fitted into the canvas instead of stretched (`fit_ref_to_canvas`). Before: a mask + different aspect stretched the image; auto-outpaint padded with black and FLUX ran plain img2img with the mask ignored (no composite), so nothing was extended. FLUX refs #2+ now go at native size (were squashed to output dims).
 - `--no-auto-shutdown` never worked: `uvicorn.run("server:app")` re-imports `server`, so the `__main__` global didn't reach the app. Now an env var.
