@@ -11,6 +11,97 @@ LoRA formats automatically. This module adds:
 from __future__ import annotations
 
 
+# ── BFL-native FLUX.2 LoRA → diffusers ─────────────────────────────────────────
+# diffusers' _convert_non_diffusers_flux2_lora_to_diffusers hardcodes FLUX.2-dev
+# (8 double / 48 single blocks), requires MLP keys and rejects embedder/modulation
+# keys — a klein LoRA (5/20 or 8/24 blocks) raises KeyError. Convert ourselves,
+# taking block counts from the file.
+
+_BFL_PREFIXES = ("base_model.model.diffusion_model.", "base_model.model.", "diffusion_model.")
+
+_BFL_EXTRA = {
+    "img_in":                            "x_embedder",
+    "txt_in":                            "context_embedder",
+    "time_in.in_layer":                  "time_guidance_embed.timestep_embedder.linear_1",
+    "time_in.out_layer":                 "time_guidance_embed.timestep_embedder.linear_2",
+    "double_stream_modulation_img.lin":  "double_stream_modulation_img.linear",
+    "double_stream_modulation_txt.lin":  "double_stream_modulation_txt.linear",
+    "single_stream_modulation.lin":      "single_stream_modulation.linear",
+    "final_layer.linear":                "proj_out",
+    "final_layer.adaLN_modulation.1":    "norm_out.linear",
+}
+
+_BFL_DOUBLE = {
+    "img_attn.proj": "attn.to_out.0",
+    "txt_attn.proj": "attn.to_add_out",
+    "img_mlp.0":     "ff.linear_in",
+    "img_mlp.2":     "ff.linear_out",
+    "txt_mlp.0":     "ff_context.linear_in",
+    "txt_mlp.2":     "ff_context.linear_out",
+}
+
+
+def _strip_bfl_prefix(k: str) -> str:
+    for p in _BFL_PREFIXES:
+        if k.startswith(p):
+            return k[len(p):]
+    return k
+
+
+def is_bfl_flux2_lora(state_dict: dict) -> bool:
+    """True for BFL-native keys (double_blocks.N.img_attn.qkv / single_blocks.N.linear1)."""
+    return any(_strip_bfl_prefix(k).startswith(("double_blocks.", "single_blocks."))
+               for k in state_dict)
+
+
+def convert_bfl_flux2_lora(state_dict: dict) -> dict:
+    """Convert a BFL-native FLUX.2 LoRA (lora_A/lora_B) to diffusers `transformer.*` keys.
+    Fused qkv: lora_A is shared by q/k/v, lora_B is split in 3. Raises ValueError on
+    any key it can't place, so a LoRA is never half-applied silently."""
+    import re
+    import torch
+
+    sd = {_strip_bfl_prefix(k): v for k, v in state_dict.items()}
+    out: dict = {}
+    unknown = []
+    for key, w in sd.items():
+        m = re.match(r"^(.*)\.(lora_A|lora_B)\.weight$", key)
+        if not m:
+            unknown.append(key)
+            continue
+        mod, ab = m.groups()
+
+        if (d := re.match(r"^double_blocks\.(\d+)\.(img_attn|txt_attn)\.qkv$", mod)):
+            n, attn = d.groups()
+            names = ("to_q", "to_k", "to_v") if attn == "img_attn" else ("add_q_proj", "add_k_proj", "add_v_proj")
+            parts = [w] * 3 if ab == "lora_A" else list(torch.chunk(w, 3, dim=0))
+            for name, part in zip(names, parts):
+                out[f"transformer.transformer_blocks.{n}.attn.{name}.{ab}.weight"] = part
+        elif (d := re.match(r"^double_blocks\.(\d+)\.(.+)$", mod)) and d.group(2) in _BFL_DOUBLE:
+            out[f"transformer.transformer_blocks.{d.group(1)}.{_BFL_DOUBLE[d.group(2)]}.{ab}.weight"] = w
+        elif (s_ := re.match(r"^single_blocks\.(\d+)\.linear([12])$", mod)):
+            n, lin = s_.groups()
+            tgt = "to_qkv_mlp_proj" if lin == "1" else "to_out"
+            out[f"transformer.single_transformer_blocks.{n}.attn.{tgt}.{ab}.weight"] = w
+        elif mod in _BFL_EXTRA:
+            out[f"transformer.{_BFL_EXTRA[mod]}.{ab}.weight"] = w
+        else:
+            unknown.append(key)
+
+    if unknown:
+        raise ValueError(f"Unmapped FLUX.2 LoRA keys: {sorted(unknown)[:5]}")
+    return out
+
+
+def _prepare_state_dict(state_dict: dict) -> dict:
+    """BFL-native → our converter; PEFT/fal prefixed diffusers-style → prefix swap."""
+    if is_bfl_flux2_lora(state_dict):
+        return convert_bfl_flux2_lora(state_dict)
+    if any(k.startswith("base_model.model.") for k in state_dict):
+        return {k.replace("base_model.model.", "diffusion_model."): v for k, v in state_dict.items()}
+    return state_dict
+
+
 def check_lora_compatibility(path: str) -> None:
     """
     Validate that a LoRA file is compatible with FLUX.2-klein before saving.
@@ -84,13 +175,10 @@ def load_lora(pipe, lora_path: str, strength: float) -> str:
 
     state_dict = load_file(lora_path)
 
-    # Pre-process PEFT/fal format: strip base_model.model. prefix
-    # (diffusers upgraded main handles the rest automatically)
-    if any(k.startswith("base_model.model.") for k in state_dict):
-        state_dict = {
-            k.replace("base_model.model.", "diffusion_model."): v
-            for k, v in state_dict.items()
-        }
+    try:
+        state_dict = _prepare_state_dict(state_dict)
+    except ValueError as e:
+        raise RuntimeError(f"LoRA '{lora_path.split('/')[-1]}' not compatible with FLUX.2-klein: {e}")
 
     # Unload any existing LoRA first
     try:
@@ -139,12 +227,11 @@ def load_loras(pipe, loras: list) -> str:
 
             state_dict = load_file(lora_path)
 
-            # Pre-process PEFT/fal format
-            if any(k.startswith("base_model.model.") for k in state_dict):
-                state_dict = {
-                    k.replace("base_model.model.", "diffusion_model."): v
-                    for k, v in state_dict.items()
-                }
+            try:
+                state_dict = _prepare_state_dict(state_dict)
+            except ValueError as e:
+                raise RuntimeError(
+                    f"LoRA '{os.path.basename(lora_path)}' not compatible with FLUX.2-klein: {e}")
 
             try:
                 pipe.load_lora_weights(state_dict, adapter_name=adapter_name)

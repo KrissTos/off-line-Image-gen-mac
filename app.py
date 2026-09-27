@@ -890,6 +890,22 @@ def load_loras(loras: list, device: str) -> str:
         return "LoRA load failed — check console for details"
 
 
+def ensure_loras_loaded(status: str) -> None:
+    """load_loras() reports failure as a status string — turn it into an error so a
+    generation never runs without the LoRAs it was asked for."""
+    if not status.startswith("Loaded"):
+        raise RuntimeError(f"LoRA not applied — {status}")
+
+
+def sync_loras(lora_files, device: str) -> None:
+    """Make the pipeline's adapters match this request: load the requested LoRAs, or
+    unload leftovers when none are requested (they'd otherwise stay active)."""
+    if lora_files:
+        ensure_loras_loaded(load_loras(lora_files, device))
+    elif current_lora_paths:
+        load_loras([], device)
+
+
 def load_lora(lora_file, lora_strength: float, device: str):
     """Legacy single-LoRA wrapper — kept for Gradio UI compatibility."""
     if lora_file:
@@ -1285,8 +1301,8 @@ def generate_image(
             model_choice = "Z-Image Turbo (Full - LoRA support)"
         pipe = load_pipeline(model_choice, device)
 
-    if not is_video_model and (current_model == "zimage-full" or (current_model and current_model.startswith("flux2"))) and lora_files:
-        load_loras(lora_files, device)
+    if not is_video_model and (current_model == "zimage-full" or (current_model and current_model.startswith("flux2"))):
+        sync_loras(lora_files, device)
 
     # Pre-process reference images once — same size/mode for every iteration
     img_w, img_h = int(width), int(height)
