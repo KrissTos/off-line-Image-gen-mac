@@ -161,3 +161,75 @@ def load(folder, url_prefix: str) -> dict:
     for w in warnings:
         print(f"[run_store] {folder.name}: {w}")
     return out
+
+
+def list_outputs(base_dir, limit: int = 20) -> list[dict]:
+    """Every output of every run under base_dir, newest file first."""
+    base = Path(base_dir)
+    if not base.is_dir():
+        return []
+    items = []
+    for wf in base.glob("*/workflow.json"):
+        run = wf.parent
+        try:
+            data = read_workflow(run)
+        except (OSError, ValueError):
+            continue
+        outputs = data.get("outputs") or []
+        scalars = _params(data)
+        by_file = {o.get("file"): o for o in outputs}
+        for o in outputs:
+            f = safe_join(run, o.get("file") or "")
+            if f is None or not f.is_file():
+                continue
+            seed = o.get("seed", (by_file.get(o.get("upscaled_from")) or {}).get("seed"))
+            rel = f"{run.name}/{o['file']}"
+            items.append({**scalars, "name": rel, "url": f"/api/output/{rel}",
+                          "mtime": f.stat().st_mtime, "kind": o.get("kind", "image"),
+                          "run": run.name, "file": o["file"], "seed": seed})
+    items.sort(key=lambda d: d["mtime"], reverse=True)
+    return items[:limit]
+
+
+def remove_output(run_dir, file_rel: str) -> bool:
+    """Delete one output file and its entry. True when the run has no outputs left."""
+    run_dir = Path(run_dir)
+    f = safe_join(run_dir, file_rel)
+    if f is None or f == run_dir.resolve():
+        raise ValueError(f"Invalid output path: {file_rel}")
+    if f.is_file():
+        f.unlink()
+    data = read_workflow(run_dir)
+    data["outputs"] = [o for o in data.get("outputs") or [] if o.get("file") != file_rel]
+    _write_json(run_dir / "workflow.json", data)
+    return not data["outputs"]
+
+
+def save_workflow(base_dir, params: dict, slots: list[dict], name: str,
+                  overwrite: str | None = None, now: datetime | None = None) -> str:
+    """Write a saved workflow (no outputs). overwrite = existing folder name to rewrite in place."""
+    base = Path(base_dir)
+    base.mkdir(parents=True, exist_ok=True)
+    now = now or datetime.now()
+    if overwrite:
+        folder = safe_join(base, overwrite)
+        if folder is None or folder == base.resolve() or not (folder / "workflow.json").is_file():
+            raise ValueError(f"Workflow not found: {overwrite}")
+        data = read_workflow(folder)
+    else:
+        custom = (name or "").strip().replace(" ", "_").replace("/", "_")
+        stamp = now.strftime("%y-%m-%d")
+        folder = _unique_name(base, f"{stamp}_{custom}" if custom else stamp)
+        folder.mkdir()
+        data = {}
+    old = {p for sub in ("refs", "masks") if (folder / sub).is_dir()
+           for p in (folder / sub).iterdir() if p.is_file()}
+    ref_slots = _copy_slots(folder, slots)
+    keep = {folder / s["image"] for s in ref_slots} | {folder / s["mask"] for s in ref_slots if s["mask"]}
+    for p in old - keep:
+        p.unlink(missing_ok=True)
+    data.pop("outputs", None)
+    data.update({"version": VERSION, "name": folder.name, "saved": now.isoformat(timespec="seconds"),
+                 **_params(params), "ref_slots": ref_slots})
+    _write_json(folder / "workflow.json", data)
+    return folder.name
