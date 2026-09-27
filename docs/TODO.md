@@ -12,3 +12,4 @@
 - Text-to-mask (SAM 3 / Grounded-SAM) = phase 2.
 - `/generate` local provider (Task B, `~/.claude/skills/generate/`): see `docs/handoffs/2026-09-27-sam-click-mask-and-generate-local-provider.md`.
 - `_load_pil` (`server.py:343`) doesn't apply `exif_transpose`: a phone JPEG with EXIF orientation gets its SAM mask built upright (frontend transposes for display) but generation loads the untransposed pixels, so the mask can land misaligned with the actual image content.
+- MaskEditor residual races (rare, from the final review): dirty rect is overwritten not unioned across coalesced pointermoves (overlay gap until next rebuild); `maskRef` synced in a passive `useEffect` (move to render body / `useLayoutEffect`); brush pointermove doesn't clear `lastSam`, so Shift-refine after a mid-stroke SAM result can drop the stroke tail unundoably; a pointermove from a stale closure can overwrite a just-landed SAM result.

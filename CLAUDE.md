@@ -34,7 +34,7 @@ FastAPI backend + React frontend. UI brand "Local AI Image Gen".
 
 ## 4. Run
 ```bash
-./Launch.command               # production: builds frontend/dist, serves :7860
+./Launch.command               # production: builds frontend/dist, serves :7860, opens Chrome
 ./Launch.command --dev         # FastAPI :7861 + Vite HMR :5173
 venv/bin/python server.py --port 7860 --no-auto-shutdown
 cd frontend && npm run build   # after any frontend change
