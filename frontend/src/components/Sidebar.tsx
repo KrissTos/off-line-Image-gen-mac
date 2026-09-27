@@ -824,8 +824,10 @@ interface WorkflowPanelProps {
   onRefresh:    () => void
   onImportComfyUI: (wf: Record<string, unknown>, notes: string) => void
   onStatus:     (msg: string) => void
+  loadedName:   string | null   // saved workflow Save would overwrite
+  onSaved:      (name: string) => void
 }
-function WorkflowPanel({ workflows, params, refSlots, onLoad, onRefresh, onImportComfyUI, onStatus }: WorkflowPanelProps) {
+function WorkflowPanel({ workflows, params, refSlots, onLoad, onRefresh, onImportComfyUI, onStatus, loadedName, onSaved }: WorkflowPanelProps) {
   const [selected, setSelected] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
   const [saveName, setSaveName] = useState('')
@@ -854,21 +856,24 @@ function WorkflowPanel({ workflows, params, refSlots, onLoad, onRefresh, onImpor
     }
   }
 
-  async function handleSave() {
-    if (!saveName.trim()) return
+  async function save(overwrite: string | null) {
+    const name = overwrite ?? saveName.trim()
+    if (!name) return
     try {
-      await saveWorkflow({
+      const res = await saveWorkflow({
         ...params,
         lora_files: params.lora_files.filter(s => s.path !== ''),
-        name: saveName.trim(),
+        name,
+        overwrite,
         ref_slots: refSlots.map(s => ({
           imageId:  s.imageId,
           maskId:   s.maskId ?? null,
           strength: s.strength,
         })),
       })
-      onStatus(`✓ Saved workflow: ${saveName}`)
-      setSaveName('')
+      onStatus(`✓ Saved workflow: ${res.name}`)
+      if (!overwrite) setSaveName('')
+      onSaved(res.name)
       onRefresh()
     } catch (e: unknown) {
       onStatus(`Error: ${(e as Error).message}`)
@@ -923,15 +928,21 @@ function WorkflowPanel({ workflows, params, refSlots, onLoad, onRefresh, onImpor
       {/* Save */}
       <div>
         <label className="text-xs text-muted block mb-1">Save current params</label>
+        {loadedName && (
+          <button onClick={() => save(loadedName)}
+            className="w-full mb-2 px-3 py-1.5 rounded-md bg-accent text-white text-xs font-medium truncate">
+            Save (overwrite {loadedName})
+          </button>
+        )}
         <div className="flex gap-2">
           <input value={saveName} onChange={e => setSaveName(e.target.value)}
-            placeholder="Workflow name…"
+            placeholder={loadedName ? 'New workflow name…' : 'Workflow name…'}
             className="flex-1 bg-card border border-border rounded-md px-2 py-1.5 text-sm text-white
                        placeholder-muted focus:outline-none focus:border-accent" />
-          <button onClick={handleSave} disabled={!saveName.trim()}
+          <button onClick={() => save(null)} disabled={!saveName.trim()}
             className="px-3 py-1.5 rounded-md bg-card border border-border text-white text-xs font-medium
-                       disabled:opacity-40 hover:border-accent transition-colors">
-            Save
+                       disabled:opacity-40 hover:border-accent transition-colors shrink-0">
+            {loadedName ? 'Save as new' : 'Save'}
           </button>
         </div>
       </div>
@@ -1410,7 +1421,7 @@ export default function Sidebar({
   params, models, availableModels, devices, workflows, isGenerating,
   hasIteratableMasks, hasRefImage, refImageSize, refSlots,
   onParamChange, onParamsChange, onGenerate, onStop, onIterate,
-  onWorkflowLoad, onWorkflowRefresh, onRefresh, onStatus,
+  onWorkflowLoad, onWorkflowRefresh, onRefresh, onStatus, loadedWorkflow, onWorkflowSaved,
 }: SidebarProps) {
   const isVideo    = params.model_choice.includes('LTX-Video')
   const isFlux     = params.model_choice.startsWith('FLUX')
@@ -1576,6 +1587,8 @@ export default function Sidebar({
           params={params}
           refSlots={refSlots}
           onLoad={onWorkflowLoad}
+          loadedName={loadedWorkflow}
+          onSaved={onWorkflowSaved}
           onRefresh={onWorkflowRefresh}
           onImportComfyUI={handleImportComfyUI}
           onStatus={onStatus}
