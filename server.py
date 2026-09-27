@@ -16,6 +16,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import shutil
 import signal
 import sys
@@ -26,6 +27,8 @@ import warnings
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+from core import run_store
 
 # ── Suppress semaphore-leak warning ───────────────────────────────────────────
 # The warning is emitted by Python's multiprocessing.resource_tracker *daemon*
@@ -290,6 +293,7 @@ class GenerateRequest(BaseModel):
     fast_preview:       bool  = False   # LTX-Video: single-pass distilled render (skips upsampler)
     mask_mode:          str   = "Crop & Composite (Fast)"
     outpaint_align:     str   = "center"
+    ref_slots:          list[dict] = Field(default_factory=list)  # [{imageId, maskId, strength}] — recorded in the run
 
 class BatchGenerateRequest(GenerateRequest):
     input_folder: str = ""  # local path to folder of images
@@ -357,6 +361,74 @@ def _output_dir() -> str:
         return settings.get("output_dir") or default
     except Exception:
         return default
+
+
+_SEED_RE = re.compile(r"Seed:\s*(\d+)")
+
+
+def _guarded_temp(file_id: str | None) -> Path | None:
+    """Existing file inside TEMP_DIR for a client-supplied id, else None."""
+    if not file_id:
+        return None
+    try:
+        p = (TEMP_DIR / file_id).resolve()
+    except OSError:
+        return None
+    return p if p.is_relative_to(TEMP_DIR.resolve()) and p.is_file() else None
+
+
+def _request_slots(req) -> list[dict]:
+    """Slots to record in the run: req.ref_slots when sent, else derived from input_image_ids
+    (the /generate skill's shape): slot 1 gets the mask and img_strength, others strength 1.0."""
+    if req.ref_slots:
+        raw = [(s.get("imageId"), s.get("maskId"), s.get("strength", 1.0)) for s in req.ref_slots]
+    else:
+        raw = [(fid, req.mask_image_id if i == 0 else None, req.img_strength if i == 0 else 1.0)
+               for i, fid in enumerate(req.input_image_ids)]
+    slots = []
+    for img_id, mask_id, strength in raw:
+        img = _guarded_temp(img_id)
+        if img is not None:
+            slots.append({"image_path": img, "mask_path": _guarded_temp(mask_id), "strength": float(strength)})
+    return slots
+
+
+def _record_output(run_dir: Path, event: dict, requested_seed: int) -> None:
+    """Rename a fresh output to the run naming rule, list it in workflow.json, point the event at it."""
+    src = Path(event.get("path") or "")
+    if not src.is_file():
+        return
+    m = _SEED_RE.search(event.get("info") or "")
+    seed = int(m.group(1)) if m else (requested_seed if requested_seed >= 0 else None)
+    dst = src
+    try:
+        target = run_store.output_filename(run_dir, seed, src.suffix.lower() or ".png")
+        src.rename(target)
+        dst = target
+        run_store.add_output(run_dir, dst, event["type"], seed=seed)
+    except Exception as e:
+        print(f"[run_store] could not record {src.name}: {e}")
+    event["path"] = str(dst)
+    event["url"]  = f"/api/output/{run_dir.name}/outputs/{dst.name}"
+
+
+async def _run_events(run_dir: Path, params: dict, requested_seed: int):
+    """Generate into run_dir/outputs, yielding events with run paths. A run that produced
+    nothing (stopped, failed) is moved to the Trash."""
+    params["output_dir"] = str(run_dir / "outputs")
+    produced = 0
+    try:
+        async for event in _mgr().generate(params):
+            if event.get("type") in ("image", "video"):
+                _record_output(run_dir, event, requested_seed)
+                produced += 1
+            yield event
+    finally:
+        if not produced:
+            try:
+                run_store.trash(run_dir)
+            except Exception as e:
+                print(f"[run_store] could not trash empty run {run_dir.name}: {e}")
 
 
 # ── Routes: Heartbeat ─────────────────────────────────────────────────────────
@@ -591,8 +663,9 @@ async def api_generate(req: GenerateRequest):
     """
     Server-Sent Events stream.  Each event is a JSON object:
       {"type": "progress", "message": "..."}
-      {"type": "image", "url": "/api/output/...", "info": "..."}
-      {"type": "video", "url": "/api/output/..."}
+      {"type": "image", "url": "/api/output/<run>/outputs/<file>", "path": "<abs path>", "info": "..."}
+      {"type": "video", "url": "/api/output/<run>/outputs/<file>", "path": "<abs path>", "info": "..."}
+    Each generation is saved as one run folder (core/run_store.py) under the output dir.
       {"type": "done"}
       {"type": "error", "message": "..."}
     """
@@ -619,68 +692,17 @@ async def api_generate(req: GenerateRequest):
     params = req.model_dump()
     params["input_images"] = input_images
     params["mask_image"]   = mask_image
-    params["output_dir"]   = req.output_dir or _output_dir()
+    base_dir = Path(req.output_dir or _output_dir())
+    slots    = _request_slots(req)
 
     async def event_stream():
-        import re as _re
         try:
-            async for event in _mgr().generate(params):
-                # Save sidecar JSON + companion folder for each output file
-                if event.get("type") in ("image", "video"):
-                    url = event.get("url", "")
-                    if url.startswith("/api/output/"):
-                        filename = url[len("/api/output/"):]
-                        out_path = Path(params["output_dir"]) / filename
-                        # Resolve actual seed from the status string embedded in info
-                        _sm = _re.search(r"Seed:\s*(\d+)", event.get("info", ""))
-                        actual_seed = int(_sm.group(1)) if _sm else req.seed
-                        # Full params — everything needed to reproduce this generation
-                        full_params = {
-                            "prompt":             req.prompt,
-                            "model_choice":       req.model_choice,
-                            "model_source":       req.model_source,
-                            "width":              req.width,
-                            "height":             req.height,
-                            "steps":              req.steps,
-                            "guidance":           req.guidance,
-                            "seed":               actual_seed,
-                            "img_strength":       req.img_strength,
-                            "mask_mode":          req.mask_mode,
-                            "outpaint_align":     req.outpaint_align,
-                            "repeat_count":       req.repeat_count,
-                            "lora_files":         req.lora_files,
-                            "upscale_enabled":    req.upscale_enabled,
-                            "upscale_model_path": req.upscale_model_path,
-                            "num_frames":         req.num_frames,
-                            "fps":                req.fps,
-                            "fast_preview":       req.fast_preview,
-                            "device":             req.device,
-                            "ref_image_count":    len(req.input_image_ids),
-                            "has_mask":           bool(req.mask_image_id),
-                        }
-                        try:
-                            # Enriched sidecar JSON (gallery reads this)
-                            out_path.with_suffix(".json").write_text(
-                                json.dumps(full_params, indent=2)
-                            )
-                            # Companion folder with refs + mask when present
-                            has_refs = bool(req.input_image_ids or req.mask_image_id)
-                            if has_refs:
-                                companion = out_path.parent / out_path.stem
-                                companion.mkdir(exist_ok=True)
-                                (companion / "params.json").write_text(
-                                    json.dumps(full_params, indent=2)
-                                )
-                                for i, fid in enumerate(req.input_image_ids):
-                                    src = _temp_path(fid)
-                                    if src.exists():
-                                        shutil.copy2(src, companion / f"ref_slot_{i + 1}.png")
-                                if req.mask_image_id:
-                                    src = _temp_path(req.mask_image_id)
-                                    if src.exists():
-                                        shutil.copy2(src, companion / "mask.png")
-                        except Exception:
-                            pass  # non-critical
+            run_dir = run_store.create_run(base_dir, req.model_dump(), slots)
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'error', 'message': f'Could not create run folder: {e}'})}\n\n"
+            return
+        try:
+            async for event in _run_events(run_dir, params, req.seed):
                 yield f"data: {json.dumps(event)}\n\n"
             yield f"data: {json.dumps({'type': 'done'})}\n\n"
         except Exception as e:
@@ -1744,6 +1766,7 @@ async def api_batch_generate(req: BatchGenerateRequest):
             yield f"data: {json.dumps({'type': 'error', 'message': 'No images found in folder'})}\n\n"
             return
 
+        base_dir = Path(req.output_dir or _output_dir())
         total = len(images)
         processed = 0
         mgr.is_batch_running = True
@@ -1761,15 +1784,18 @@ async def api_batch_generate(req: BatchGenerateRequest):
                     yield f"data: {json.dumps({'type': 'error', 'message': f'Skipping {img_path.name}: {e}'})}\n\n"
                     continue
 
-                # Build params
                 params = req.model_dump()
                 params["input_images"] = [pil_image]
                 params["mask_image"]   = None
-                params["output_dir"]   = req.output_dir or _output_dir()
-
-                # Generate
                 try:
-                    async for event in mgr.generate(params):
+                    run_dir = run_store.create_run(base_dir, params, [
+                        {"image_path": img_path, "mask_path": None, "strength": req.img_strength}])
+                except Exception as e:
+                    yield f"data: {json.dumps({'type': 'error', 'message': f'Could not create run folder for {img_path.name}: {e}'})}\n\n"
+                    continue
+
+                try:
+                    async for event in _run_events(run_dir, params, req.seed):
                         yield f"data: {json.dumps(event)}\n\n"
                     processed += 1
                 except Exception as e:

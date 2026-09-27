@@ -296,6 +296,7 @@ class PipelineManager:
                             "type": "video",
                             "url":  f"/api/output/{fname}",
                             "path": video,
+                            "info": status or "",
                         }
                     else:
                         event = {"type": "progress", "message": status or ""}
