@@ -8,6 +8,7 @@ FastAPI backend + React frontend. UI brand "Local AI Image Gen".
 - Models, VRAM, sizing/fit, masking, LoRA, LTX, depth-map internals → docs/models.md
 - Open issues and ideas → docs/TODO.md
 - History, past bugs, "why we did X" → CHANGELOG.md
+- External API client: `/generate` skill `~/.claude/skills/generate/lib/local_run.py` (`/api/upload`, `/api/generate` SSE incl. event `path`/`info`, `/api/status`, `/api/ping`) → keep `GenerateRequest` fields and event shape backward compatible.
 
 ## 1. Maintaining this file
 1. Keep it ≤ 200 lines, operational only; follow `~/.claude/docs/claudemd-hygiene.md`.
@@ -29,6 +30,7 @@ FastAPI backend + React frontend. UI brand "Local AI Image Gen".
 ## 3. Folders
 1. Put per-job scratch in `work/<job>/` (gitignored); trash it when the job is done.
 2. Put project docs in `docs/` (max 3 topic files + `TODO.md`); never in `~/Downloads/Claude AI/`.
+   `docs/superpowers/` (specs/plans) is gitignored: local only, don't `git add -f`.
 3. Never commit runtime data: `models/`, `venv/`, `huggingface/`, `lora_uploads/`, `upscale_models/`, `workflows/`, `logs/`, `.tmp_uploads/`, `model_sources.json`.
 4. `app_settings.json` is tracked but holds local runtime settings; leave its diffs uncommitted unless asked.
 
