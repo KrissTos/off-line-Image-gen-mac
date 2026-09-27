@@ -2,7 +2,8 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   createMask, cloneMask, union, subtract, invert, paintStroke, fillPolygon,
-  grow, shrink, coverage, iou, fromRgba, toRgba, type Mask,
+  grow, shrink, coverage, iou, fromRgba, toRgba, paintOverlayRect, paintOverlayFull,
+  strokeRect, type Mask,
 } from '../src/mask/maskOps.ts'
 
 const at = (m: Mask, x: number, y: number) => m.data[y * m.w + x]
@@ -76,4 +77,32 @@ test('fromRgba resizes nearest-neighbour and thresholds; toRgba round-trips', ()
   assert.deepEqual([...back.data], [...m.data])
   const grey = fromRgba(new Uint8ClampedArray([127, 127, 127, 255]), 1, 1, 1, 1)
   assert.equal(grey.data[0], 0)
+})
+
+test('paintOverlayRect over the full image matches paintOverlayFull', () => {
+  const m = createMask(5, 4)
+  m.data.set([255, 0, 0, 255, 0, 0, 255, 0, 0, 0, 0, 0, 0, 0, 255, 255, 255, 0, 0, 0])
+  const full = new Uint8ClampedArray(m.w * m.h * 4)
+  paintOverlayFull(full, m)
+  const viaRect = new Uint8ClampedArray(m.w * m.h * 4)
+  paintOverlayRect(viaRect, m, 0, 0, m.w - 1, m.h - 1)
+  assert.deepEqual([...viaRect], [...full])
+  // on pixels are red @ alpha 115, off pixels are fully transparent
+  assert.deepEqual([...full.slice(0, 4)], [239, 68, 68, 115])
+  assert.deepEqual([...full.slice(4, 8)], [0, 0, 0, 0])
+})
+
+test('paintOverlayRect only writes pixels inside the given rect', () => {
+  const m = createMask(4, 4); m.data.fill(255)
+  const out = new Uint8ClampedArray(m.w * m.h * 4)
+  paintOverlayRect(out, m, 1, 1, 2, 2)
+  assert.deepEqual([...out.slice(0, 4)], [0, 0, 0, 0])              // (0,0) untouched
+  const i = (1 * m.w + 1) * 4
+  assert.deepEqual([...out.slice(i, i + 4)], [239, 68, 68, 115])    // (1,1) painted
+})
+
+test('strokeRect bounds a stroke by radius, clamped to the image', () => {
+  assert.deepEqual(strokeRect([{ x: 5, y: 5 }], 2, 20, 20), { x0: 3, y0: 3, x1: 7, y1: 7 })
+  assert.deepEqual(strokeRect([{ x: 0, y: 0 }], 3, 10, 10), { x0: 0, y0: 0, x1: 3, y1: 3 })
+  assert.deepEqual(strokeRect([{ x: 2, y: 2 }, { x: 8, y: 8 }], 1, 20, 20), { x0: 1, y0: 1, x1: 9, y1: 9 })
 })
