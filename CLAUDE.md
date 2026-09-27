@@ -42,6 +42,7 @@ venv/bin/python server.py --port 7860 --no-auto-shutdown
 cd frontend && npm run build   # after any frontend change
 venv/bin/python -m pytest -q   # full suite
 cd frontend && npm test        # mask editor pure-logic tests (node --test)
+venv/bin/python -m core.run_store migrate <dir> [--apply]   # legacy flat outputs / v1 workflows → run folders (dry run default)
 ```
 1. Server exits 60 s after the last browser ping; use `--no-auto-shutdown` for headless/API testing.
 2. Restart the server after backend changes (no auto-reload).
@@ -69,6 +70,7 @@ cd frontend && npm test        # mask editor pure-logic tests (node --test)
 7. Model keys: internal `current_model` → `startswith("flux2")`; display `model_choice` → `startsWith('FLUX')`. Never mix.
 8. Resize binary masks with `Image.NEAREST`, never LANCZOS.
 9. Default model = `default_model` in `app_settings.json`, read in `App.tsx` bootstrap after `fetchSettings()`.
+10. Every generation writes one run folder through `core/run_store.py` (`server._run_events`); never write flat outputs or sidecar JSONs. Client paths/names go through `run_store.safe_join` / `_guarded_temp`.
 
 ## 7. Image pipeline rules
 1. Never stretch slot #1: fit it with `fit_ref_to_canvas()` and give its mask the same transform.
