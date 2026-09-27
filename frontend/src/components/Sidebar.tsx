@@ -182,6 +182,17 @@ function snapTo64(n: number): number {
   return Math.max(64, Math.round(n / 64) * 64)
 }
 
+// LTX canvas auto-sizing: derive /32-snapped dims that match the ref photo's
+// aspect within a fixed pixel budget (≈ Wide 768×512). LTX resizes the ref into
+// this canvas internally — matching aspect = no stretch. Budget caps VRAM/time
+// so a large portrait (e.g. 768×1365) maps to 480×832, not 768×1344.
+const LTX_BUDGET = 768 * 512
+function ltxCanvasFromAspect(w: number, h: number, budget = LTX_BUDGET) {
+  const ratio = w / h
+  const snap32 = (n: number) => Math.max(256, Math.round(n / 32) * 32)
+  return { w: snap32(Math.sqrt(budget * ratio)), h: snap32(Math.sqrt(budget / ratio)) }
+}
+
 const ALIGN_GRID = [
   'top-left',    'top',    'top-right',
   'left',        'center', 'right',
@@ -223,6 +234,21 @@ function SizePanel({
   refImageSize?: { w: number; h: number }
 }) {
   const presets = presetsForModel(params.model_choice)
+  const isLTX = params.model_choice.includes('LTX')
+
+  // Option B: auto-match LTX canvas to the ref photo's aspect (budget-capped,
+  // /32-snapped) when a ref is present. Fires on ref-dims / model change only,
+  // so later manual width/height edits are preserved.
+  useEffect(() => {
+    if (!isLTX || !refImageSize) return
+    const c = ltxCanvasFromAspect(refImageSize.w, refImageSize.h)
+    if (params.width !== c.w || params.height !== c.h) {
+      onChange('width', c.w)
+      onChange('height', c.h)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLTX, refImageSize?.w, refImageSize?.h])
+
   return (
     <div className="space-y-3">
       <div className="grid grid-cols-3 gap-2">
@@ -248,10 +274,15 @@ function SizePanel({
         <NumberInput label="Height" value={params.height} onChange={v => onChange('height', v)} />
         {refImageSize && (
           <button
-            title={`Set to ref image size (${refImageSize.w}×${refImageSize.h} → snapped to 64)`}
+            title={isLTX
+              ? `Match ref aspect (${refImageSize.w}×${refImageSize.h}) within LTX budget`
+              : `Set to ref image size (${refImageSize.w}×${refImageSize.h} → snapped to 64)`}
             onClick={() => {
-              onChange('width',  snapTo64(refImageSize.w))
-              onChange('height', snapTo64(refImageSize.h))
+              const c = isLTX
+                ? ltxCanvasFromAspect(refImageSize.w, refImageSize.h)
+                : { w: snapTo64(refImageSize.w), h: snapTo64(refImageSize.h) }
+              onChange('width',  c.w)
+              onChange('height', c.h)
             }}
             className="shrink-0 mb-[1px] px-2 py-1 rounded bg-card border border-border text-[10px] text-muted
                        hover:text-white hover:border-accent transition-colors whitespace-nowrap"
