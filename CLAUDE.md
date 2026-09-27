@@ -48,7 +48,7 @@ python server.py --port 7860 --no-auto-shutdown
 cd frontend && npm run build  # rebuild after any frontend change
 ```
 
-**Browser heartbeat / auto-shutdown**: server shuts down 60 s after last ping. Frontend sends `POST /api/ping` every 5s AND fires `navigator.sendBeacon('/api/shutdown')` on `beforeunload`. `api_shutdown` starts a **4 s cancellable countdown** (`_shutdown_task`); the next `/api/ping` cancels it — so a page **refresh survives** (reconnects in <1s), while a real tab close shuts down after 4s. Watcher skips shutdown if `manager.is_busy`. Disable: `--no-auto-shutdown`.
+**Browser heartbeat / auto-shutdown**: server shuts down 60 s after last ping. Frontend sends `POST /api/ping` every 5s AND fires `navigator.sendBeacon('/api/shutdown')` on `beforeunload`. `api_shutdown` starts a **4 s cancellable countdown** (`_shutdown_task`); the next `/api/ping` cancels it — so a page **refresh survives** (reconnects in <1s), while a real tab close shuts down after 4s. Watcher skips shutdown if `manager.is_busy`. Disable: `--no-auto-shutdown` (passed via env `IMAGEGEN_NO_AUTO_SHUTDOWN=1` — `uvicorn.run("server:app")` re-imports the module, so a `__main__` global never reached the served app; flag was a no-op before, `tests/test_auto_shutdown_flag.py`).
 
 ## HuggingFace token
 Stored in `huggingface/token` (gitignored). Type: **Read** (fine-grained, gated repos). Login via Settings drawer in UI, or `python -c "from huggingface_hub import login; login()"`. Must also accept terms on each gated model page.
@@ -109,7 +109,8 @@ Actions: `ADD_REF_SLOT` · `REMOVE_REF_SLOT` · `SET_SLOT_MASK` · `CLEAR_SLOT_M
 
 ### Iterative multi-mask inpainting
 `handleIterateGenerate` in `App.tsx` chains one `/api/generate` call per masked slot. Pass N: `inputs=[prev_out, slotN.image], mask=slotN.maskId, strength=slotN.strength`. `uploadFromUrl(url)` re-uploads between passes.
-**Crop & Composite + FLUX refs**: crop mode swaps only slot #1 for its bbox crop; slots #2+ (material/style refs) pass through untouched via `crop_flux_refs()` (`tests/test_mask_crop.py`). Used to replace ALL refs with the crop → masked edits ignored material refs and invented textures. "Inpainting Pipeline" mode on FLUX = plain img2img, no composite (FluxInpaintPipeline incompatible) — mask has no effect there.
+**Crop & Composite + FLUX refs**: crop mode swaps only slot #1 for its bbox crop; slots #2+ (material/style refs) pass through untouched via `crop_flux_refs()` (`tests/test_mask_crop.py`). Used to replace ALL refs with the crop → masked edits ignored material refs and invented textures. "Inpainting Pipeline" mode on FLUX = full-frame img2img (FluxInpaintPipeline incompatible) + pixel composite (`masked-composite`) so only the mask changes.
+**Slot #1 fit / auto-outpaint** (`fit_ref_to_canvas()`, `tests/test_fit_canvas.py`): slot #1 is never stretched — scaled to fit the output (up or down) at `outpaint_align`; uncovered area = blurred cover-scaled copy of the ref (not black) and unioned into the mask; padded → mode forced to Inpainting (full-frame + composite). User mask gets the SAME transform (editor masks = slot #1 aspect). Mask aspect ≠ slot #1 → stretched + `⚠` in result info; except when slot #1 is already canvas-size (Iterate pass ≥2) → mask fitted on its own aspect. FLUX slots #2+ go at native size (`prepare_flux_refs()`; pipeline keeps ref aspect, ≤1 MP). Limit: FLUX.2 edit copies the ref, so outpaint bands fill in-style but may seam — `fal/flux-2-klein-4B-outpaint-lora` (green-border) is the untried quality path, 4B only.
 
 ### API endpoints
 | Method | Path | Notes |

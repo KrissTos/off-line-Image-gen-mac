@@ -22,6 +22,7 @@ from PIL import Image
 import json
 import shutil
 from datetime import datetime
+from typing import NamedTuple
 
 DEFAULT_OUTPUT_DIR = os.path.join(os.path.expanduser("~"), "Pictures", "ultra-fast-image-gen")
 SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app_settings.json")
@@ -440,38 +441,99 @@ def download_all_online_updates():
     return "\n".join(msgs), table, None
 
 
-def _prepare_outpaint(ref_img, target_w, target_h, align="center"):
-    """
-    Composite ref_img onto a black canvas at (target_w × target_h).
-    Returns (canvas_image, mask_image):
-      canvas_image — ref pasted on black background
-      mask_image   — white where content must be generated, black where ref was placed
-    Align is one of: top-left, top, top-right, left, center, right,
-                     bottom-left, bottom, bottom-right
-    """
-    from PIL import Image, ImageDraw
+class CanvasFit(NamedTuple):
+    canvas: Image.Image          # RGB, exactly target size
+    mask: Image.Image | None     # L, target size; white = generate. None = nothing to generate-only
+    padded: bool                 # True when the ref didn't fill the canvas (outpaint area exists)
+    warning: str | None          # user-facing note (e.g. mask/ref aspect mismatch)
 
-    rw, rh = ref_img.size
-    # Scale down if ref is larger than target (never upscale)
-    scale = min(target_w / rw, target_h / rh, 1.0)
-    if scale < 1.0:
-        rw = int(rw * scale)
-        rh = int(rh * scale)
-        ref_img = ref_img.resize((rw, rh), Image.LANCZOS)
 
+_ASPECT_TOL = 0.01   # relative aspect difference treated as "same shape"
+_SNAP_PX    = 2      # fitted side within this many px of the canvas side → fill it (no sliver padding)
+
+
+def _fit_rect(sw, sh, tw, th, align="center"):
+    """Scale (sw×sh) to fit inside (tw×th) keeping aspect; place per *align*.
+    Returns (x, y, fitted_w, fitted_h). Align: top-left … center … bottom-right."""
+    scale = min(tw / sw, th / sh)
+    fw, fh = round(sw * scale), round(sh * scale)
+    if abs(fw - tw) <= _SNAP_PX:
+        fw = tw
+    if abs(fh - th) <= _SNAP_PX:
+        fh = th
     parts = align.split("-")
-    x = 0 if "left" in parts else (target_w - rw if "right" in parts else (target_w - rw) // 2)
-    y = 0 if "top" in parts  else (target_h - rh if "bottom" in parts else (target_h - rh) // 2)
+    x = 0 if "left" in parts else (tw - fw if "right" in parts else (tw - fw) // 2)
+    y = 0 if "top" in parts else (th - fh if "bottom" in parts else (th - fh) // 2)
+    return x, y, fw, fh
 
-    canvas = Image.new("RGB", (target_w, target_h), (0, 0, 0))
-    canvas.paste(ref_img, (x, y))
 
-    # Mask: white = generate, black = preserve original
-    mask = Image.new("L", (target_w, target_h), 255)
-    draw = ImageDraw.Draw(mask)
-    draw.rectangle([x, y, x + rw - 1, y + rh - 1], fill=0)
+def fit_ref_to_canvas(ref, target_w, target_h, align="center", mask=None) -> CanvasFit:
+    """
+    Fit slot #1 into the output canvas WITHOUT stretching (scale to fit, up or down,
+    placed per *align*). Uncovered area is filled with a blurred cover-scaled copy of
+    the ref (plausible context for the model, not black) and marked white in the mask.
 
-    return canvas, mask
+    *mask* (user mask, white = edit) gets the same transform as the ref and is unioned
+    with the padding area. Mask shape handling:
+      - same aspect as ref → follows the ref exactly (mask editor output)
+      - ref already canvas-sized, mask aspect differs → iterate pass ≥2 (base is the
+        previous output): mask is fitted on its own, landing where pass 1 put slot #1
+      - otherwise → mismatched upload: stretched to the ref as before, with a warning
+    """
+    from PIL import ImageChops, ImageFilter
+
+    tw, th = int(target_w), int(target_h)
+    ref = ref.convert("RGB")
+    rw, rh = ref.size
+    x, y, fw, fh = _fit_rect(rw, rh, tw, th, align)
+    padded = (fw, fh) != (tw, th)
+
+    fitted = ref.resize((fw, fh), Image.LANCZOS) if (fw, fh) != (rw, rh) else ref.copy()
+    if padded:
+        cs = max(tw / rw, th / rh)
+        cw, ch = max(tw, round(rw * cs)), max(th, round(rh * cs))
+        left, top = (cw - tw) // 2, (ch - th) // 2
+        canvas = (ref.resize((cw, ch), Image.BILINEAR)
+                     .crop((left, top, left + tw, top + th))
+                     .filter(ImageFilter.GaussianBlur(radius=max(tw, th) / 16)))
+        canvas.paste(fitted, (x, y))
+    else:
+        canvas = fitted
+
+    out_mask = Image.new("L", (tw, th), 255 if padded else 0)
+    if padded:
+        out_mask.paste(0, (x, y, x + fw, y + fh))
+
+    warning = None
+    if mask is not None:
+        mask = mask.convert("L")
+        mw, mh = mask.size
+        same_aspect = abs((mw / mh) / (rw / rh) - 1) <= _ASPECT_TOL
+        user = Image.new("L", (tw, th), 0)
+        if same_aspect or (rw, rh) != (tw, th):
+            if not same_aspect:
+                warning = (f"Mask {mw}×{mh} doesn't match slot #1 shape {rw}×{rh} — "
+                           f"stretched to fit, edit area may be misplaced")
+            user.paste(mask.resize((fw, fh), Image.NEAREST), (x, y))
+        else:
+            mx, my, mfw, mfh = _fit_rect(mw, mh, tw, th, align)
+            user.paste(mask.resize((mfw, mfh), Image.NEAREST), (mx, my))
+        out_mask = ImageChops.lighter(out_mask, user)
+
+    if out_mask.getbbox() is None:
+        out_mask = None
+    return CanvasFit(canvas, out_mask, padded, warning)
+
+
+def prepare_flux_refs(slot1_canvas, input_images, max_refs=6) -> list:
+    """FLUX refs: slot #1 = the fitted canvas; slots #2+ (material/style refs) go at
+    native size — Flux2KleinPipeline keeps ref aspect itself (≤1 MP, /16 snap), so
+    resizing them to the output dims would only distort them."""
+    extras = []
+    for d in list(input_images)[1:max_refs]:
+        img = d[0] if isinstance(d, tuple) else d
+        extras.append(img if img.mode == "RGB" else img.convert("RGB"))
+    return [slot1_canvas] + extras
 
 
 def load_zimage_pipeline(device="mps", use_full_model=False):
@@ -1227,40 +1289,33 @@ def generate_image(
     # Pre-process reference images once — same size/mode for every iteration
     img_w, img_h = int(width), int(height)
 
-    # ── Auto-outpaint: if ref image aspect ratio ≠ output size and no explicit mask,
-    #    composite the ref onto a black canvas and auto-generate the extension mask.
-    if (input_images is not None and len(input_images) > 0
-            and mask_image is None and not is_video_model):
+    # ── Fit slot #1 (+ its mask) into the output canvas — never stretch.
+    #    Aspect mismatch → padding filled from the image and added to the mask
+    #    (auto-outpaint); generated full-frame, then composited so only the mask changes.
+    slot1_canvas = None
+    fit_warning  = None
+    if input_images is not None and len(input_images) > 0 and not is_video_model:
         raw0 = input_images[0][0] if isinstance(input_images[0], tuple) else input_images[0]
-        rw, rh = raw0.size
-        # Only activate when there is actual size difference (>4px margin to avoid float rounding)
-        if abs(rw - img_w) > 4 or abs(rh - img_h) > 4:
-            canvas, auto_mask = _prepare_outpaint(raw0, img_w, img_h, outpaint_align)
-            # Replace slot #1 with the composited canvas; keep extra slots intact
-            rest = input_images[1:] if len(input_images) > 1 else []
-            input_images = [canvas] + rest
-            mask_image = auto_mask
-            mask_mode  = "Inpainting Pipeline (Quality)"
-            print(f"  Auto-outpaint: {rw}×{rh} → {img_w}×{img_h} (align={outpaint_align})")
+        fit = fit_ref_to_canvas(raw0, img_w, img_h, outpaint_align, mask=mask_image)
+        slot1_canvas = fit.canvas
+        mask_image   = fit.mask
+        fit_warning  = fit.warning
+        if fit_warning:
+            print(f"  ⚠ {fit_warning}")
+        if fit.padded:
+            mask_mode = "Inpainting Pipeline (Quality)"
+            print(f"  Auto-outpaint: {raw0.size[0]}×{raw0.size[1]} → {img_w}×{img_h} (align={outpaint_align})")
 
     preprocessed_flux_refs  = None
     preprocessed_zimage_ref = None
     preprocessed_video_refs = None
     if input_images is not None and len(input_images) > 0:
         if current_model in ("flux2-klein-int8", "flux2-klein-sdnq", "flux2-klein-9b-sdnq"):
-            preprocessed_flux_refs = []
-            for img_data in input_images[:6]:
-                img = img_data[0] if isinstance(img_data, tuple) else img_data
-                resized = img.copy().resize((img_w, img_h), Image.LANCZOS)
-                if resized.mode != "RGB":
-                    resized = resized.convert("RGB")
-                preprocessed_flux_refs.append(resized)
-            print(f"  Pre-processed {len(preprocessed_flux_refs)} reference image(s) → {img_w}×{img_h}")
+            preprocessed_flux_refs = prepare_flux_refs(slot1_canvas, input_images)
+            print(f"  Pre-processed {len(preprocessed_flux_refs)} reference image(s) "
+                  f"(slot #1 → {img_w}×{img_h}, extras native size)")
         elif current_model == "zimage-full":
-            raw = input_images[0][0] if isinstance(input_images[0], tuple) else input_images[0]
-            preprocessed_zimage_ref = raw.copy().resize((img_w, img_h), Image.LANCZOS)
-            if preprocessed_zimage_ref.mode != "RGB":
-                preprocessed_zimage_ref = preprocessed_zimage_ref.convert("RGB")
+            preprocessed_zimage_ref = slot1_canvas
             print(f"  Pre-processed reference image → {img_w}×{img_h}")
         elif is_video_model:
             preprocessed_video_refs = []
@@ -1280,16 +1335,16 @@ def generate_image(
     has_mask  = (mask_image is not None
                  and input_images is not None and len(input_images) > 0
                  and not is_video_model)
-    mask_full  = None   # mask resized to full output dims (L mode)
-    ref_full   = None   # first ref resized to full output dims (for compositing)
+    mask_full  = None   # mask at full output dims (L mode)
+    ref_full   = None   # slot #1 fitted to full output dims (for compositing)
     mask_bbox  = None   # (x0,y0,x1,y1) crop region in crop mode
     gen_w, gen_h = img_w, img_h  # generation dims; smaller than output in crop mode
 
     if has_mask:
         import numpy as np
-        raw_ref = input_images[0][0] if isinstance(input_images[0], tuple) else input_images[0]
-        ref_full  = raw_ref.copy().resize((img_w, img_h), Image.LANCZOS).convert("RGB")
-        mask_full = mask_image.convert("L").resize((img_w, img_h), Image.NEAREST)
+        # Both already canvas-sized by fit_ref_to_canvas (same transform → aligned)
+        ref_full  = slot1_canvas
+        mask_full = mask_image
 
         is_crop_mode = "Crop" in (mask_mode or "Crop")
 
@@ -1505,6 +1560,16 @@ def generate_image(
                 and mask_full is not None):
             image = apply_mask_composite(ref_full, image, mask_full, mask_bbox)
             mode += " (masked-crop)"
+        # ── Full-frame composite (Inpainting mode / auto-outpaint): keep original
+        #    pixels outside the mask. Needed on FLUX, whose "inpainting" is plain img2img.
+        elif (image is not None
+                and has_mask
+                and not mode.startswith("txt2")        # model never saw the ref (Z-Image quant)
+                and "Inpainting" in (mask_mode or "")
+                and ref_full is not None
+                and mask_full is not None):
+            image = apply_mask_composite(ref_full, image, mask_full, (0, 0, img_w, img_h))
+            mode += " (masked-composite)"
 
         _elapsed = time.perf_counter() - _t0
 
@@ -1525,6 +1590,7 @@ def generate_image(
             lora_info  = ""
         cfg_info   = f" | CFG: {guidance}" if guidance > 0 else ""
         sync_note  = f" | Sync: {last_sync_status}" if last_sync_status else ""
+        fit_note   = f" | ⚠ {fit_warning}" if fit_warning else ""
         time_info  = f" | Time: {_elapsed:.1f}s"
 
         model_short = {
@@ -1565,7 +1631,7 @@ def generate_image(
                 upscale_note = " | Upscale skipped: no model loaded"
 
             info = (f"{iter_label}Seed: {current_seed} | Model: {model_short} | Mode: {mode}"
-                    f" | Device: {device}{cfg_info}{lora_info}{upscale_note}{time_info}{sync_note}")
+                    f" | Device: {device}{cfg_info}{lora_info}{upscale_note}{time_info}{sync_note}{fit_note}")
 
             if auto_save:
                 save_result = save_image(image, output_dir, prompt)
