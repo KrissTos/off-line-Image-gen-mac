@@ -46,12 +46,12 @@ Center layout: Canvas (flex 5) / RefImagesRow (flex 4) / Gallery (flex 1) → 50
 
 ### Components
 - `Sidebar.tsx` (`w-[576px]`) — Accordions: Model, Parameters, Output Size, LoRA, Upscale (single + batch), Batch Img2Img, Depth Map, Watermark Remover, Video (LTX only), Workflows. `Accordion` renders `{open && children}` (children unmount when closed).
-- `RefImagesRow.tsx` — horizontal slot strip: 80×80 thumbnail + role badge, 56×56 mask target (pencil → mask editor), per-slot strength slider. Pencil opens `MaskEditor.tsx` on slot #1's image.
-- `MaskEditor.tsx` — full-screen SAM click-to-mask editor (replaces the old rectangle-drag modal). SAM point/box add+subtract, brush, polygon, invert, grow/shrink, undo/redo; keys S/D/B/P select tools, Alt = subtract everywhere, Shift+click = refine last SAM object, wheel = zoom at cursor, Space+drag = pan, Enter = apply (or close polygon), Esc = cancel. Saved mask → `onApply(File)` → existing `uploadImage` → `SET_SLOT_MASK` path, unchanged downstream.
+- `RefImagesRow.tsx` — horizontal slot strip: 80×80 thumbnail + role badge, 56×56 mask target (pencil → mask editor), per-slot strength slider; "+ ref img" drop zone sits after the last slot. Pencil opens `MaskEditor.tsx` on slot #1's image.
+- `MaskEditor.tsx` — full-screen SAM click-to-mask editor (replaces the old rectangle-drag modal). SAM point/box add+subtract, brush, polygon, invert, grow/shrink, undo/redo; keys S/D/B/P select tools, Alt = subtract everywhere, Shift+click = refine last SAM object, wheel = zoom at cursor, +/− = zoom at centre, 0 = fit, [ ] = brush size, Space+drag = pan, Enter = apply (or close polygon), Esc = cancel. 96 px left column: tools, brush slider (Brush tool only), grow/shrink, undo/redo, zoom −/%/+ · Fit · 100%; each control has a `HelpTip` hover popup, ⓘ top-right of the canvas lists navigation keys. Saved mask → `onApply(File)` → existing `uploadImage` → `SET_SLOT_MASK` path, unchanged downstream.
 - `EraseEditorModal.tsx` — watermark mask editor. Offscreen full-res `maskRef` + `displayRef` (≤760×560). Rectangle + brush (Shift = erase), 45% red overlay. Confirm → `toBlob` → `POST /api/upload` → `onConfirm(maskId, maskUrl)`; upload errors inline.
-- `HelpTip.tsx` — ⓘ tooltip, `position:fixed` + `getBoundingClientRect()`, `pointer-events-none`, `z-50`.
+- `HelpTip.tsx` — ⓘ tooltip, `position:fixed` + `getBoundingClientRect()`, `pointer-events-none`, `z-50`. `text` accepts JSX; pass `children` to use them as the hover trigger instead of the ⓘ.
 - `Canvas.tsx` — result image/video + generating overlay (spinner + %).
-- `Gallery.tsx` — horizontal scroll, `draggable` thumbs (gallery → ref slot). Hover: Info, Load Params, Upscale ×4, Delete; video thumbs only Load Params + Delete.
+- `Gallery.tsx` — toggle (top-right) between horizontal strip (wheel scrolls sideways) and vertical auto-fill grid (native scroll, letterboxed thumbs); choice kept in `localStorage['gallery.layout']`. `draggable` thumbs (gallery → ref slot). Hover: Info, Load Params, Upscale ×4, Delete; video thumbs only Load Params + Delete.
 - `SettingsDrawer.tsx` (`w-96`) — output folder, default model, HF login, model + upscaler lists, storage, server log, Model Sources.
 - `TopBar.tsx` — brand, model, device, VRAM, "generating…" pulse, settings gear.
 

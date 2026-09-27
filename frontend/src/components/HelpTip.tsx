@@ -3,17 +3,20 @@
  * Inline help tooltip. Renders a small ⓘ icon that shows a tooltip on hover.
  * Uses position:fixed + viewport-aware placement so it never overflows the window.
  * Usage: <HelpTip text="Guidance scale controls…" />
+ * Pass children to use them as the hover trigger instead of the ⓘ icon.
  */
 import { useState, useRef, useCallback } from 'react'
 
 interface Props {
-  text: string
+  text: React.ReactNode
   position?: 'top' | 'bottom' | 'left' | 'right'
+  children?: React.ReactNode
+  className?: string   // trigger wrapper classes (default: inline-flex)
 }
 
 const TOOLTIP_W = 224 // w-56 = 14rem
 
-export default function HelpTip({ text, position = 'top' }: Props) {
+export default function HelpTip({ text, position = 'top', children, className = 'inline-flex' }: Props) {
   const [tipStyle, setTipStyle] = useState<React.CSSProperties | null>(null)
   const ref = useRef<HTMLSpanElement>(null)
 
@@ -45,13 +48,13 @@ export default function HelpTip({ text, position = 'top' }: Props) {
   return (
     <span
       ref={ref}
-      className="relative inline-flex items-center"
+      className={`relative items-center ${className}`}
       onMouseEnter={show}
       onMouseLeave={() => setTipStyle(null)}
     >
-      <span className="w-3.5 h-3.5 rounded-full border border-muted text-muted text-[9px] flex items-center justify-center cursor-help select-none hover:border-white hover:text-white transition-colors">
+      {children ?? <span className="w-3.5 h-3.5 rounded-full border border-muted text-muted text-[9px] flex items-center justify-center cursor-help select-none hover:border-white hover:text-white transition-colors">
         i
-      </span>
+      </span>}
       {tipStyle && (
         <span
           style={tipStyle}

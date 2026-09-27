@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Brush, Hexagon, Loader2, MousePointerClick, SquareDashed, X } from 'lucide-react'
+import { Brush, Hexagon, Info, Loader2, MousePointerClick, SquareDashed, X, ZoomIn, ZoomOut } from 'lucide-react'
 import type { RefImageSlot } from '../types'
+import HelpTip from './HelpTip'
 import { segmentMask, segmentPrepare } from '../api'
 import {
   coverage, createMask, fillPolygon, fromRgba, grow, invert, paintOverlayFull, paintOverlayRect,
@@ -21,6 +22,31 @@ interface Props {
   onClose:      () => void
   onApply:      (maskFile: File) => void
 }
+
+const BRUSH_MIN = 4, BRUSH_MAX = 200
+const ZOOM_STEP = 1.25
+
+// Hover help for the left column: name + shortcut, how to use it, modifiers.
+function tip(name: string, key: string | null, lines: string[]) {
+  return (
+    <span className="flex flex-col gap-0.5">
+      <span className="text-white font-semibold">{name}{key && <span className="text-muted font-normal"> · {key}</span>}</span>
+      {lines.map(l => <span key={l}>{l}</span>)}
+    </span>
+  )
+}
+
+const TOOL_TIPS: Record<Tool, React.ReactNode> = {
+  sam:   tip('SAM click', 'S', ['Click an object to add it to the mask.', 'Alt+click: remove an object.', 'Shift+click: refine the last object with another point.']),
+  box:   tip('SAM box', 'D', ['Drag a box around an object to select it.', 'Alt+drag: remove the object instead.']),
+  brush: tip('Brush', 'B', ['Paint to add to the mask.', 'Alt+paint: erase.', '[ / ] or the slider below: brush size.']),
+  poly:  tip('Polygon', 'P', ['Click to place points.', 'Enter or click the first point to close.', 'Alt+close: subtract the shape. Esc: cancel.']),
+}
+
+const NAV_TIP = tip('Navigate', null, [
+  'Wheel / pinch: zoom at the cursor.', '+ / −: zoom in / out.', 'Space+drag: pan.',
+  '0: fit to window.', 'M: show/hide mask.', 'Cmd+Z / Shift+Cmd+Z: undo / redo.',
+])
 
 const HINTS: Record<Tool, string> = {
   sam:   'Click = add object · Alt+click = remove object · Shift+click = refine last object',
@@ -312,10 +338,15 @@ export default function MaskEditor({ slot, baseImageId, baseImageUrl, onClose, o
     return () => c.removeEventListener('wheel', onWheel)
   }, [])
 
+  // Buttons/keys zoom around the view centre; the wheel zooms at the cursor.
+  const zoomBy = useCallback((f: number) => setView(v => zoomAt(v, box.w / 2, box.h / 2, f)), [box])
+  const fit    = () => { if (mask && box.w) setView(fitView(mask.w, mask.h, box.w, box.h)) }
+
   // ── Keyboard ─────────────────────────────────────────────────────────────────
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if ((e.target as HTMLElement).tagName === 'INPUT') return
+      const t = e.target as HTMLInputElement
+      if (t.tagName === 'INPUT' && t.type !== 'range') return   // sliders keep shortcuts working
       if (e.code === 'Space') { spaceDown.current = e.type === 'keydown'; e.preventDefault(); return }
       if (e.type !== 'keydown') return
       const k = e.key.toLowerCase()
@@ -335,29 +366,42 @@ export default function MaskEditor({ slot, baseImageId, baseImageUrl, onClose, o
       else if (k === 'p') setTool('poly')
       else if (k === 'i') act(invert)
       else if (k === 'm') setShowMask(v => !v)
-      else if (k === '0' && mask && box.w) setView(fitView(mask.w, mask.h, box.w, box.h))
-      else if (k === '[') setBrush(b => Math.max(4, b - 4))
-      else if (k === ']') setBrush(b => Math.min(200, b + 4))
+      else if (k === '0') fit()
+      else if (k === '=' || k === '+') zoomBy(ZOOM_STEP)
+      else if (k === '-') zoomBy(1 / ZOOM_STEP)
+      else if (k === '[') setBrush(b => Math.max(BRUSH_MIN, b - 4))
+      else if (k === ']') setBrush(b => Math.min(BRUSH_MAX, b + 4))
     }
     window.addEventListener('keydown', onKey)
     window.addEventListener('keyup', onKey)
     return () => { window.removeEventListener('keydown', onKey); window.removeEventListener('keyup', onKey) }
-  }, [poly, dirty, confirmDiscard, onClose, closePolygon, apply, act, doUndo, mask, box])
+  }, [poly, dirty, confirmDiscard, onClose, closePolygon, apply, act, doUndo, mask, box, zoomBy])
 
   // ── UI ───────────────────────────────────────────────────────────────────────
   const toolBtn = (t: Tool, label: string, key: string, icon: React.ReactNode) => (
-    <button
-      key={t} onClick={() => setTool(t)} title={`${label} (${key})`} aria-pressed={tool === t}
-      className={`w-10 h-10 rounded flex items-center justify-center transition-colors
-        ${tool === t ? 'bg-accent text-white' : 'text-muted hover:text-white hover:bg-card'}`}
-    >{icon}</button>
+    <HelpTip key={t} text={TOOL_TIPS[t]} position="right">
+      <button
+        onClick={() => setTool(t)} aria-label={`${label} (${key})`} aria-pressed={tool === t}
+        className={`w-10 h-10 rounded flex items-center justify-center transition-colors
+          ${tool === t ? 'bg-accent text-white' : 'text-muted hover:text-white hover:bg-card'}`}
+      >{icon}</button>
+    </HelpTip>
   )
-  const actBtn = (label: string, onClick: () => void, title: string, disabled = false) => (
-    <button onClick={onClick} title={title} disabled={disabled}
-      className="w-full px-1 py-1 rounded text-[10px] text-muted hover:text-white hover:bg-card disabled:opacity-40">
-      {label}
+  const actBtn = (label: string, onClick: () => void, help: React.ReactNode, disabled = false) => (
+    <HelpTip text={help} position="right" className="flex w-full">
+      <button onClick={onClick} aria-label={label} disabled={disabled}
+        className="w-full px-1 py-1 rounded text-[10px] text-muted hover:text-white hover:bg-card disabled:opacity-40">
+        {label}
+      </button>
+    </HelpTip>
+  )
+  const iconBtn = (label: string, onClick: () => void, icon: React.ReactNode) => (
+    <button onClick={onClick} aria-label={label} disabled={!mask}
+      className="w-7 h-7 rounded flex items-center justify-center text-muted hover:text-white hover:bg-card disabled:opacity-40">
+      {icon}
     </button>
   )
+  const numInput = 'w-full bg-card border border-border rounded text-[11px] text-center text-white py-0.5'
   // sam === 'error' means segmentPrepare failed and SAM is locked; a click failure
   // (caught in runSam) leaves sam 'ready' — usable again — but still shows samError
   // until the next click clears it.
@@ -386,21 +430,44 @@ export default function MaskEditor({ slot, baseImageId, baseImageUrl, onClose, o
         </div>
       </div>
       <div className="flex flex-1 min-h-0">
-        <div className="w-14 border-r border-border flex flex-col items-center gap-1 py-2">
+        <div className="w-24 shrink-0 border-r border-border flex flex-col items-center gap-1 py-2 px-2 overflow-y-auto">
           {toolBtn('sam', 'SAM click', 'S', <MousePointerClick size={18} />)}
           {toolBtn('box', 'SAM box', 'D', <SquareDashed size={18} />)}
           {toolBtn('brush', 'Brush', 'B', <Brush size={18} />)}
           {toolBtn('poly', 'Polygon', 'P', <Hexagon size={18} />)}
-          <div className="w-10 border-t border-border my-1" />
-          {actBtn('Invert', () => act(invert), 'Invert mask (I)', !mask)}
+          {tool === 'brush' && (
+            <div className="w-full flex flex-col gap-1 pt-1">
+              <span className="text-[10px] text-muted">Brush px</span>
+              <input type="range" min={BRUSH_MIN} max={BRUSH_MAX} value={brush} aria-label="Brush size"
+                onChange={e => setBrush(Number(e.target.value))}
+                className="w-full h-1 accent-accent appearance-none bg-border rounded-full" />
+              <input type="number" min={BRUSH_MIN} max={BRUSH_MAX} value={brush} aria-label="Brush size in pixels"
+                onChange={e => setBrush(Math.max(BRUSH_MIN, Math.min(BRUSH_MAX, Number(e.target.value) || BRUSH_MIN)))}
+                className={numInput} />
+            </div>
+          )}
+          <div className="w-full border-t border-border my-1" />
+          {actBtn('Invert', () => act(invert), tip('Invert', 'I', ['Swap masked and unmasked areas.']), !mask)}
+          <span className="w-full text-[10px] text-muted pt-1">Grow/shrink px</span>
           <input type="number" min={1} max={50} value={growPx} aria-label="Grow/shrink pixels"
             onChange={e => setGrowPx(Math.max(1, Math.min(50, Number(e.target.value) || 1)))}
-            className="w-11 bg-card border border-border rounded text-[10px] text-center text-white" />
-          {actBtn('Grow', () => act(m => grow(m, growPx)), `Grow mask by ${growPx} px`, !mask)}
-          {actBtn('Shrink', () => act(m => shrink(m, growPx)), `Shrink mask by ${growPx} px`, !mask)}
-          {actBtn('Clear', () => act(m => createMask(m.w, m.h)), 'Clear mask', !mask)}
-          {actBtn('Undo', () => doUndo(false), 'Undo (Cmd+Z)', !history.current.canUndo)}
-          {actBtn('Redo', () => doUndo(true), 'Redo (Shift+Cmd+Z)', !history.current.canRedo)}
+            className={numInput} />
+          {actBtn('Grow', () => act(m => grow(m, growPx)), tip('Grow', null, [`Expand the mask edge by ${growPx} px.`]), !mask)}
+          {actBtn('Shrink', () => act(m => shrink(m, growPx)), tip('Shrink', null, [`Pull the mask edge in by ${growPx} px.`]), !mask)}
+          {actBtn('Clear', () => act(m => createMask(m.w, m.h)), tip('Clear', null, ['Empty the whole mask (undoable).']), !mask)}
+          {actBtn('Undo', () => doUndo(false), tip('Undo', 'Cmd+Z', ['Step back one mask edit.']), !history.current.canUndo)}
+          {actBtn('Redo', () => doUndo(true), tip('Redo', 'Shift+Cmd+Z', ['Re-apply an undone edit.']), !history.current.canRedo)}
+          <div className="w-full border-t border-border my-1" />
+          <span className="w-full text-[10px] text-muted">Zoom</span>
+          <div className="w-full flex items-center justify-between">
+            {iconBtn('Zoom out (−)', () => zoomBy(1 / ZOOM_STEP), <ZoomOut size={15} />)}
+            <span className="text-[10px] text-white tabular-nums">{Math.round(view.scale * 100)}%</span>
+            {iconBtn('Zoom in (+)', () => zoomBy(ZOOM_STEP), <ZoomIn size={15} />)}
+          </div>
+          <div className="w-full flex gap-1">
+            {actBtn('Fit', fit, tip('Fit', '0', ['Fit the whole image in the window.']), !mask)}
+            {actBtn('100%', () => zoomBy(1 / view.scale), tip('100%', null, ['One image pixel per screen point.']), !mask)}
+          </div>
         </div>
         <div ref={wrapRef} className="flex-1 min-w-0 relative overflow-hidden">
           <canvas
@@ -410,6 +477,11 @@ export default function MaskEditor({ slot, baseImageId, baseImageUrl, onClose, o
             onPointerLeave={() => setCursor(null)}
           />
           {!mask && <div className="absolute inset-0 flex items-center justify-center text-muted text-sm">Loading image…</div>}
+          <HelpTip text={NAV_TIP} position="left" className="absolute top-2 right-2 inline-flex">
+            <span className="p-1 rounded bg-card/80 border border-border text-muted hover:text-white cursor-help" aria-label="Navigation help">
+              <Info size={14} aria-hidden="true" />
+            </span>
+          </HelpTip>
         </div>
       </div>
       <div className="h-7 px-4 border-t border-border flex items-center gap-4 text-[11px] text-muted">
@@ -421,7 +493,7 @@ export default function MaskEditor({ slot, baseImageId, baseImageUrl, onClose, o
         <span>Mask {mask ? (maskCoverage * 100).toFixed(1) : '0'}%</span>
         <span>Zoom {Math.round(view.scale * 100)}%</span>
         {tool === 'brush' && <span>Brush {brush}px</span>}
-        <span className="truncate">{HINTS[tool]} · Wheel zoom · Space+drag pan · 0 fit · M mask · I invert</span>
+        <span className="truncate">{HINTS[tool]} · Wheel/+/− zoom · Space+drag pan · 0 fit · M mask · I invert</span>
         <span className="ml-auto">{w}×{h}</span>
       </div>
     </div>
