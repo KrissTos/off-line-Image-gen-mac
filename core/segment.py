@@ -82,9 +82,13 @@ class SamSegmenter:
             multi = len(points) == 1 and not box
             with torch.no_grad():
                 out = self._model(image_embeddings=emb, multimask_output=multi, **kw)
-            masks = self._proc.image_processor.post_process_masks(out.pred_masks.cpu(), orig, resh)[0]
-            idx = int(out.iou_scores.cpu()[0, 0].argmax()) if multi else 0
-            return masks[0, idx].numpy().astype(bool)
+            if multi:
+                idx = int(out.iou_scores.cpu()[0, 0].argmax())
+                pred = out.pred_masks[:, :, idx:idx+1]
+            else:
+                pred = out.pred_masks
+            masks = self._proc.image_processor.post_process_masks(pred.cpu(), orig, resh)[0]
+            return masks[0, 0].numpy().astype(bool)
 
 
 _segmenter: SamSegmenter | None = None
