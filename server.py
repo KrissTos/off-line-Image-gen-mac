@@ -199,7 +199,9 @@ app.add_event_handler("startup", _startup_patch_access_log)
 # ── Browser heartbeat (auto-shutdown when browser closes) ─────────────────────
 
 _last_ping:           float = time.time()   # updated by POST /api/ping
-_auto_shutdown:       bool  = True          # set to False via --no-auto-shutdown
+# --no-auto-shutdown → env var: uvicorn.run("server:app") re-imports this module,
+# so a global set in __main__ would never reach the served app.
+_auto_shutdown:       bool  = os.environ.get("IMAGEGEN_NO_AUTO_SHUTDOWN") != "1"
 _HEARTBEAT_TIMEOUT:   float = 60.0          # seconds of silence → shutdown (60 s handles background-tab throttling)
 _HEARTBEAT_INTERVAL:  float = 5.0           # check interval
 _shutdown_task:       asyncio.Task | None = None  # pending graceful-shutdown countdown
@@ -1742,7 +1744,7 @@ if __name__ == "__main__":
         print("[DEBUG] Debug mode enabled")
 
     if args.no_auto_shutdown:
-        _auto_shutdown = False  # type: ignore[assignment]
+        os.environ["IMAGEGEN_NO_AUTO_SHUTDOWN"] = "1"
 
     print(f"Starting ultra-fast-image-gen API on http://{args.host}:{args.port}")
     if DIST.exists():
