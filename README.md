@@ -11,17 +11,19 @@
 
 - **Text-to-image** — generate images from a prompt
 - **Image-to-image editing** — upload a reference photo and transform it with natural language
-- **Inpainting** — draw a rectangle mask on any region and regenerate just that area
-- **Multi-slot reference images** — up to 6 reference images, each with its own mask and strength slider
+- **Inpainting** — mark the area to change in a full-screen mask editor (click-to-select with SAM, brush, polygon) and regenerate just that area
+- **Multi-slot reference images** — slot #1 is the image to edit, further slots are material / style references; each slot has its own strength slider and optional mask
 - **Iterative multi-mask inpainting** — chain multiple mask passes automatically (one per slot)
 - **Video generation** — text-to-video and image-to-video with LTX-Video
 - **Multi-LoRA stacking** — load up to 5 `.safetensors` LoRA adapters simultaneously, each with its own strength slider; the dropdown is filtered to only show LoRAs compatible with the active model
 - **Batch img2img** — point at a folder of images and run the current prompt + params over all of them automatically; gallery updates after each image
 - **Upscaling** — 4× single image or batch-folder upscale with any Spandrel-compatible model
-- **Workflow save/load** — save your full setup (model, params, reference images, masks) and reload it later
-- **Gallery** — browse recent outputs, drag them into reference slots, upscale or delete
+- **Every generation is reproducible** — each run is saved as one folder with its parameters, reference images, masks and outputs; click any gallery thumbnail to reload the whole setup
+- **Workflow save/load** — save a setup under a name (model, params, reference images, masks) and reload or overwrite it later
+- **Gallery** — strip or grid view; click to reload a run, drag thumbnails into reference slots, upscale or delete
+- **Watermark remover** — auto-detect or hand-paint a mask, then fill it with LaMa
 - **Depth map generation** — generate 16-bit DA3 depth maps directly from the Gallery; white = near, black = far
-- **Auto-outpaint** — automatically fill borders when the reference image is a different aspect ratio
+- **Auto-outpaint** — when the base image has a different aspect ratio than the output, it is fitted (never stretched) and the borders are filled; FLUX 4B uses a dedicated outpaint LoRA
 
 ---
 
@@ -34,9 +36,9 @@
 | **FLUX.2-klein-4B** (Int8) | ~16 GB | Alternative quantization |
 | **Z-Image Turbo** (Quantized) | ~8 GB | Fastest overall — text-to-image only |
 | **Z-Image Turbo** (Full) | ~24 GB | LoRA support |
-| **LTX-Video** | — | Text-to-video / image-to-video |
+| **LTX-Video** 0.9.8-13B-distilled | — | Text-to-video / image-to-video, fast-preview mode |
 
-Models are downloaded automatically the first time you select them. They are cached in `./models/`.
+Models are downloaded automatically the first time you select them. They are cached in the standard HuggingFace cache (`~/.cache/huggingface/hub`), shared with other tools.
 
 ---
 
@@ -60,7 +62,7 @@ cd off-line-Image-gen-mac
 
 Then **double-click `Launch.command`** in Finder.
 
-The first launch installs all dependencies (~5 min). A browser tab opens automatically at `http://localhost:7860`.
+The first launch installs all dependencies (~5 min). The UI opens automatically in Google Chrome (default browser if Chrome is missing) at `http://localhost:7860`.
 
 > **Terminal lifecycle**: The Terminal window that opens is managed automatically. When you close the browser tab the server shuts down and **Terminal closes itself** — you don't need to quit it manually. Refreshing the page reconnects within ~1 s and cancels the shutdown.
 
@@ -72,17 +74,17 @@ The first launch installs all dependencies (~5 min). A browser tab opens automat
 # Install uv (package manager) if you don't have it
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# Create venv and install deps
-uv venv
-source .venv/bin/activate
-uv sync
+# Create the venv (in ./venv) and install deps
+UV_PROJECT_ENVIRONMENT=venv uv sync
 
 # Build the frontend
 cd frontend && npm install && npm run build && cd ..
 
 # Start the server
-python server.py --port 7860
+venv/bin/python server.py --port 7860
 ```
+
+The server exits 60 s after the last open browser tab closes. Add `--no-auto-shutdown` to keep it running (e.g. for API use).
 
 Open `http://localhost:7860` in your browser.
 
@@ -131,15 +133,34 @@ Open `http://localhost:7860` in your browser.
 | **Upscale** | 4× single image or batch folder |
 | **Batch Img2Img** | Process a whole folder of images with the current settings |
 | **Video** | LTX-Video settings (only visible with LTX model) |
-| **Depth Map** | Generate a 16-bit depth PNG for the current output image |
-| **Workflows** | Save / load your full setup |
+| **Depth Map** | Generate a 16-bit depth PNG for an image file |
+| **Watermark Remover** | Detect or paint a watermark mask, then remove it (LaMa) |
+| **Workflows** | Save / load / overwrite named setups |
 
 ### Reference image slots
 
-- Click **+** to add a reference image (upload, drag from gallery, or paste a URL)
-- Click the **pencil icon** to draw a rectangle mask — only that region will be regenerated
+- Drop an image on **+ ref img** (or click it to upload, or drag a gallery thumbnail onto it)
+- Click a slot's **mask box** ("draw mask") to open the mask editor; a filled box reopens it, **×** clears it. Only the masked area (white) is regenerated
 - Adjust the **strength slider** per slot (how much the model can change the image)
-- Slot #1 is always the **base image**; slots #2+ are style references
+- Slot #1 is always the **base image**; slots #2+ are material / style references. In FLUX prompts, `image 1` = base, `image 2` = the first extra ref, and so on
+- The generate pass uses only slot #1's mask; masks on slots #2+ are used by **Iterate Masks**
+
+### Mask editor
+
+A full-screen editor that always works on slot #1's image.
+
+| Tool / key | What it does |
+|---|---|
+| **SAM click** (S) | Click an object to add it; **Shift+click** refines the last object with another point |
+| **SAM box** (D) | Drag a box around an object to select it |
+| **Brush** (B) | Paint the mask; `[` `]` change the brush size |
+| **Polygon** (P) | Click points, Enter or click the first point to close |
+| **Alt** | Subtract instead of add, for every tool |
+| Invert (I) · Grow · Shrink | Whole-mask operations |
+| Import… | Load a PNG (white = masked) as the mask |
+| Undo / redo | Cmd+Z / Shift+Cmd+Z |
+| Navigation | Wheel = zoom at cursor, +/− zoom, 0 = fit, Space+drag = pan, M = show/hide mask |
+| Enter / Esc | Apply / cancel |
 
 ### Inpainting modes
 
@@ -154,23 +175,45 @@ When **Inpainting Pipeline (Quality)** is selected and you have masks on multipl
 
 ---
 
-## Workflows
+## Gallery
 
-Workflows save your entire session — model, all parameters, reference images, masks, and strength values — into a folder under `workflows/`.
-
-- **Save** — type a name and click Save → creates `workflows/yy-mm-dd_name/`
-- **Load** — pick from the dropdown (last 15 shown) and click Load
-- **Open** — click the folder icon to browse to any workflow folder in Finder
+- **Click** a thumbnail → it shows in the canvas and the whole run is reloaded: prompt, model, size, steps, LoRAs, every reference image with its strength and mask, and **that output's seed** (an upscale reloads with its source's seed). While a generation is running, a click only previews.
+- **Hover** → info, upscale ×4, delete. Deleting the last output of a run moves the whole run folder to the macOS Trash.
+- The toggle at the top-right switches between strip and grid view.
 
 ---
 
-## Output files
+## Workflows
 
-Images are saved to `~/Pictures/ultra-fast-image-gen/` by default (change in Settings).
-Each image gets a `.json` sidecar with the prompt, seed, model, and all parameters.
+A saved workflow is a named setup — model, parameters, reference images, masks, strengths — stored under `workflows/yy-mm-dd_name/` in the same format as a run folder, without outputs. Use it for setups you want to come back to before (or without) generating.
 
-Filename format: `YYYYMMDD_prompt-slug.png` (collisions get `_2`, `_3` suffix).
-When reference images or masks are present, a companion folder `prompt-slug/` is created alongside the image containing `params.json`, `ref_slot_N.png`, and `mask.png`.
+- **Save** — type a name and click Save
+- **Load** — pick from the dropdown (last 15 shown) and click Load, or click the folder icon to open any workflow folder
+- After loading, **Save (overwrite _name_)** rewrites that same folder; **Save as new** makes a copy under a new name
+
+---
+
+## Output files (run folders)
+
+Outputs go to `~/Pictures/ultra-fast-image-gen/` by default (change in Settings). Every generation is one self-contained folder:
+
+```
+260927-151805_edit-image-1-a-photo-of/          yymmdd-HHMMSS_<prompt slug>
+  workflow.json                                 all parameters (version 2)
+  refs/slot_1.png  slot_2.png …                 reference images
+  masks/slot_1.png                              masks
+  outputs/
+    260927-151805_edit-image-1_s812345.png      one file per repeat, named with its seed
+    260927-151805_edit-image-1_s812345_3520x4736.png   upscale of it
+```
+
+A generation that is stopped or fails before producing anything leaves no folder. Output folders from older versions (flat `image.png` + `image.json`) can be converted once:
+
+```bash
+venv/bin/python -m core.run_store migrate ~/Pictures/ultra-fast-image-gen            # dry run: prints the plan
+venv/bin/python -m core.run_store migrate ~/Pictures/ultra-fast-image-gen --apply    # do it
+venv/bin/python -m core.run_store migrate workflows --apply                          # old saved workflows
+```
 
 ---
 
@@ -180,7 +223,7 @@ Open **Settings** (gear icon, top-right):
 
 | Setting | Description |
 |---|---|
-| Output folder | Where generated images are saved |
+| Output folder | Where run folders are saved |
 | HuggingFace token | Required for gated models |
 | Models | See which models are cached, download, delete |
 | Upscale models | Manage upscaler weights |
@@ -219,7 +262,8 @@ off-line-Image-gen-mac/
 │
 ├── frontend/              ← React + Vite + TypeScript UI → builds to frontend/dist/
 │   └── src/
-│       ├── App.tsx            ← Root: SSE handler, ref-slot logic, iterate loop
+│       ├── App.tsx            ← Root: SSE handler, ref-slot logic, iterate loop, workflow restore
+│       ├── workflow.ts        ← Run / workflow → params (pure, node-tested)
 │       ├── store.ts           ← useReducer global state
 │       ├── api.ts             ← Typed fetch helpers
 │       ├── types.ts           ← Shared TypeScript types
@@ -227,20 +271,23 @@ off-line-Image-gen-mac/
 │           ├── Sidebar.tsx        ← All generation params + accordions
 │           ├── Canvas.tsx         ← Result image / video + progress overlay
 │           ├── RefImagesRow.tsx   ← Reference image slots + mask editor
-│           ├── Gallery.tsx        ← Recent outputs strip
+│           ├── Gallery.tsx        ← Recent outputs, strip / grid
 │           ├── TopBar.tsx         ← Brand, model, device, VRAM status
 │           ├── SettingsDrawer.tsx ← HF login, model list, storage, log
-│           ├── MaskEditorModal.tsx← Rectangle mask drawing canvas
+│           ├── MaskEditor.tsx     ← Full-screen SAM / brush / polygon mask editor
+│           ├── EraseEditorModal.tsx ← Watermark mask editor
 │           └── HelpTip.tsx        ← Inline ⓘ tooltips
 │
 ├── core/
+│   ├── run_store.py       ← Run folders: create, record outputs, list, load, save workflows, migrate
+│   ├── segment.py         ← SAM click-to-mask (mask editor)
+│   ├── erase.py           ← Watermark detect + LaMa removal
 │   ├── depth_map.py       ← DA3 / DA2 depth estimation → 16-bit PNG
 │   ├── lora_flux2.py      ← LoRA for FLUX.2-klein (PEFT)
 │   ├── lora_zimage.py     ← LoRA for Z-Image (forward-patch)
 │   ├── quantized_flux2.py ← 4-bit SDNQ + int8 quantization
 │   └── workflow_utils.py  ← Workflow save/load, ComfyUI importer
 │
-├── models/                ← Downloaded model weights (gitignored)
 ├── lora_uploads/          ← User-uploaded LoRA files (gitignored)
 ├── upscale_models/        ← Upscaler weights (gitignored)
 ├── workflows/             ← Saved workflow folders
