@@ -7,15 +7,49 @@ consulted when working on a specific layer. Update it in the same session as the
 
 | File | Role |
 |------|------|
-| `server.py` | FastAPI. Serves `frontend/dist/`, all routes `/api/*`, SSE via `StreamingResponse`, HTTP 423 when pipeline busy. Writes `.json` sidecar per output. Suppresses resource_tracker semaphore warning at import (`warnings.filterwarnings`). |
+| `server.py` | FastAPI. Serves `frontend/dist/`, all routes `/api/*`, SSE via `StreamingResponse`, HTTP 423 when pipeline busy. Each generation → one run folder via `core/run_store.py`; generation runs in its own asyncio task (`_run_events`, `_RUN_TASKS`) so outputs finishing after a client disconnect are still recorded. Suppresses resource_tracker semaphore warning at import (`warnings.filterwarnings`). |
 | `pipeline.py` | `PipelineManager` singleton wrapping `app.generate_image()` in `asyncio.Lock` + `ThreadPoolExecutor(1)`; turns each `(image, video, status)` yield into an SSE dict. `auto_save=False` prevents double-saving. Stop = `threading.Event` + `_GenerationStopped` raised from the step callback; `finally` always runs `gc.collect()` + `torch.mps.empty_cache()`. `is_batch_running: bool`; `stop_requested` = public accessor for `_stop_event.is_set()`. |
 | `app.py` | Pure backend logic. `generate_image()` initialises `image = None` / `video_frames = None` each repeat iteration. `lora_files: list[dict]` (legacy `lora_file/lora_strength` still merged at call time); `current_lora_paths: list`. |
 | `generate.py` | CLI, Z-Image Turbo only. |
 
-### Output files
-- Filename `{YYYYMMDD}_{slug}.png` (no seed/time; collision → `_2`, `_3`). Sidecar `…{slug}.json` holds ALL params.
-- Companion folder `{slug}/` holds `params.json` + `ref_slot_N.png` + `mask.png` when refs/mask exist.
+### Run folders (outputs) and saved workflows
+One self-contained folder per generation; saved workflows use the same format without `outputs/`.
+```
+<output_dir>/
+  260927-151805_edit-image-1-a-photo-of/        one run: yymmdd-HHMMSS_<slug(prompt[:30])>, collision -2, -3
+    workflow.json
+    refs/slot_1.png  slot_2.jpg …               source extension kept
+    masks/slot_1.png                            any slot that has a mask
+    outputs/
+      260927-151805_edit-image-1_s812345.png           <run name[:40]>_s<seed>.<ext>; repeat seed → -2
+      260927-151805_edit-image-1_s812345_3520x4736.png upscale (upscaled_from its source, same seed)
+<repo>/workflows/
+  26-09-27_bathroom_floor/                      yy-mm-dd_<name>; workflow.json + refs/ + masks/
+```
+- `workflow.json` v2: `version: 2`, `name`, `created` (runs) / `saved` (workflows), every `run_store.PARAM_KEYS`
+  scalar (`seed` = requested, -1 random), `ref_slots: [{image, mask|null, strength}]`,
+  `outputs: [{file, kind, seed?, upscaled_from?}]`. Paths relative to the folder; loaders reject
+  paths escaping it. Every rewrite merges into the existing JSON, so unknown keys survive.
+- `core/run_store.py` (pure file logic): `create_run`, `output_filename`, `add_output` (same file →
+  replaces its entry; upscale inherits source seed), `list_outputs`, `load` (URLs + `warnings` for
+  missing ref/mask files, never fatal), `save_workflow(…, overwrite=)`, `remove_output`, `trash`
+  (`/usr/bin/trash`), `migrate`.
+- A generation that produced nothing (stopped, failed) is trashed once generation has really ended.
+- Migration of legacy flat outputs (`X.png` + `X.json` sidecar + `X/` companion + `X_WxH` upscales)
+  and v1 workflows (`slot_N_image.png`): `venv/bin/python -m core.run_store migrate <dir> [--apply]`
+  (dry run by default, idempotent, moves only; sidecars/companions → Trash). Applied 2026-09-27.
 - Default dir `~/Pictures/ultra-fast-image-gen/` (`app.DEFAULT_OUTPUT_DIR`); overridable in Settings (`output_dir`).
+
+### External-writer contract (`/generate` skill)
+- `local_run.py` reads event `path` (absolute, inside `<run>/outputs/`) then `url`; no change needed.
+  Requests without `ref_slots` get slots derived from `input_image_ids` (slot 1: mask + `img_strength`).
+- An external writer may create a v2 folder in `<repo>/workflows/<yy-mm-dd>_<job>/` with minimum keys
+  `version`, `prompt`, `model_choice`, `width`, `height`, `ref_slots`; everything else falls back to UI
+  defaults. Masks: L-mode PNG at slot image resolution, white = regenerate.
+- Path A (generate in the app): the run folder is the event `path`'s grandparent
+  (`workflow.json`, `refs/`, `masks/`, `outputs/`).
+- Path B (fix the mask in the app, Save): Save overwrites that same folder, so the writer re-reads
+  `masks/slot_1.png` from the path it wrote.
 
 ### Heartbeat / auto-shutdown
 - Server exits 60 s after the last `POST /api/ping` (frontend pings every 5 s). Watcher skips while `manager.is_busy`; resets after system sleep.
@@ -35,10 +69,11 @@ Vite + React + TypeScript + Tailwind v3 → `frontend/dist/`. Tab title `Local A
 
 | File | Role |
 |------|------|
-| `src/App.tsx` | Root: bootstrap, 4 s status poll, 5 s heartbeat, SSE handler, ref-slot handlers, iterate loop, Load Params |
+| `src/App.tsx` | Root: bootstrap, 4 s status poll, 5 s heartbeat, SSE handler, ref-slot handlers, iterate loop, `applyWorkflow` |
 | `src/store.ts` | `useReducer` global state, `useAppState()` → `{ state, dispatch }`; `autoSizeParams()` |
 | `src/types.ts` | `AppStatus`, `GenerateParams`, `SSEEvent`, `OutputItem`, `RefImageSlot`, `Workflow` |
 | `src/api.ts` | Typed fetch helpers: `streamGenerate`, `streamBatchGenerate`, `uploadImage`, `uploadFromUrl`, `streamBatchUpscale`, `eraseDetect`, `eraseRemove`, … |
+| `src/workflow.ts` | `workflowToParams(wf, {seed})` — pure run/workflow → params (`!= null`, seed 0 survives); node-tested |
 | `src/canvasSize.ts` | `canvasForRef()` / `sizeFamily()` — output size per model family |
 | `src/mask/maskOps.ts`, `history.ts`, `viewMath.ts` | Pure mask editor logic: combine/invert/grow/shrink ops, undo/redo history, screen↔image view math. Node-tested (`npm test`), no DOM. |
 
@@ -51,7 +86,8 @@ Center layout: Canvas (flex 5) / RefImagesRow (flex 4) / Gallery (flex 1) → 50
 - `EraseEditorModal.tsx` — watermark mask editor. Offscreen full-res `maskRef` + `displayRef` (≤760×560). Rectangle + brush (Shift = erase), 45% red overlay. Confirm → `toBlob` → `POST /api/upload` → `onConfirm(maskId, maskUrl)`; upload errors inline.
 - `HelpTip.tsx` — ⓘ tooltip, `position:fixed` + `getBoundingClientRect()`, `pointer-events-none`, `z-50`. `text` accepts JSX; pass `children` to use them as the hover trigger instead of the ⓘ.
 - `Canvas.tsx` — result image/video + generating overlay (spinner + %).
-- `Gallery.tsx` — toggle (top-right) between horizontal strip (wheel scrolls sideways) and vertical auto-fill grid (native scroll, letterboxed thumbs); choice kept in `localStorage['gallery.layout']`. `draggable` thumbs (gallery → ref slot). Hover: Info, Load Params, Upscale ×4, Delete; video thumbs only Load Params + Delete.
+- `Gallery.tsx` — toggle (top-right) between horizontal strip (wheel scrolls sideways) and vertical auto-fill grid (native scroll, letterboxed thumbs); choice kept in `localStorage['gallery.layout']`. `draggable` thumbs (gallery → ref slot). Click = preview + reload the whole run (see below). Hover: Info, Upscale ×4, Delete; video thumbs only Delete.
+- Workflows panel (`Sidebar.tsx` `WorkflowPanel`) — after a saved workflow loads, "Save (overwrite <name>)" rewrites that folder; "Save as new" makes a copy. A gallery run load clears the target.
 - `SettingsDrawer.tsx` (`w-96`) — output folder, default model, HF login, model + upscaler lists, storage, server log, Model Sources.
 - `TopBar.tsx` — brand, model, device, VRAM, "generating…" pulse, settings gear.
 
@@ -64,10 +100,14 @@ interface RefImageSlot {
 }
 ```
 Actions: `ADD_REF_SLOT` · `REMOVE_REF_SLOT` · `SET_SLOT_MASK` · `CLEAR_SLOT_MASK` · `CLEAR_ALL_SLOTS` · `UPDATE_SLOT_STRENGTH` · `SET_SLOT_DIMS`.
-`slotsToParams()` sends all slot image ids but only slot #1's mask and no per-slot strength.
+`slotsToParams()` sends all slot image ids and slot #1's mask to the pipeline; generate also sends `ref_slots: [{imageId, maskId, strength}]` so the run records every slot.
 
-### Gallery "Load Params"
-`handleLoadParams` (`App.tsx`) restores prompt, model, size, steps, seed, img_strength, mask_mode, outpaint_align, lora_files, repeat_count, upscale, num_frames, fps, fast_preview, then refs + mask from the companion folder (`keepSize: true`). Device not restored.
+### Workflow restore (`applyWorkflow`)
+One path for gallery clicks (`GET /api/runs/{run}`, seed = clicked output's seed; ignored while
+generating) and saved workflows (`GET /api/workflows/{name}`): `workflowToParams()` → `SET_PARAMS`,
+`CLEAR_ALL_SLOTS`, then each slot image/strength/mask with `keepSize: true`; missing files are
+listed in the status line. Guarded by `isRestoringWorkflow`; the Save overwrite target is set only
+when the restore actually runs.
 
 ## API endpoints
 | Method | Path | Notes |
@@ -83,10 +123,14 @@ Actions: `ADD_REF_SLOT` · `REMOVE_REF_SLOT` · `SET_SLOT_MASK` · `CLEAR_SLOT_M
 | POST | `/api/batch/generate` | SSE, folder of images; yields `batch_progress` |
 | POST | `/api/upload` | Temp image → `{id, url}` |
 | GET | `/api/temp/{id}` | Serve temp file |
-| GET | `/api/outputs` | Recent outputs + sidecar data |
-| GET/POST | `/api/workflows` · `/api/workflows/{name}` · `/api/workflows/save` · `/api/workflows/import` | Workflow CRUD + ComfyUI import |
+| GET | `/api/outputs?limit=N` | `run_store.list_outputs`: newest first; item `name` = `<run>/outputs/<file>`, plus `run`, `file`, `seed`, run params |
+| GET | `/api/output/{path}` | Serve a file under the output dir (traversal → 400) |
+| DELETE | `/api/output/{path}` | Remove one output; the run's last one → run folder to macOS Trash |
+| GET | `/api/runs/{run}` | `run_store.load`, URLs under `/api/output/<run>/…`, `warnings` |
+| GET/POST | `/api/workflows` · `/api/workflows/{name}` · `/api/workflows/save` · `/api/workflows/import` | Saved workflows (v2 folders); save takes optional `overwrite` (folder name, 400 if outside `workflows/`) → `{status, name}`; ComfyUI import |
+| GET | `/api/workflow-assets/{name}/{path}` | Serve `refs/…` / `masks/…` of a saved workflow |
 | GET | `/api/lora/list` | `{files:[{name,path,model_type}]}`, `model_type` = `flux`/`zimage`/`unknown` |
-| POST | `/api/upscale/upload` · `/api/upscale/batch` · `/api/upscale/single` | Upscale |
+| POST | `/api/upscale/upload` · `/api/upscale/batch` · `/api/upscale/single` | Upscale; gallery `single` takes `<run>/outputs/<file>`, writes beside it and records it in the run |
 | GET | `/api/open-file-dialog` · `/api/open-folder-dialog` | macOS pickers → `{path, cancelled}` |
 | POST | `/api/logs/save` | Snapshot `logs/server.log` |
 | GET/POST | `/api/settings` | App settings (`app_settings.json`) |
@@ -102,7 +146,8 @@ Actions: `ADD_REF_SLOT` · `REMOVE_REF_SLOT` · `SET_SLOT_MASK` · `CLEAR_SLOT_M
 ### SSE events
 ```json
 {"type":"progress","message":"Step 5/20","step":5,"total":20}
-{"type":"image","url":"/api/output/foo.png","info":"Seed: 42 | Model: … | Mode: …"}
+{"type":"image","url":"/api/output/<run>/outputs/<file>","path":"<abs path>","info":"Seed: 42 | Model: … | Mode: …"}
+{"type":"video", …same keys…}
 {"type":"done"}  {"type":"error","message":"…"}
 {"type":"batch_progress","current":3,"total":12,"filename":"photo_003.jpg"}
 ```

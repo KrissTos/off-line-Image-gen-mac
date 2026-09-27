@@ -91,7 +91,7 @@ cd frontend && npm test        # mask editor pure-logic tests (node --test)
 ## 9. Frontend rules
 1. Tailwind tokens: `bg:#0a0a0a` · `surface:#141414` · `card:#1c1c1c` · `border:#2a2a2a` · `accent:#7c3aed` · `muted/label:#6b7280`.
 2. Never put `title` on a Gallery thumbnail's outer div (native tooltip).
-3. Declare every field Load Params restores in `OutputItem` (e.g. `repeat_count`).
+3. Restore goes through `workflowToParams()` (`src/workflow.ts`); a new `GenerateParams` field that should survive reload goes in its key lists.
 4. No UI test runner: verify pure-logic TS modules (`src/mask/*`) with `cd frontend && npm test` (node --test); verify UI in a real browser — claude-in-chrome is reliable for the mask editor, where agent-browser has frozen the tab on Invert/Grow after a polygon edit.
 5. Mask editor keys: Alt = subtract (SAM/box/brush/polygon-close), Shift+click = SAM refine last object.
 6. In claude-in-chrome UI checks, add ref slots by dispatching `dragover`+`drop` `DragEvent`s (a `DataTransfer` with `text/plain` = gallery image URL) on the "+ ref img" button — no file dialog needed.

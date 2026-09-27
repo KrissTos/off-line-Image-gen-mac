@@ -16,6 +16,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import shutil
 import signal
 import sys
@@ -26,6 +27,8 @@ import warnings
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+from core import run_store
 
 # ── Suppress semaphore-leak warning ───────────────────────────────────────────
 # The warning is emitted by Python's multiprocessing.resource_tracker *daemon*
@@ -290,6 +293,7 @@ class GenerateRequest(BaseModel):
     fast_preview:       bool  = False   # LTX-Video: single-pass distilled render (skips upsampler)
     mask_mode:          str   = "Crop & Composite (Fast)"
     outpaint_align:     str   = "center"
+    ref_slots:          list[dict] = Field(default_factory=list)  # [{imageId, maskId, strength}] — recorded in the run
 
 class BatchGenerateRequest(GenerateRequest):
     input_folder: str = ""  # local path to folder of images
@@ -329,6 +333,7 @@ class SaveWorkflowRequest(BaseModel):
     ref_slots:          list[dict] = []
     mask_mode:          str        = ""
     outpaint_align:     str        = ""
+    overwrite:          str | None = None   # existing folder name → rewrite in place
 
 
 class UpdateSettingsRequest(BaseModel):
@@ -357,6 +362,92 @@ def _output_dir() -> str:
         return settings.get("output_dir") or default
     except Exception:
         return default
+
+
+_SEED_RE = re.compile(r"Seed:\s*(\d+)")
+
+
+def _guarded_temp(file_id: str | None) -> Path | None:
+    """Existing file inside TEMP_DIR for a client-supplied id, else None."""
+    if not file_id:
+        return None
+    try:
+        p = (TEMP_DIR / file_id).resolve()
+    except OSError:
+        return None
+    return p if p.is_relative_to(TEMP_DIR.resolve()) and p.is_file() else None
+
+
+def _request_slots(req) -> list[dict]:
+    """Slots to record in the run: req.ref_slots when sent, else derived from input_image_ids
+    (the /generate skill's shape): slot 1 gets the mask and img_strength, others strength 1.0."""
+    if req.ref_slots:
+        raw = [(s.get("imageId"), s.get("maskId"), s.get("strength", 1.0)) for s in req.ref_slots]
+    else:
+        raw = [(fid, req.mask_image_id if i == 0 else None, req.img_strength if i == 0 else 1.0)
+               for i, fid in enumerate(req.input_image_ids)]
+    slots = []
+    for img_id, mask_id, strength in raw:
+        img = _guarded_temp(img_id)
+        if img is not None:
+            slots.append({"image_path": img, "mask_path": _guarded_temp(mask_id), "strength": float(strength)})
+    return slots
+
+
+def _record_output(run_dir: Path, event: dict, requested_seed: int) -> None:
+    """Rename a fresh output to the run naming rule, list it in workflow.json, point the event at it."""
+    src = Path(event.get("path") or "")
+    if not src.is_file():
+        return
+    m = _SEED_RE.search(event.get("info") or "")
+    seed = int(m.group(1)) if m else (requested_seed if requested_seed >= 0 else None)
+    dst = src
+    try:
+        target = run_store.output_filename(run_dir, seed, src.suffix.lower() or ".png")
+        src.rename(target)
+        dst = target
+        run_store.add_output(run_dir, dst, event["type"], seed=seed)
+    except Exception as e:
+        print(f"[run_store] could not record {src.name}: {e}")
+    event["path"] = str(dst)
+    event["url"]  = f"/api/output/{run_dir.name}/outputs/{dst.name}"
+
+
+_RUN_TASKS: set[asyncio.Task] = set()   # generations still running, possibly past their SSE client
+
+
+async def _run_events(run_dir: Path, params: dict, requested_seed: int):
+    """Generate into run_dir/outputs, yielding events with run paths. The generation runs in its
+    own task, so outputs finishing after the client disconnects (reload, Stop) are still recorded.
+    A run that produced nothing (stopped, failed) is moved to the Trash once generation has ended."""
+    params["output_dir"] = str(run_dir / "outputs")
+    queue: asyncio.Queue = asyncio.Queue()
+
+    async def drive():
+        produced = 0
+        try:
+            async for event in _mgr().generate(params):
+                if event.get("type") in ("image", "video"):
+                    _record_output(run_dir, event, requested_seed)
+                    produced += 1
+                queue.put_nowait(event)
+        except Exception as e:
+            queue.put_nowait(e)
+        finally:
+            if not produced:
+                try:
+                    run_store.trash(run_dir)
+                except Exception as e:
+                    print(f"[run_store] could not trash empty run {run_dir.name}: {e}")
+            queue.put_nowait(None)
+
+    task = asyncio.create_task(drive())
+    _RUN_TASKS.add(task)
+    task.add_done_callback(_RUN_TASKS.discard)
+    while (event := await queue.get()) is not None:
+        if isinstance(event, Exception):
+            raise event
+        yield event
 
 
 # ── Routes: Heartbeat ─────────────────────────────────────────────────────────
@@ -591,8 +682,9 @@ async def api_generate(req: GenerateRequest):
     """
     Server-Sent Events stream.  Each event is a JSON object:
       {"type": "progress", "message": "..."}
-      {"type": "image", "url": "/api/output/...", "info": "..."}
-      {"type": "video", "url": "/api/output/..."}
+      {"type": "image", "url": "/api/output/<run>/outputs/<file>", "path": "<abs path>", "info": "..."}
+      {"type": "video", "url": "/api/output/<run>/outputs/<file>", "path": "<abs path>", "info": "..."}
+    Each generation is saved as one run folder (core/run_store.py) under the output dir.
       {"type": "done"}
       {"type": "error", "message": "..."}
     """
@@ -619,68 +711,17 @@ async def api_generate(req: GenerateRequest):
     params = req.model_dump()
     params["input_images"] = input_images
     params["mask_image"]   = mask_image
-    params["output_dir"]   = req.output_dir or _output_dir()
+    base_dir = Path(req.output_dir or _output_dir())
+    slots    = _request_slots(req)
 
     async def event_stream():
-        import re as _re
         try:
-            async for event in _mgr().generate(params):
-                # Save sidecar JSON + companion folder for each output file
-                if event.get("type") in ("image", "video"):
-                    url = event.get("url", "")
-                    if url.startswith("/api/output/"):
-                        filename = url[len("/api/output/"):]
-                        out_path = Path(params["output_dir"]) / filename
-                        # Resolve actual seed from the status string embedded in info
-                        _sm = _re.search(r"Seed:\s*(\d+)", event.get("info", ""))
-                        actual_seed = int(_sm.group(1)) if _sm else req.seed
-                        # Full params — everything needed to reproduce this generation
-                        full_params = {
-                            "prompt":             req.prompt,
-                            "model_choice":       req.model_choice,
-                            "model_source":       req.model_source,
-                            "width":              req.width,
-                            "height":             req.height,
-                            "steps":              req.steps,
-                            "guidance":           req.guidance,
-                            "seed":               actual_seed,
-                            "img_strength":       req.img_strength,
-                            "mask_mode":          req.mask_mode,
-                            "outpaint_align":     req.outpaint_align,
-                            "repeat_count":       req.repeat_count,
-                            "lora_files":         req.lora_files,
-                            "upscale_enabled":    req.upscale_enabled,
-                            "upscale_model_path": req.upscale_model_path,
-                            "num_frames":         req.num_frames,
-                            "fps":                req.fps,
-                            "fast_preview":       req.fast_preview,
-                            "device":             req.device,
-                            "ref_image_count":    len(req.input_image_ids),
-                            "has_mask":           bool(req.mask_image_id),
-                        }
-                        try:
-                            # Enriched sidecar JSON (gallery reads this)
-                            out_path.with_suffix(".json").write_text(
-                                json.dumps(full_params, indent=2)
-                            )
-                            # Companion folder with refs + mask when present
-                            has_refs = bool(req.input_image_ids or req.mask_image_id)
-                            if has_refs:
-                                companion = out_path.parent / out_path.stem
-                                companion.mkdir(exist_ok=True)
-                                (companion / "params.json").write_text(
-                                    json.dumps(full_params, indent=2)
-                                )
-                                for i, fid in enumerate(req.input_image_ids):
-                                    src = _temp_path(fid)
-                                    if src.exists():
-                                        shutil.copy2(src, companion / f"ref_slot_{i + 1}.png")
-                                if req.mask_image_id:
-                                    src = _temp_path(req.mask_image_id)
-                                    if src.exists():
-                                        shutil.copy2(src, companion / "mask.png")
-                        except Exception:
-                            pass  # non-critical
+            run_dir = run_store.create_run(base_dir, req.model_dump(), slots)
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'error', 'message': f'Could not create run folder: {e}'})}\n\n"
+            return
+        try:
+            async for event in _run_events(run_dir, params, req.seed):
                 yield f"data: {json.dumps(event)}\n\n"
             yield f"data: {json.dumps({'type': 'done'})}\n\n"
         except Exception as e:
@@ -712,64 +753,56 @@ async def api_serve_temp(file_id: str):
     return FileResponse(str(p))
 
 
+def _output_path(rel: str) -> Path:
+    p = run_store.safe_join(Path(_output_dir()), rel)
+    if p is None:
+        raise HTTPException(400, "Invalid path")
+    return p
+
+
 @app.delete("/api/output/{filename:path}")
-async def api_delete_output(filename: str):
-    """Delete an output file, its sidecar JSON, and companion refs folder."""
-    p = Path(_output_dir()) / filename
-    if not p.exists():
+def api_delete_output(filename: str):
+    """Delete one output. Inside a run: drop it from workflow.json; the last one trashes the run."""
+    base = Path(_output_dir()).resolve()
+    p = _output_path(filename)
+    if not p.is_file():
         raise HTTPException(404, detail="File not found")
-    p.unlink()
-    sidecar = p.with_suffix(".json")
-    if sidecar.exists():
-        sidecar.unlink()
-    companion = p.parent / p.stem
-    if companion.is_dir():
-        shutil.rmtree(companion, ignore_errors=True)
+    parts = p.relative_to(base).parts
+    run_dir = base / parts[0]
+    if len(parts) > 1 and (run_dir / "workflow.json").is_file():
+        if run_store.remove_output(run_dir, "/".join(parts[1:])):
+            run_store.trash(run_dir)
+    else:
+        run_store.trash(p)          # pre-migration flat file
     return {"deleted": filename}
 
 
 @app.get("/api/output/{filename:path}")
-async def api_serve_output(filename: str):
-    p = Path(_output_dir()) / filename
-    if not p.exists():
+def api_serve_output(filename: str):
+    p = _output_path(filename)
+    if not p.is_file():
         raise HTTPException(404)
     return FileResponse(str(p))
 
 
-def _read_sidecar(f: Path) -> dict:
-    """Read .json sidecar saved alongside an output file (prompt, model, etc.)."""
-    s = f.with_suffix(".json")
-    if s.exists():
-        try:
-            return json.loads(s.read_text())
-        except Exception:
-            pass
-    return {}
-
-
 @app.get("/api/outputs")
-async def api_list_outputs(limit: int = 20):
-    """List most recent output images/videos."""
-    out = Path(_output_dir())
-    if not out.exists():
-        return {"files": []}
-    files = sorted(
-        [f for f in out.iterdir() if f.suffix.lower() in {".png", ".jpg", ".mp4", ".webm"}],
-        key=lambda f: f.stat().st_mtime,
-        reverse=True,
-    )[:limit]
-    result = []
-    for f in files:
-        meta = _read_sidecar(f)
-        entry: dict = {
-            "name":  f.name,
-            "url":   f"/api/output/{f.name}",
-            "mtime": f.stat().st_mtime,
-            "kind":  "video" if f.suffix.lower() in {".mp4", ".webm", ".mov"} else "image",
-        }
-        entry.update(meta)   # spread all sidecar fields (prompt, model_choice, steps, lora_files, …)
-        result.append(entry)
-    return {"files": result}
+def api_list_outputs(limit: int = 20):
+    """Most recent outputs across all run folders."""
+    return {"files": run_store.list_outputs(Path(_output_dir()), limit)}
+
+
+@app.get("/api/runs/{run:path}")
+def api_load_run(run: str):
+    base = Path(_output_dir())
+    run_dir = run_store.safe_join(base, run)
+    if run_dir is None or run_dir == base.resolve():
+        raise HTTPException(400, "Invalid run name")
+    if not (run_dir / "workflow.json").is_file():
+        raise HTTPException(404, f"Run not found: {run}")
+    try:
+        return run_store.load(run_dir, f"/api/output/{run}")
+    except ValueError as e:
+        raise HTTPException(500, f"Failed to read workflow.json: {e}")
 
 
 # ── Routes: Workflows ─────────────────────────────────────────────────────────
@@ -818,155 +851,35 @@ async def api_open_workflow_folder_dialog():
 
 
 @app.post("/api/workflows/save")
-async def api_save_workflow(req: SaveWorkflowRequest):
+def api_save_workflow(req: SaveWorkflowRequest):
     a = _app()
-    Path(a.WORKFLOWS_DIR).mkdir(parents=True, exist_ok=True)
-    date_str    = datetime.now().strftime("%y-%m-%d")
-    custom      = (req.name or "").strip().replace(" ", "_")
-    folder_name = f"{date_str}_{custom}" if custom else date_str
-    wf_dir      = Path(a.WORKFLOWS_DIR) / folder_name
-    wf_dir.mkdir(parents=True, exist_ok=True)
-
-    saved_slots = []
-    for idx, slot in enumerate(req.ref_slots, start=1):
-        img_id = slot.get("imageId") or ""
-        if not img_id:
-            continue
-        img_src = TEMP_DIR / img_id
-        try:
-            img_src = img_src.resolve()
-        except OSError:
-            continue
-        if not img_src.is_relative_to(TEMP_DIR.resolve()):
-            continue
-        if not img_src.exists():
-            continue
-        img_dst = wf_dir / f"slot_{idx}_image.png"
-        shutil.copy2(img_src, img_dst)
-        mask_fname = None
-        mask_id = slot.get("maskId") or ""
-        if mask_id:
-            mask_src = TEMP_DIR / mask_id
-            try:
-                mask_src = mask_src.resolve()
-            except OSError:
-                pass
-            else:
-                if mask_src.is_relative_to(TEMP_DIR.resolve()) and mask_src.exists():
-                    mask_dst = wf_dir / f"slot_{idx}_mask.png"
-                    shutil.copy2(mask_src, mask_dst)
-                    mask_fname = f"slot_{idx}_mask.png"
-        saved_slots.append({
-            "image":    f"slot_{idx}_image.png",
-            "mask":     mask_fname,
-            "strength": float(slot.get("strength", 1.0)),
-        })
-
-    data = {
-        "name":               req.name or folder_name,
-        "timestamp":          datetime.now().strftime("%Y%m%d_%H%M%S"),
-        "prompt":             req.prompt,
-        "height":             req.height,
-        "width":              req.width,
-        "steps":              req.steps,
-        "seed":               req.seed,
-        "guidance":           req.guidance,
-        "device":             req.device,
-        "model_choice":       req.model_choice,
-        "model_source":       req.model_source,
-        "lora_files":         req.lora_files,
-        "lora_file":          req.lora_file,   # legacy fallback
-        "lora_strength":      req.lora_strength,
-        "img_strength":       req.img_strength,
-        "repeat_count":       req.repeat_count,
-        "upscale_enabled":    req.upscale_enabled,
-        "upscale_model_path": req.upscale_model_path,
-        "num_frames":         req.num_frames,
-        "fps":                req.fps,
-        "ref_slots":          saved_slots,
-        "mask_mode":          req.mask_mode,
-        "outpaint_align":     req.outpaint_align,
-    }
-    with open(wf_dir / "workflow.json", "w") as f:
-        json.dump(data, f, indent=2)
-
-    return {"status": f"✓ Saved: {folder_name}", "name": folder_name}
+    slots = []
+    for s in req.ref_slots:
+        img = _guarded_temp(s.get("imageId"))
+        if img is not None:
+            slots.append({"image_path": img, "mask_path": _guarded_temp(s.get("maskId")),
+                          "strength": float(s.get("strength", 1.0))})
+    try:
+        name = run_store.save_workflow(Path(a.WORKFLOWS_DIR), req.model_dump(), slots, req.name,
+                                       overwrite=req.overwrite)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"status": f"✓ Saved: {name}", "name": name}
 
 
 @app.get("/api/workflows/{name:path}")
-async def api_load_workflow(name: str):
-    a         = _app()
-    wf_dir    = Path(a.WORKFLOWS_DIR) / name
-    json_path = wf_dir / "workflow.json"
-    # Guard: ensure name doesn't escape WORKFLOWS_DIR
-    wf_base = Path(a.WORKFLOWS_DIR).resolve()
-    try:
-        wf_resolved = wf_dir.resolve()
-    except OSError:
+def api_load_workflow(name: str):
+    a = _app()
+    base = Path(a.WORKFLOWS_DIR)
+    wf_dir = run_store.safe_join(base, name)
+    if wf_dir is None or wf_dir == base.resolve():
         raise HTTPException(400, "Invalid workflow name")
-    if not wf_resolved.is_relative_to(wf_base):
-        raise HTTPException(400, "Invalid workflow name")
-    if not json_path.exists():
+    if not (wf_dir / "workflow.json").is_file():
         raise HTTPException(404, f"Workflow not found: {name}")
     try:
-        result = a.load_workflow(name)
-        # result is an 18-tuple matching _wf_load_outputs; last element is status
-        keys = ["prompt", "height", "width", "steps", "seed", "guidance",
-                "device", "model_choice", "model_source", "lora_strength",
-                "img_strength", "repeat_count", "upscale_enabled",
-                "upscale_model_path", "num_frames", "fps", "input_images", "status"]
-        d = dict(zip(keys, result))
-    except Exception as e:
-        raise HTTPException(500, str(e))
-    d.pop("input_images", None)
-
-    try:
-        with open(json_path) as fh:
-            raw = json.load(fh)
-    except Exception as e:
+        return run_store.load(wf_dir, f"/api/workflow-assets/{name}")
+    except ValueError as e:
         raise HTTPException(500, f"Failed to read workflow.json: {e}")
-
-    ref_slots_out = []
-    wf_dir_resolved = wf_dir.resolve()
-    for slot in raw.get("ref_slots", []):
-        img_file = slot.get("image")
-        if not img_file:
-            continue
-        # Guard against traversal in stored filenames
-        try:
-            img_resolved = (wf_dir / img_file).resolve()
-        except OSError:
-            continue
-        if not img_resolved.is_relative_to(wf_dir_resolved):
-            continue
-        if not img_resolved.exists():
-            continue
-        mask_name = slot.get("mask")
-        mask_url = None
-        if mask_name:
-            try:
-                mask_resolved = (wf_dir / mask_name).resolve()
-            except OSError:
-                mask_resolved = None
-            if mask_resolved and mask_resolved.is_relative_to(wf_dir_resolved) and mask_resolved.exists():
-                mask_url = f"/api/workflow-assets/{name}/{mask_name}"
-        ref_slots_out.append({
-            "imageUrl":  f"/api/workflow-assets/{name}/{img_file}",
-            "maskUrl":   mask_url,
-            "strength":  slot.get("strength", 1.0),
-        })
-
-    d["ref_slots"]      = ref_slots_out
-    d["mask_mode"]      = raw.get("mask_mode", "")
-    d["outpaint_align"] = raw.get("outpaint_align", "")
-    # Multi-LoRA: prefer lora_files array; fall back to legacy lora_file/lora_strength
-    if raw.get("lora_files"):
-        d["lora_files"] = raw["lora_files"]
-    elif raw.get("lora_file"):
-        d["lora_files"] = [{"path": raw["lora_file"], "strength": raw.get("lora_strength", 1.0)}]
-    else:
-        d["lora_files"] = []
-    return d
 
 
 @app.post("/api/workflows/import")
@@ -1143,7 +1056,7 @@ class SingleUpscaleRequest(BaseModel):
 
 @app.post("/api/upscale/single")
 async def api_upscale_single(req: SingleUpscaleRequest):
-    """Upscale one image and save next to the original as <stem>_<W>x<H><ext>."""
+    """Upscale one image and save next to the original as <stem>_<W>x<H><ext> (recorded in its run)."""
     from PIL import Image as PILImage
 
     if not req.model_path:
@@ -1153,7 +1066,7 @@ async def api_upscale_single(req: SingleUpscaleRequest):
     if req.source == "gallery":
         if not req.filename:
             raise HTTPException(400, "filename required for gallery source")
-        src_path = Path(_output_dir()) / Path(req.filename).name
+        src_path = _output_path(req.filename)
     elif req.source == "path":
         if not req.file_path:
             raise HTTPException(400, "file_path required for path source")
@@ -1195,10 +1108,17 @@ async def api_upscale_single(req: SingleUpscaleRequest):
     except Exception as e:
         raise HTTPException(500, f"Upscale failed: {e}")
 
+    run_dir = Path(saved_path).parent.parent
+    if Path(saved_path).parent.name == "outputs" and (run_dir / "workflow.json").is_file():
+        try:
+            run_store.add_output(run_dir, saved_path, "image", upscaled_from=f"outputs/{src_path.name}")
+        except Exception as e:
+            print(f"[run_store] could not record upscale {out_name}: {e}")
+
     # Build URL if saved inside output dir
     url: str | None = None
     try:
-        rel = Path(saved_path).relative_to(Path(_output_dir()))
+        rel = Path(saved_path).resolve().relative_to(Path(_output_dir()).resolve())
         url = f"/api/output/{rel}"
     except ValueError:
         pass
@@ -1705,14 +1625,14 @@ async def api_save_log():
 
 # ── Routes: Workflow assets ───────────────────────────────────────────────────
 
-@app.get("/api/workflow-assets/{name}/{filename}")
+@app.get("/api/workflow-assets/{name}/{filename:path}")
 async def api_workflow_asset(name: str, filename: str):
     a    = _app()
     base = Path(a.WORKFLOWS_DIR).resolve()
     path = (base / name / filename).resolve()
     if not path.is_relative_to(base):
         raise HTTPException(400, "Invalid path")
-    if not path.exists():
+    if not path.is_file():
         raise HTTPException(404, "Asset not found")
     return FileResponse(str(path))
 
@@ -1744,6 +1664,7 @@ async def api_batch_generate(req: BatchGenerateRequest):
             yield f"data: {json.dumps({'type': 'error', 'message': 'No images found in folder'})}\n\n"
             return
 
+        base_dir = Path(req.output_dir or _output_dir())
         total = len(images)
         processed = 0
         mgr.is_batch_running = True
@@ -1761,15 +1682,18 @@ async def api_batch_generate(req: BatchGenerateRequest):
                     yield f"data: {json.dumps({'type': 'error', 'message': f'Skipping {img_path.name}: {e}'})}\n\n"
                     continue
 
-                # Build params
                 params = req.model_dump()
                 params["input_images"] = [pil_image]
                 params["mask_image"]   = None
-                params["output_dir"]   = req.output_dir or _output_dir()
-
-                # Generate
                 try:
-                    async for event in mgr.generate(params):
+                    run_dir = run_store.create_run(base_dir, params, [
+                        {"image_path": img_path, "mask_path": None, "strength": req.img_strength}])
+                except Exception as e:
+                    yield f"data: {json.dumps({'type': 'error', 'message': f'Could not create run folder for {img_path.name}: {e}'})}\n\n"
+                    continue
+
+                try:
+                    async for event in _run_events(run_dir, params, req.seed):
                         yield f"data: {json.dumps(event)}\n\n"
                     processed += 1
                 except Exception as e:
