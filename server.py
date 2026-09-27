@@ -734,64 +734,56 @@ async def api_serve_temp(file_id: str):
     return FileResponse(str(p))
 
 
+def _output_path(rel: str) -> Path:
+    p = run_store.safe_join(Path(_output_dir()), rel)
+    if p is None:
+        raise HTTPException(400, "Invalid path")
+    return p
+
+
 @app.delete("/api/output/{filename:path}")
-async def api_delete_output(filename: str):
-    """Delete an output file, its sidecar JSON, and companion refs folder."""
-    p = Path(_output_dir()) / filename
-    if not p.exists():
+def api_delete_output(filename: str):
+    """Delete one output. Inside a run: drop it from workflow.json; the last one trashes the run."""
+    base = Path(_output_dir()).resolve()
+    p = _output_path(filename)
+    if not p.is_file():
         raise HTTPException(404, detail="File not found")
-    p.unlink()
-    sidecar = p.with_suffix(".json")
-    if sidecar.exists():
-        sidecar.unlink()
-    companion = p.parent / p.stem
-    if companion.is_dir():
-        shutil.rmtree(companion, ignore_errors=True)
+    parts = p.relative_to(base).parts
+    run_dir = base / parts[0]
+    if len(parts) > 1 and (run_dir / "workflow.json").is_file():
+        if run_store.remove_output(run_dir, "/".join(parts[1:])):
+            run_store.trash(run_dir)
+    else:
+        run_store.trash(p)          # pre-migration flat file
     return {"deleted": filename}
 
 
 @app.get("/api/output/{filename:path}")
-async def api_serve_output(filename: str):
-    p = Path(_output_dir()) / filename
-    if not p.exists():
+def api_serve_output(filename: str):
+    p = _output_path(filename)
+    if not p.is_file():
         raise HTTPException(404)
     return FileResponse(str(p))
 
 
-def _read_sidecar(f: Path) -> dict:
-    """Read .json sidecar saved alongside an output file (prompt, model, etc.)."""
-    s = f.with_suffix(".json")
-    if s.exists():
-        try:
-            return json.loads(s.read_text())
-        except Exception:
-            pass
-    return {}
-
-
 @app.get("/api/outputs")
-async def api_list_outputs(limit: int = 20):
-    """List most recent output images/videos."""
-    out = Path(_output_dir())
-    if not out.exists():
-        return {"files": []}
-    files = sorted(
-        [f for f in out.iterdir() if f.suffix.lower() in {".png", ".jpg", ".mp4", ".webm"}],
-        key=lambda f: f.stat().st_mtime,
-        reverse=True,
-    )[:limit]
-    result = []
-    for f in files:
-        meta = _read_sidecar(f)
-        entry: dict = {
-            "name":  f.name,
-            "url":   f"/api/output/{f.name}",
-            "mtime": f.stat().st_mtime,
-            "kind":  "video" if f.suffix.lower() in {".mp4", ".webm", ".mov"} else "image",
-        }
-        entry.update(meta)   # spread all sidecar fields (prompt, model_choice, steps, lora_files, …)
-        result.append(entry)
-    return {"files": result}
+def api_list_outputs(limit: int = 20):
+    """Most recent outputs across all run folders."""
+    return {"files": run_store.list_outputs(Path(_output_dir()), limit)}
+
+
+@app.get("/api/runs/{run:path}")
+def api_load_run(run: str):
+    base = Path(_output_dir())
+    run_dir = run_store.safe_join(base, run)
+    if run_dir is None or run_dir == base.resolve():
+        raise HTTPException(400, "Invalid run name")
+    if not (run_dir / "workflow.json").is_file():
+        raise HTTPException(404, f"Run not found: {run}")
+    try:
+        return run_store.load(run_dir, f"/api/output/{run}")
+    except ValueError as e:
+        raise HTTPException(500, f"Failed to read workflow.json: {e}")
 
 
 # ── Routes: Workflows ─────────────────────────────────────────────────────────
@@ -1165,7 +1157,7 @@ class SingleUpscaleRequest(BaseModel):
 
 @app.post("/api/upscale/single")
 async def api_upscale_single(req: SingleUpscaleRequest):
-    """Upscale one image and save next to the original as <stem>_<W>x<H><ext>."""
+    """Upscale one image and save next to the original as <stem>_<W>x<H><ext> (recorded in its run)."""
     from PIL import Image as PILImage
 
     if not req.model_path:
@@ -1175,7 +1167,7 @@ async def api_upscale_single(req: SingleUpscaleRequest):
     if req.source == "gallery":
         if not req.filename:
             raise HTTPException(400, "filename required for gallery source")
-        src_path = Path(_output_dir()) / Path(req.filename).name
+        src_path = _output_path(req.filename)
     elif req.source == "path":
         if not req.file_path:
             raise HTTPException(400, "file_path required for path source")
@@ -1217,10 +1209,17 @@ async def api_upscale_single(req: SingleUpscaleRequest):
     except Exception as e:
         raise HTTPException(500, f"Upscale failed: {e}")
 
+    run_dir = Path(saved_path).parent.parent
+    if Path(saved_path).parent.name == "outputs" and (run_dir / "workflow.json").is_file():
+        try:
+            run_store.add_output(run_dir, saved_path, "image", upscaled_from=f"outputs/{src_path.name}")
+        except Exception as e:
+            print(f"[run_store] could not record upscale {out_name}: {e}")
+
     # Build URL if saved inside output dir
     url: str | None = None
     try:
-        rel = Path(saved_path).relative_to(Path(_output_dir()))
+        rel = Path(saved_path).resolve().relative_to(Path(_output_dir()).resolve())
         url = f"/api/output/{rel}"
     except ValueError:
         pass
