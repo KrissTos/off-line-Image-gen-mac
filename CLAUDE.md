@@ -39,6 +39,7 @@ FastAPI backend + React frontend. UI brand "Local AI Image Gen".
 venv/bin/python server.py --port 7860 --no-auto-shutdown
 cd frontend && npm run build   # after any frontend change
 venv/bin/python -m pytest -q   # full suite
+cd frontend && npm test        # mask editor pure-logic tests (node --test)
 ```
 1. Server exits 60 s after the last browser ping; use `--no-auto-shutdown` for headless/API testing.
 2. Restart the server after backend changes (no auto-reload).
@@ -89,3 +90,4 @@ venv/bin/python -m pytest -q   # full suite
 2. Never put `title` on a Gallery thumbnail's outer div (native tooltip).
 3. Declare every field Load Params restores in `OutputItem` (e.g. `repeat_count`).
 4. No frontend test runner: verify pure TS modules with `node --experimental-strip-types`, UI via agent-browser.
+5. Mask editor keys: Alt = subtract (SAM/box/brush/polygon-close), Shift+click = SAM refine last object; frontend tests `npm test`.

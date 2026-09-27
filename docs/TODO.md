@@ -9,3 +9,5 @@
 - Guidance slider is hidden: unhide when a non-distilled full-precision model is added.
 - `frontend/src/App.tsx:18` fails eslint `react-refresh/only-export-components` (pre-existing).
 - `.tmp_uploads/` grows without cleanup.
+- Text-to-mask (SAM 3 / Grounded-SAM) = phase 2.
+- `/generate` local provider (Task B, `~/.claude/skills/generate/`): see `docs/handoffs/2026-09-27-sam-click-mask-and-generate-local-provider.md`.

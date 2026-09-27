@@ -3,6 +3,7 @@
 History and "why we did X". Operational rules live in `CLAUDE.md`; reference in `docs/`.
 
 ## 2026-09-27
+- SAM click-to-mask editor replaces the rectangle-drag mask modal: `core/segment.py` (`facebook/sam-vit-large`, MPS, embedding LRU cache) + `POST /api/segment/prepare`/`POST /api/segment`; full-screen `MaskEditor.tsx` with SAM point/box (add+subtract), brush, polygon, invert, grow/shrink, undo/redo. Verified on the real Bagno 1 wall/floor job: rebuilding the hand-made mask in the UI (SAM objects + plaster polygon + invert + grow 3) reached IoU 0.911 against the original script's mask, and a 3-ref FLUX 9B masked generation logged `img2img (3 ref) (masked-composite)`.
 - FLUX 4B outpaint LoRA path (auto green pad + `fal/flux-2-klein-4B-outpaint-lora`); blur pad on 9B often just copied the blur.
 - Three LoRA bugs: BFL-native FLUX.2 LoRAs never loaded (diffusers converter hardcodes FLUX.2-dev 8/48 blocks); load failures were swallowed and the result info still listed the LoRA; removing all LoRAs didn't unload them.
 - Composite seam: soft mask blur reached into the pad → pad fill bled in as a line. Now max(hard, blurred).

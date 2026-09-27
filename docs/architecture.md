@@ -40,12 +40,14 @@ Vite + React + TypeScript + Tailwind v3 → `frontend/dist/`. Tab title `Local A
 | `src/types.ts` | `AppStatus`, `GenerateParams`, `SSEEvent`, `OutputItem`, `RefImageSlot`, `Workflow` |
 | `src/api.ts` | Typed fetch helpers: `streamGenerate`, `streamBatchGenerate`, `uploadImage`, `uploadFromUrl`, `streamBatchUpscale`, `eraseDetect`, `eraseRemove`, … |
 | `src/canvasSize.ts` | `canvasForRef()` / `sizeFamily()` — output size per model family |
+| `src/mask/maskOps.ts`, `history.ts`, `viewMath.ts` | Pure mask editor logic: combine/invert/grow/shrink ops, undo/redo history, screen↔image view math. Node-tested (`npm test`), no DOM. |
 
 Center layout: Canvas (flex 5) / RefImagesRow (flex 4) / Gallery (flex 1) → 50/40/10 % via `style={{ flex: 'N 0 0%' }}`.
 
 ### Components
 - `Sidebar.tsx` (`w-[576px]`) — Accordions: Model, Parameters, Output Size, LoRA, Upscale (single + batch), Batch Img2Img, Depth Map, Watermark Remover, Video (LTX only), Workflows. `Accordion` renders `{open && children}` (children unmount when closed).
-- `RefImagesRow.tsx` — horizontal slot strip: 80×80 thumbnail + role badge, 56×56 mask target (pencil → mask editor), per-slot strength slider. Mask editor = rectangle drag on slot #1's image, saved at its natural size; window-level mouse listeners; Esc/Enter.
+- `RefImagesRow.tsx` — horizontal slot strip: 80×80 thumbnail + role badge, 56×56 mask target (pencil → mask editor), per-slot strength slider. Pencil opens `MaskEditor.tsx` on slot #1's image.
+- `MaskEditor.tsx` — full-screen SAM click-to-mask editor (replaces the old rectangle-drag modal). SAM point/box add+subtract, brush, polygon, invert, grow/shrink, undo/redo; keys S/D/B/P select tools, Alt = subtract everywhere, Shift+click = refine last SAM object, wheel = zoom at cursor, Space+drag = pan, Enter = apply (or close polygon), Esc = cancel. Saved mask → `onApply(File)` → existing `uploadImage` → `SET_SLOT_MASK` path, unchanged downstream.
 - `EraseEditorModal.tsx` — watermark mask editor. Offscreen full-res `maskRef` + `displayRef` (≤760×560). Rectangle + brush (Shift = erase), 45% red overlay. Confirm → `toBlob` → `POST /api/upload` → `onConfirm(maskId, maskUrl)`; upload errors inline.
 - `HelpTip.tsx` — ⓘ tooltip, `position:fixed` + `getBoundingClientRect()`, `pointer-events-none`, `z-50`.
 - `Canvas.tsx` — result image/video + generating overlay (spinner + %).
@@ -93,6 +95,8 @@ Actions: `ADD_REF_SLOT` · `REMOVE_REF_SLOT` · `SET_SLOT_MASK` · `CLEAR_SLOT_M
 | POST | `/api/depth-map` | `{filename, model_repo}`, `ThreadPoolExecutor(1)` |
 | POST | `/api/erase/detect` | FFT heuristic → `{image_id, image_url, mask_id, mask_url}` |
 | POST | `/api/erase` | LaMa fill → `{url, filename}`; `_erased_2.png` collision suffix |
+| POST | `/api/segment/prepare` | `{image_id}` → `{ready, ms}`; embeds the image once (SAM encoder), lazy model load |
+| POST | `/api/segment` | `{image_id, points, box}` → PNG mask (255=object); serialized on a dedicated 1-thread executor |
 | GET | `/api/model-sources/discover` | Scan HF orgs + `mps` tag, merge new → `{added, sources}`; base entries filtered to `app.KNOWN_MODELS` |
 
 ### SSE events
