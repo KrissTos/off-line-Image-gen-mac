@@ -1058,6 +1058,14 @@ def get_mask_bbox(mask_pil: Image.Image, padding: int = 32) -> tuple | None:
     return (x0, y0, x1, y1)
 
 
+def crop_flux_refs(refs: list | None, ref_crop: Image.Image) -> list:
+    """
+    Mask crop mode: slot #1 (the image being edited) becomes *ref_crop*;
+    extra slots (material/style refs) are kept, or the model never sees them.
+    """
+    return [ref_crop] + list(refs or [])[1:]
+
+
 def apply_mask_composite(
     original: Image.Image,
     generated: Image.Image,
@@ -1299,7 +1307,7 @@ def generate_image(
                 # Replace preprocessed refs with the cropped region
                 if current_model in ("flux2-klein-int8", "flux2-klein-sdnq",
                                      "flux2-klein-9b-sdnq"):
-                    preprocessed_flux_refs = [ref_crop]
+                    preprocessed_flux_refs = crop_flux_refs(preprocessed_flux_refs, ref_crop)
                 elif current_model == "zimage-full":
                     preprocessed_zimage_ref = ref_crop
 
