@@ -16,6 +16,7 @@ History and "why we did X". Operational rules live in `CLAUDE.md`; reference in 
 - LTX stretched video: output dims came from the size preset, never the ref aspect (768×1365 photo + Square 512 = stretched).
 - Native `.githooks/pre-commit` pytest gate added.
 - `POST /api/workflows/save` returned 500 on every save: `timestamp` was an undefined name (only `api_save_log` defined one), so no workflow had saved in the current `yy-mm-dd_name` format. Covered by `tests/test_workflow_save.py` (save + load round trip with mask).
+- Slot masks are made in the editor only: the empty mask box opens MaskEditor ("draw mask"), a filled one reopens it; the per-slot file upload and the hover pencil are gone. External PNG masks go through the editor's Import… so they get reviewed. Slot #2+ mask boxes explain they only feed Iterate Masks and show "unused" in other modes (Generate sends only slot #1's mask).
 - UI: gallery strip/grid toggle (grid scrolls vertically, choice in `localStorage`); "+ ref img" drop zone after the last slot; mask editor 96 px column with zoom −/+/Fit/100% and +/− keys, brush size slider, `HelpTip` hover popups on every tool.
 
 ## 2026-08-31

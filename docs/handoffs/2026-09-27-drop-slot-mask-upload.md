@@ -1,7 +1,7 @@
 # Handoff: drop the slot mask file upload, make the in-app editor the entry point
 
 Date: 2026-09-27 · Start with `cd ~/Projects/off-line-Image-gen-mac && claude`
-Status: proposal agreed in principle, **awaiting Cris's go on steps 1–4**. No code changed yet.
+Status: **implemented 2026-09-27** — pencil dropped, Import mask… added inside MaskEditor, #2+ hint added.
 
 ## Why
 

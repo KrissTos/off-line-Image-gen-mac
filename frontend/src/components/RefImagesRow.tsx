@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react'
-import { UploadCloud, X, Plus, Pencil } from 'lucide-react'
+import { X, Plus, Pencil } from 'lucide-react'
 import type { RefImageSlot, GenerateParams } from '../types'
 import { uploadFromUrl } from '../api'
 import HelpTip from './HelpTip'
@@ -12,16 +12,54 @@ interface SlotCardProps {
   isBase:           boolean           // true for slot #1
   thumbSize:        number
   onRemove:         () => void
-  onUploadMask:     (f: File) => void
+  maskIgnored:      boolean           // slot #2+ mask outside Inpainting Pipeline mode → not sent
   onClearMask:      () => void
   onDrawMask:       () => void
   onStrengthChange: (v: number) => void
   onDimsLoaded?:    (w: number, h: number) => void
 }
 
-function SlotCard({ slot, isBase, thumbSize, onRemove, onUploadMask, onClearMask, onDrawMask, onStrengthChange, onDimsLoaded }: SlotCardProps) {
-  const maskRef  = useRef<HTMLInputElement>(null)
+const EXTRA_MASK_HINT = 'Masks on slot #2+ are only used by Iterate Masks (mask mode "Inpainting Pipeline"). Normal Generate uses only the base image mask.'
+
+function SlotCard({ slot, isBase, thumbSize, onRemove, maskIgnored, onClearMask, onDrawMask, onStrengthChange, onDimsLoaded }: SlotCardProps) {
   const maskSize = Math.round(thumbSize * 0.7)
+
+  const maskBox = (
+    <div
+      className="relative rounded-lg overflow-hidden border border-dashed border-border/60 group"
+      style={{ width: maskSize, height: maskSize }}
+    >
+      {slot.maskUrl ? (
+        <>
+          <button onClick={onDrawMask} aria-label="Edit mask" className="w-full h-full">
+            <img src={slot.maskUrl} alt="mask" className="w-full h-full object-cover hover:opacity-80 transition-opacity" />
+          </button>
+          <div className={`absolute inset-x-0 top-0 text-[8px] text-center bg-black/50 py-0.5 pointer-events-none
+                           ${maskIgnored ? 'text-amber-300' : 'text-muted'}`}>
+            {maskIgnored ? 'unused' : 'mask'}
+          </div>
+          <button
+            onClick={onClearMask}
+            aria-label="Remove mask"
+            className="absolute top-1 right-1 bg-black/70 hover:bg-red-600 rounded-full p-0.5
+                       opacity-0 group-hover:opacity-100 transition-all"
+          >
+            <X size={8} aria-hidden="true" />
+          </button>
+        </>
+      ) : (
+        <button
+          onClick={onDrawMask}
+          aria-label="Draw mask"
+          className="flex flex-col items-center justify-center gap-0.5 w-full h-full
+                     text-muted hover:text-white transition-colors"
+        >
+          <Pencil size={12} aria-hidden="true" />
+          <span className="text-[8px] leading-none">draw mask</span>
+        </button>
+      )}
+    </div>
+  )
 
   return (
     <div className="shrink-0 flex flex-col gap-1">
@@ -58,65 +96,10 @@ function SlotCard({ slot, isBase, thumbSize, onRemove, onUploadMask, onClearMask
           >
             <X size={10} aria-hidden="true" />
           </button>
-
-          {/* Draw mask button */}
-          <button
-            onClick={onDrawMask}
-            title="Draw mask by selecting a rectangle"
-            aria-label="Draw mask rectangle"
-            className="absolute bottom-1 right-1 bg-black/70 hover:bg-accent rounded-full p-0.5
-                       opacity-0 group-hover:opacity-100 transition-all"
-          >
-            <Pencil size={9} aria-hidden="true" />
-          </button>
         </div>
 
-        {/* Mask thumbnail or upload target */}
-        <div
-          className="relative rounded-lg overflow-hidden border border-dashed border-border/60 group"
-          style={{ width: maskSize, height: maskSize }}
-          title={slot.maskUrl ? 'Mask loaded — hover to clear' : 'Upload mask or draw rectangle on image'}
-        >
-          {slot.maskUrl ? (
-            <>
-              <img src={slot.maskUrl} alt="mask" className="w-full h-full object-cover" />
-              <div className="absolute inset-x-0 top-0 text-[8px] text-center bg-black/50 text-muted py-0.5">
-                mask
-              </div>
-              <button
-                onClick={onClearMask}
-                title="Remove mask"
-                aria-label="Remove mask"
-                className="absolute top-1 right-1 bg-black/70 hover:bg-red-600 rounded-full p-0.5
-                           opacity-0 group-hover:opacity-100 transition-all"
-              >
-                <X size={8} aria-hidden="true" />
-              </button>
-            </>
-          ) : (
-            <div className="w-full h-full flex flex-col items-center justify-center gap-0.5">
-              <button
-                onClick={() => maskRef.current?.click()}
-                title="Upload mask file"
-                className="flex flex-col items-center justify-center gap-0.5 w-full h-full
-                           text-muted hover:text-white transition-colors"
-              >
-                <UploadCloud size={12} />
-                <span className="text-[8px] leading-none">mask</span>
-              </button>
-            </div>
-          )}
-          <input
-            ref={maskRef}
-            type="file"
-            accept="image/*"
-            className="hidden"
-            onChange={e => {
-              if (e.target.files?.[0]) onUploadMask(e.target.files[0])
-              e.target.value = ''
-            }}
-          />
-        </div>
+        {/* Mask thumbnail (click to edit) or draw target */}
+        {isBase ? maskBox : <HelpTip text={EXTRA_MASK_HINT} position="bottom">{maskBox}</HelpTip>}
       </div>
 
       {/* Per-slot strength slider */}
@@ -214,7 +197,7 @@ export default function RefImagesRow({
               isBase={slot.slotId === 1}
               thumbSize={thumbSize}
               onRemove={() => onRemoveSlot(slot.slotId)}
-              onUploadMask={f => onUploadMask(slot.slotId, f)}
+              maskIgnored={slot.slotId !== 1 && maskMode !== 'Inpainting Pipeline (Quality)'}
               onClearMask={() => onClearMask(slot.slotId)}
               onDrawMask={() => setMaskEditorSlot(slot)}
               onStrengthChange={v => onSlotStrengthChange(slot.slotId, v)}

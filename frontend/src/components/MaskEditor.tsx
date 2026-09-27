@@ -256,6 +256,15 @@ export default function MaskEditor({ slot, baseImageId, baseImageUrl, onClose, o
 
   const act = useCallback((f: (m: Mask) => Mask) => { if (mask) commit(f(mask), mask) }, [mask, commit])
 
+  // Import a mask PNG (white = masked) as the new mask, scaled to the image; undoable.
+  const importRef = useRef<HTMLInputElement>(null)
+  const importMask = useCallback(async (file: File) => {
+    const before = maskRef.current
+    if (!before) return
+    try { commit(await blobToMask(file, before.w, before.h), maskRef.current ?? before) }
+    catch { alert('Could not read that image as a mask.') }
+  }, [commit])
+
   const maskCoverage = useMemo(() => (mask ? coverage(mask) : 0), [mask])
 
   // ── Pointer ──────────────────────────────────────────────────────────────────
@@ -455,6 +464,10 @@ export default function MaskEditor({ slot, baseImageId, baseImageUrl, onClose, o
           {actBtn('Grow', () => act(m => grow(m, growPx)), tip('Grow', null, [`Expand the mask edge by ${growPx} px.`]), !mask)}
           {actBtn('Shrink', () => act(m => shrink(m, growPx)), tip('Shrink', null, [`Pull the mask edge in by ${growPx} px.`]), !mask)}
           {actBtn('Clear', () => act(m => createMask(m.w, m.h)), tip('Clear', null, ['Empty the whole mask (undoable).']), !mask)}
+          {actBtn('Import…', () => importRef.current?.click(),
+            tip('Import mask', null, ['Load a PNG (white = masked) as the mask, e.g. from Photoshop.', 'Replaces the current mask; stretched to the image size. Undoable.']), !mask)}
+          <input ref={importRef} type="file" accept="image/*" className="hidden"
+            onChange={e => { const f = e.target.files?.[0]; if (f) importMask(f); e.target.value = '' }} />
           {actBtn('Undo', () => doUndo(false), tip('Undo', 'Cmd+Z', ['Step back one mask edit.']), !history.current.canUndo)}
           {actBtn('Redo', () => doUndo(true), tip('Redo', 'Shift+Cmd+Z', ['Re-apply an undone edit.']), !history.current.canRedo)}
           <div className="w-full border-t border-border my-1" />
