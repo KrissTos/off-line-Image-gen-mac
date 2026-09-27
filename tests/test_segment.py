@@ -123,3 +123,106 @@ def test_empty_prompts_raise():
     seg, _, _ = _segmenter()
     with pytest.raises(ValueError):
         seg.segment("a", _img, {"points": [], "box": None})
+
+
+# ── Endpoints ──────────────────────────────────────────────────────────────────
+import io
+import uuid
+
+from fastapi.testclient import TestClient
+
+
+class FakeSegmenter:
+    def __init__(self):
+        self.prepared, self.seen = [], []
+
+    def prepare(self, image_id, image_loader):
+        self.prepared.append((image_id, image_loader().size))
+
+    def segment(self, image_id, image_loader, prompts):
+        if not prompts["points"] and not prompts["box"]:
+            raise ValueError("Need at least one point or a box")
+        im = image_loader()
+        self.seen.append((image_id, im.size, prompts))
+        m = np.zeros((im.height, im.width), dtype=bool)
+        m[:, : im.width // 2] = True
+        return m
+
+
+@pytest.fixture
+def api(monkeypatch):
+    import core.segment as seg
+    import server
+    fake = FakeSegmenter()
+    monkeypatch.setattr(seg, "get_segmenter", lambda: fake)
+    made = []
+
+    def put_image(size=(40, 30), exif_orientation=None):
+        from PIL import Image
+        name = f"{uuid.uuid4().hex}.jpg"
+        path = server.TEMP_DIR / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        im = Image.new("RGB", size, "white")
+        if exif_orientation:
+            exif = Image.Exif(); exif[0x0112] = exif_orientation
+            im.save(path, exif=exif)
+        else:
+            im.save(path)
+        made.append(path)
+        return name
+
+    yield TestClient(server.app), fake, put_image    # no `with`: startup (heartbeat) not run
+    for p in made:
+        p.unlink(missing_ok=True)
+
+
+def test_prepare_endpoint(api):
+    client, fake, put = api
+    img = put()
+    r = client.post("/api/segment/prepare", json={"image_id": img})
+    assert r.status_code == 200 and r.json()["ready"] is True
+    assert fake.prepared == [(img, (40, 30))]
+
+
+def test_segment_endpoint_returns_png_mask(api):
+    from PIL import Image
+    client, fake, put = api
+    img = put()
+    r = client.post("/api/segment", json={"image_id": img,
+                                          "points": [{"x": 5, "y": 5, "label": 1}], "box": None})
+    assert r.status_code == 200 and r.headers["content-type"] == "image/png"
+    m = Image.open(io.BytesIO(r.content))
+    assert m.mode == "L" and m.size == (40, 30)
+    assert m.getpixel((1, 1)) == 255 and m.getpixel((39, 1)) == 0
+    assert fake.seen[0][2] == {"points": [{"x": 5.0, "y": 5.0, "label": 1}], "box": None}
+
+
+def test_exif_orientation_is_applied(api):
+    """Browsers show EXIF-rotated photos upright; SAM must see the same pixels."""
+    client, fake, put = api
+    img = put(size=(40, 30), exif_orientation=6)          # 6 = rotate 90° → upright is 30x40
+    client.post("/api/segment/prepare", json={"image_id": img})
+    assert fake.prepared[0][1] == (30, 40)
+
+
+def test_bad_ids_rejected(api):
+    client, _, _ = api
+    for bad in ("../../etc/passwd", "missing.png"):
+        r = client.post("/api/segment", json={"image_id": bad,
+                                              "points": [{"x": 1, "y": 1, "label": 1}], "box": None})
+        assert r.status_code == 400
+
+
+def test_empty_prompts_400(api):
+    client, _, put = api
+    r = client.post("/api/segment", json={"image_id": put(), "points": [], "box": None})
+    assert r.status_code == 400
+
+
+def test_sam_failure_500(api, monkeypatch):
+    client, fake, put = api
+    def boom(*a, **k): raise RuntimeError("MPS exploded")
+    monkeypatch.setattr(fake, "segment", boom)
+    r = client.post("/api/segment", json={"image_id": put(),
+                                          "points": [{"x": 1, "y": 1, "label": 1}], "box": None})
+    assert r.status_code == 500 and "MPS exploded" in r.json()["detail"]

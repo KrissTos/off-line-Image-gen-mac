@@ -49,7 +49,7 @@ warnings.filterwarnings(
 import uvicorn
 from fastapi import Body, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -1356,6 +1356,88 @@ def _run_erase_detect(image_path: str) -> bytes:
 def _run_erase(image_path: str, mask_bytes: bytes) -> bytes:
     from core.erase import remove_watermark
     return remove_watermark(Path(image_path), mask_bytes)
+
+
+# ── SAM click-to-mask (mask editor) ───────────────────────────────────────────
+
+class SegmentPrepareRequest(BaseModel):
+    image_id: str
+
+
+class SegmentPoint(BaseModel):
+    x: float
+    y: float
+    label: int = 1          # 1 = include, 0 = exclude
+
+
+class SegmentBox(BaseModel):
+    x0: float
+    y0: float
+    x1: float
+    y1: float
+
+
+class SegmentRequest(BaseModel):
+    image_id: str
+    points: list[SegmentPoint] = Field(default_factory=list)
+    box: SegmentBox | None = None
+
+
+# One thread: SAM calls run one at a time and share the embedding cache.
+from concurrent.futures import ThreadPoolExecutor as _SegPool
+_segment_pool = _SegPool(max_workers=1)
+
+
+def _segment_image_loader(image_id: str):
+    """Guarded temp path → loader returning the image as the browser shows it
+    (EXIF orientation applied), RGB."""
+    path = _temp_path(image_id)
+    if not path.resolve().is_relative_to(TEMP_DIR.resolve()) or not path.is_file():
+        raise HTTPException(400, f"Invalid image_id: {image_id}")
+
+    def load():
+        from PIL import Image, ImageOps
+        with Image.open(path) as im:
+            return ImageOps.exif_transpose(im).convert("RGB")
+    return load
+
+
+@app.post("/api/segment/prepare")
+async def api_segment_prepare(req: SegmentPrepareRequest):
+    """Load SAM (first call) and cache this image's embedding so clicks are instant."""
+    import core.segment as seg
+    loader = _segment_image_loader(req.image_id)
+    t0 = time.perf_counter()
+    try:
+        await asyncio.get_event_loop().run_in_executor(
+            _segment_pool, lambda: seg.get_segmenter().prepare(req.image_id, loader))
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        raise HTTPException(500, f"SAM failed: {e}")
+    return {"ready": True, "ms": round((time.perf_counter() - t0) * 1000)}
+
+
+@app.post("/api/segment")
+async def api_segment(req: SegmentRequest):
+    """One SAM object mask for points (+1/0 labels) and/or one box → PNG (255 = object)."""
+    import io
+    import numpy as np
+    from PIL import Image
+    import core.segment as seg
+    loader = _segment_image_loader(req.image_id)
+    prompts = {"points": [p.model_dump() for p in req.points],
+               "box": req.box.model_dump() if req.box else None}
+    try:
+        mask = await asyncio.get_event_loop().run_in_executor(
+            _segment_pool, lambda: seg.get_segmenter().segment(req.image_id, loader, prompts))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        raise HTTPException(500, f"SAM failed: {e}")
+    buf = io.BytesIO()
+    Image.fromarray(mask.astype(np.uint8) * 255, "L").save(buf, "PNG")
+    return Response(buf.getvalue(), media_type="image/png")
 
 
 # ── Routes: Settings ──────────────────────────────────────────────────────────
