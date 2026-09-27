@@ -206,7 +206,23 @@ export default function RefImagesRow({
 
         <div className="flex items-start gap-3 overflow-x-auto pb-1">
 
-          {/* Add ref button — also a drop zone for gallery drag */}
+          {/* Slot cards */}
+          {slots.map(slot => (
+            <SlotCard
+              key={slot.slotId}
+              slot={slot}
+              isBase={slot.slotId === 1}
+              thumbSize={thumbSize}
+              onRemove={() => onRemoveSlot(slot.slotId)}
+              onUploadMask={f => onUploadMask(slot.slotId, f)}
+              onClearMask={() => onClearMask(slot.slotId)}
+              onDrawMask={() => setMaskEditorSlot(slot)}
+              onStrengthChange={v => onSlotStrengthChange(slot.slotId, v)}
+              onDimsLoaded={(w, h) => onSlotDimsLoaded?.(slot.slotId, w, h)}
+            />
+          ))}
+
+          {/* Add ref button — after the last slot; also a drop zone for gallery drag */}
           <button
             onClick={() => addRef.current?.click()}
             title="Add reference image (or drop from gallery)"
@@ -235,22 +251,6 @@ export default function RefImagesRow({
               e.target.value = ''
             }}
           />
-
-          {/* Slot cards */}
-          {slots.map(slot => (
-            <SlotCard
-              key={slot.slotId}
-              slot={slot}
-              isBase={slot.slotId === 1}
-              thumbSize={thumbSize}
-              onRemove={() => onRemoveSlot(slot.slotId)}
-              onUploadMask={f => onUploadMask(slot.slotId, f)}
-              onClearMask={() => onClearMask(slot.slotId)}
-              onDrawMask={() => setMaskEditorSlot(slot)}
-              onStrengthChange={v => onSlotStrengthChange(slot.slotId, v)}
-              onDimsLoaded={(w, h) => onSlotDimsLoaded?.(slot.slotId, w, h)}
-            />
-          ))}
 
           {/* Mask-mode dropdown (only when any slot has a mask) */}
           {slots.some(s => s.maskUrl) && (
