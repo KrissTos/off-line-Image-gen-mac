@@ -6,6 +6,7 @@
 - No CLIP loader: text encoders are bundled per model and load at model-load time.
 - FLUX 9B / Z-Image outpaint is weak (blur pad copied); only 4B has the outpaint LoRA. No maintained 9B equivalent (only merged checkpoint `24aittl/klein-9b-outpaint`, NC license, unquantized).
 - Z-Image LoRA loader reports "Loaded N" even when some of several LoRAs failed (only prints the failure).
+- Ref badges read `base`, `ref 1`, `ref 2`…, but FLUX.2 prompts refer to images by order (`image 1` = base, `image 2` = badge `ref 1`). Relabel to `img 1..N` offered, not decided (`RefImagesRow.tsx:48`).
 - Guidance slider is hidden: unhide when a non-distilled full-precision model is added.
 - `frontend/src/App.tsx:18` fails eslint `react-refresh/only-export-components` (pre-existing).
 - `.tmp_uploads/` grows without cleanup.

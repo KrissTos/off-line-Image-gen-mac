@@ -46,6 +46,7 @@ cd frontend && npm test        # mask editor pure-logic tests (node --test)
 1. Server exits 60 s after the last browser ping; use `--no-auto-shutdown` for headless/API testing.
 2. Restart the server after backend changes (no auto-reload).
 3. `generate.py` CLI is Z-Image Turbo only.
+4. Killing a `Launch.command` server also closes its Terminal window; restart from CC with `venv/bin/python server.py --port 7860` via `run_in_background`, and say so.
 
 ## 5. Environment
 1. Use `uv`, never pip; sync with `UV_PROJECT_ENVIRONMENT=venv uv sync`.
@@ -93,3 +94,4 @@ cd frontend && npm test        # mask editor pure-logic tests (node --test)
 3. Declare every field Load Params restores in `OutputItem` (e.g. `repeat_count`).
 4. No UI test runner: verify pure-logic TS modules (`src/mask/*`) with `cd frontend && npm test` (node --test); verify UI in a real browser — claude-in-chrome is reliable for the mask editor, where agent-browser has frozen the tab on Invert/Grow after a polygon edit.
 5. Mask editor keys: Alt = subtract (SAM/box/brush/polygon-close), Shift+click = SAM refine last object.
+6. In claude-in-chrome UI checks, add ref slots by dispatching `dragover`+`drop` `DragEvent`s (a `DataTransfer` with `text/plain` = gallery image URL) on the "+ ref img" button — no file dialog needed.
