@@ -233,3 +233,157 @@ def save_workflow(base_dir, params: dict, slots: list[dict], name: str,
                  **_params(params), "ref_slots": ref_slots})
     _write_json(folder / "workflow.json", data)
     return folder.name
+
+
+# ── Migration: flat outputs + v1 workflows → v2 folders ────────────────────────
+
+UPSCALE_RE = re.compile(r"^(?P<base>.+)_(?P<w>\d+)x(?P<h>\d+)$")
+REF_SLOT_RE = re.compile(r"^ref_slot_(\d+)$")
+
+
+def _read_json(path: Path) -> dict:
+    try:
+        data = json.loads(path.read_text())
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _reserve(parent: Path, name: str, reserved: set[str]) -> str:
+    cand, i = name, 2
+    while cand in reserved or (parent / cand).exists():
+        cand, i = f"{name}-{i}", i + 1
+    reserved.add(cand)
+    return cand
+
+
+def _move_all(moves: list[tuple[Path, Path]]) -> None:
+    for src, dst in moves:
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(src), str(dst))
+
+
+def _migrate_output(d: Path, media: Path, upscales: list[Path], reserved: set[str], apply: bool) -> dict:
+    sidecar, companion = media.with_suffix(".json"), d / media.stem
+    meta = _read_json(sidecar) if sidecar.is_file() else {}
+    when = datetime.fromtimestamp(media.stat().st_mtime)
+    slug = slugify(meta.get("prompt") or media.stem)
+    name = _reserve(d, f"{when:%y%m%d-%H%M%S}_{slug}" if slug else f"{when:%y%m%d-%H%M%S}", reserved)
+    run = d / name
+    seed = meta.get("seed") if isinstance(meta.get("seed"), int) and meta["seed"] >= 0 else None
+    ext = media.suffix.lower()
+    new_stem = f"{name[:OUTPUT_STEM_MAX].rstrip('-_')}_s{seed}" if seed is not None else media.stem
+    base_rel = f"outputs/{new_stem}{ext}"
+    moves = [(media, run / base_rel)]
+    outputs = [{"file": base_rel, "kind": "video" if ext in VIDEO_EXTS else "image",
+                **({"seed": seed} if seed is not None else {})}]
+    for up in upscales:
+        m = UPSCALE_RE.match(up.stem)
+        up_rel = f"outputs/{new_stem}_{m['w']}x{m['h']}{up.suffix.lower()}"
+        moves.append((up, run / up_rel))
+        outputs.append({"file": up_rel, "kind": "image", "upscaled_from": base_rel})
+    ref_slots = []
+    if companion.is_dir():
+        refs = sorted((int(m[1]), p) for p in companion.iterdir()
+                      if p.is_file() and (m := REF_SLOT_RE.match(p.stem)))
+        mask = next((p for p in companion.iterdir() if p.is_file() and p.stem == "mask"), None)
+        for n, p in refs:
+            img_rel = f"refs/slot_{n}{p.suffix.lower()}"
+            moves.append((p, run / img_rel))
+            mask_rel = None
+            if n == 1 and mask is not None:
+                mask_rel = f"masks/slot_1{mask.suffix.lower()}"
+                moves.append((mask, run / mask_rel))
+            ref_slots.append({"image": img_rel, "mask": mask_rel,
+                              "strength": float(meta.get("img_strength", 1.0)) if n == 1 else 1.0})
+    data = {"version": VERSION, "name": name, "created": when.isoformat(timespec="seconds"),
+            "prompt": meta.get("prompt", ""), **_params(meta), "ref_slots": ref_slots, "outputs": outputs}
+    to_trash = [p for p in (sidecar, companion) if p.exists()]
+    if apply:
+        (run / "outputs").mkdir(parents=True)
+        _move_all(moves)
+        _write_json(run / "workflow.json", data)
+        for p in to_trash:
+            trash(p)
+    return {"run": name, "moves": [[str(a), str(b)] for a, b in moves],
+            "trash": [str(p) for p in to_trash],
+            "consumed": [str(p) for p in (media, *upscales, *to_trash)]}
+
+
+def _migrate_v1_workflow(folder: Path, apply: bool) -> dict:
+    data = _read_json(folder / "workflow.json")
+    moves, slots = [], []
+    for i, s in enumerate(data.get("ref_slots") or [], start=1):
+        new = dict(s)
+        for key, sub in (("image", "refs"), ("mask", "masks")):
+            rel = s.get(key)
+            src = safe_join(folder, rel) if rel else None
+            if src is not None and src.is_file() and not rel.startswith(f"{sub}/"):
+                new[key] = f"{sub}/slot_{i}{src.suffix.lower()}"
+                moves.append((src, folder / new[key]))
+        slots.append(new)
+    data.update({"version": VERSION, "name": folder.name, "ref_slots": slots})
+    if apply:
+        _move_all(moves)
+        _write_json(folder / "workflow.json", data)
+    return {"workflow": folder.name, "moves": [[str(a), str(b)] for a, b in moves]}
+
+
+def migrate(directory, apply: bool = False) -> dict:
+    """Group flat outputs into run folders and convert v1 workflow folders. Dry-run unless apply."""
+    d = Path(directory)
+    report: dict = {"runs": [], "workflows": [], "skipped": [], "unclassified": []}
+    if not d.is_dir():
+        return report
+    entries = sorted(d.iterdir())
+    consumed: set[Path] = set()
+    for p in entries:
+        if p.is_dir() and (p / "workflow.json").is_file():
+            consumed.add(p)
+            if _read_json(p / "workflow.json").get("version") == VERSION:
+                report["skipped"].append(p.name)
+            else:
+                report["workflows"].append(_migrate_v1_workflow(p, apply))
+    media = {p.stem: p for p in entries if p.is_file() and p.suffix.lower() in MEDIA_EXTS}
+    upscales: dict[str, list[Path]] = {}
+    bases: list[Path] = []
+    for stem, p in media.items():
+        m = UPSCALE_RE.match(stem)
+        if m and m["base"] in media:
+            upscales.setdefault(m["base"], []).append(p)
+        else:
+            bases.append(p)
+    reserved: set[str] = set()
+    for base in bases:
+        plan = _migrate_output(d, base, sorted(upscales.get(base.stem, [])), reserved, apply)
+        report["runs"].append(plan)
+        consumed.update(Path(x) for x in plan["consumed"])
+    report["unclassified"] = [p.name for p in entries if p not in consumed and not p.name.startswith(".")]
+    return report
+
+
+def _main(argv: list[str] | None = None) -> int:
+    import argparse
+    ap = argparse.ArgumentParser(prog="python -m core.run_store")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    mig = sub.add_parser("migrate", help="Convert flat outputs / v1 workflows to v2 run folders")
+    mig.add_argument("dir")
+    mig.add_argument("--apply", action="store_true", help="Execute (default: dry run, changes nothing)")
+    args = ap.parse_args(argv)
+    report = migrate(args.dir, apply=args.apply)
+    print("APPLIED" if args.apply else "DRY RUN (nothing changed; re-run with --apply)")
+    for r in report["runs"]:
+        print(f"RUN       {r['run']}  <- {len(r['moves'])} file(s), trash {len(r['trash'])}")
+    for w in report["workflows"]:
+        print(f"WORKFLOW  {w['workflow']}  ({len(w['moves'])} file(s) moved)")
+    for name in report["skipped"]:
+        print(f"SKIP      {name} (already v2)")
+    for name in report["unclassified"]:
+        print(f"LEFT      {name} (not recognised, untouched)")
+    print(f"{len(report['runs'])} run(s), {len(report['workflows'])} workflow(s), "
+          f"{len(report['skipped'])} skipped, {len(report['unclassified'])} left")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(_main())
