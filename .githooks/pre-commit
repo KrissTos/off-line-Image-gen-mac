@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# Native git pre-commit hook — blocks ANY commit (manual terminal OR Claude Code) when
+# pytest fails. Complements .claude/hooks/pre-commit-test-gate.sh, which only fires
+# inside Claude Code. Enable once per clone: git config core.hooksPath .githooks
+set -uo pipefail
+
+cd "$(git rev-parse --show-toplevel)" || exit 0
+
+out=$(venv/bin/python -m pytest -q 2>&1)
+status=$?
+
+# pytest exit 5 = "no tests collected" — don't block on that.
+[ "$status" -eq 5 ] && exit 0
+
+if [ "$status" -ne 0 ]; then
+  {
+    echo "COMMIT BLOCKED: tests failing — fix before committing."
+    echo "Run: venv/bin/python -m pytest"
+    echo "--- pytest tail ---"
+    echo "$out" | tail -20
+  } >&2
+  exit 1
+fi
+
+exit 0
