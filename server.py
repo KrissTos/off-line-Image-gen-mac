@@ -864,7 +864,7 @@ async def api_save_workflow(req: SaveWorkflowRequest):
 
     data = {
         "name":               req.name or folder_name,
-        "timestamp":          timestamp,
+        "timestamp":          datetime.now().strftime("%Y%m%d_%H%M%S"),
         "prompt":             req.prompt,
         "height":             req.height,
         "width":              req.width,
