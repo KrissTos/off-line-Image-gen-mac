@@ -2,6 +2,9 @@
 
 History and "why we did X". Operational rules live in `CLAUDE.md`; reference in `docs/`.
 
+## 2026-09-28
+- Ref images row split into Base and References sections. Why: removing the base to change it shifted ref 1 into the base. Now any slot is replaced in place (click or drop), a ref dragged onto the base swaps them, and the base can't be removed while refs exist (the backend always uses the first image as the img2img base, so an empty base with refs would silently promote a material ref). A base change clears all masks, since they are drawn on the base.
+
 ## 2026-09-27
 - Run folders: every generation is one self-contained folder (`workflow.json` v2 + `refs/` + `masks/` + `outputs/`, `core/run_store.py`), saved workflows use the same format, and clicking a gallery thumbnail reloads the whole workflow with that output's seed. Why: runs weren't reproducible (only slot 1's mask stored, per-slot strengths lost, repeats duplicated refs, upscales unlinked), and the two restore paths disagreed (the workflow path dropped seed 0 via `if (wf.seed)` and ignored LoRAs/upscale/fps/repeat). Now one `applyWorkflow` + pure `workflowToParams()`. Workflows panel: Save overwrites the loaded workflow, Save as new copies. Migration applied: 33 runs from the flat output dir, 5 v1 workflows converted.
 - Run-folder final-review fixes: a reload or Stop cancelled the SSE stream and trashed a run the pipeline was still writing into (late outputs landed in an orphan folder) — generation now runs in its own task; upscaling twice duplicated the gallery entry; an upscale lost its seed once its source was deleted; a restore skipped by the in-progress guard still retargeted "Save (overwrite)".

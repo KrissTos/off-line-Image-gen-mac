@@ -81,7 +81,7 @@ Center layout: Canvas (flex 5) / RefImagesRow (flex 4) / Gallery (flex 1) → 50
 
 ### Components
 - `Sidebar.tsx` (`w-[576px]`) — Accordions: Model, Parameters, Output Size, LoRA, Upscale (single + batch), Batch Img2Img, Depth Map, Watermark Remover, Video (LTX only), Workflows. `Accordion` renders `{open && children}` (children unmount when closed).
-- `RefImagesRow.tsx` — horizontal slot strip: 80×80 thumbnail + role badge, 56×56 mask box (empty → "draw mask", filled → click to edit, X clears; no file upload), per-slot strength slider; "+ ref img" drop zone sits after the last slot. The mask box opens `MaskEditor.tsx` on slot #1's image. Slot #2+ boxes carry a hint that their mask is only used by Iterate Masks, and read "unused" outside Inpainting Pipeline mode.
+- `RefImagesRow.tsx` — two sections: **Base** (slot #1; empty → "+ base img") and **References** (slots #2+, "+ ref img" disabled until a base exists). Each card: thumbnail + role badge (click or drop a file/gallery image = replace), 56×56 mask box (empty → "draw mask", filled → click to edit, X clears), per-slot strength slider. A ref card dragged onto the base swaps them (`application/x-ref-slot` drag type). The base X shows only when no refs are left, so refs never shift into the base. The mask box opens `MaskEditor.tsx` on slot #1's image. Slot #2+ boxes carry a hint that their mask is only used by Iterate Masks, and read "unused" outside Inpainting Pipeline mode.
 - `MaskEditor.tsx` — full-screen SAM click-to-mask editor (replaces the old rectangle-drag modal). SAM point/box add+subtract, brush, polygon, invert, grow/shrink, undo/redo; keys S/D/B/P select tools, Alt = subtract everywhere, Shift+click = refine last SAM object, wheel = zoom at cursor, +/− = zoom at centre, 0 = fit, [ ] = brush size, Space+drag = pan, Enter = apply (or close polygon), Esc = cancel. 96 px left column: tools, brush slider (Brush tool only), grow/shrink, undo/redo, zoom −/%/+ · Fit · 100%; Import… loads a PNG (white = masked) as the mask, undoable; each control has a `HelpTip` hover popup, ⓘ top-right of the canvas lists navigation keys. Saved mask → `onApply(File)` → existing `uploadImage` → `SET_SLOT_MASK` path, unchanged downstream.
 - `EraseEditorModal.tsx` — watermark mask editor. Offscreen full-res `maskRef` + `displayRef` (≤760×560). Rectangle + brush (Shift = erase), 45% red overlay. Confirm → `toBlob` → `POST /api/upload` → `onConfirm(maskId, maskUrl)`; upload errors inline.
 - `HelpTip.tsx` — ⓘ tooltip, `position:fixed` + `getBoundingClientRect()`, `pointer-events-none`, `z-50`. `text` accepts JSX; pass `children` to use them as the hover trigger instead of the ⓘ.
@@ -99,7 +99,8 @@ interface RefImageSlot {
   strength: number; w?: number; h?: number; keepSize?: boolean
 }
 ```
-Actions: `ADD_REF_SLOT` · `REMOVE_REF_SLOT` · `SET_SLOT_MASK` · `CLEAR_SLOT_MASK` · `CLEAR_ALL_SLOTS` · `UPDATE_SLOT_STRENGTH` · `SET_SLOT_DIMS`.
+Actions: `ADD_REF_SLOT` · `REMOVE_REF_SLOT` · `REPLACE_SLOT_IMAGE` · `SWAP_WITH_BASE` · `SET_SLOT_MASK` · `CLEAR_SLOT_MASK` · `CLEAR_ALL_SLOTS` · `UPDATE_SLOT_STRENGTH` · `SET_SLOT_DIMS`.
+Slot-list logic lives in pure `src/slots.ts` (tested by `tests/slots.test.ts`). Every mask is drawn on the base image, so a base change (replace/swap) clears all masks; replacing a ref keeps them.
 `slotsToParams()` sends all slot image ids and slot #1's mask to the pipeline; generate also sends `ref_slots: [{imageId, maskId, strength}]` so the run records every slot.
 
 ### Workflow restore (`applyWorkflow`)

@@ -7,6 +7,7 @@ import {
   fetchSettings, deleteOutput, upscaleSingleImage, stopGeneration, loadRun,
 } from './api'
 import { workflowToParams, type WorkflowData } from './workflow'
+import { hasMasks } from './slots'
 
 function hexToRgbVar(hex: string): string {
   const h = hex.replace('#', '')
@@ -304,6 +305,27 @@ export default function App() {
     dispatch({ type: 'UPDATE_SLOT_STRENGTH', slotId, strength })
   }, [dispatch])
 
+  // Masks are drawn on the base image → a base change clears them all (slots.ts)
+  const noteMasksCleared = useCallback(() => {
+    if (hasMasks(state.refSlots)) setStatusMsg('Masks cleared — they were drawn on the previous base image')
+  }, [state.refSlots])
+
+  // src: a dropped/picked File, or a gallery image URL
+  const handleReplaceSlotImage = useCallback(async (slotId: number, src: File | string) => {
+    try {
+      const { id, url } = typeof src === 'string' ? await uploadFromUrl(src) : await uploadImage(src)
+      if (slotId === 1) noteMasksCleared()
+      dispatch({ type: 'REPLACE_SLOT_IMAGE', slotId, imageId: id, imageUrl: url })
+    } catch (err: unknown) {
+      dispatch({ type: 'SET_ERROR', message: (err as Error).message })
+    }
+  }, [dispatch, noteMasksCleared])
+
+  const handleSwapWithBase = useCallback((slotId: number) => {
+    noteMasksCleared()
+    dispatch({ type: 'SWAP_WITH_BASE', slotId })
+  }, [dispatch, noteMasksCleared])
+
   // ── Iterative multi-mask generation ───────────────────────────────────────
   //
   // For each slot that has a mask (in slotId order):
@@ -557,6 +579,8 @@ export default function App() {
               onAddSlots={handleAddRefSlots}
               onAddSlotDirect={(imageId, imageUrl) => dispatch({ type: 'ADD_REF_SLOT', imageId, imageUrl })}
               onRemoveSlot={handleRemoveRefSlot}
+              onReplaceSlot={handleReplaceSlotImage}
+              onSwapWithBase={handleSwapWithBase}
               onUploadMask={handleUploadSlotMask}
               onClearMask={handleClearSlotMask}
               onSlotStrengthChange={handleSlotStrengthChange}

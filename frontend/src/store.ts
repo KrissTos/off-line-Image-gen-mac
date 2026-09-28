@@ -1,6 +1,7 @@
 import { useReducer } from 'react'
 import type { GenerateParams, OutputItem, AppStatus, RefImageSlot } from './types'
 import { canvasForRef, sizeFamily } from './canvasSize'
+import { removeSlot, replaceSlotImage, swapWithBase } from './slots'
 
 // ── State ─────────────────────────────────────────────────────────────────────
 
@@ -98,6 +99,8 @@ export type Action =
   // Reference image slots
   | { type: 'ADD_REF_SLOT';         imageId: string; imageUrl: string; keepSize?: boolean }
   | { type: 'REMOVE_REF_SLOT';      slotId: number }
+  | { type: 'REPLACE_SLOT_IMAGE';   slotId: number; imageId: string; imageUrl: string }
+  | { type: 'SWAP_WITH_BASE';       slotId: number }
   | { type: 'SET_SLOT_MASK';        slotId: number; maskId: string; maskUrl: string }
   | { type: 'CLEAR_SLOT_MASK';      slotId: number }
   | { type: 'CLEAR_ALL_SLOTS' }
@@ -206,13 +209,22 @@ function reducer(state: State, action: Action): State {
     }
 
     case 'REMOVE_REF_SLOT': {
-      const slots = state.refSlots
-        .filter(s => s.slotId !== action.slotId)
-        .map((s, i) => ({ ...s, slotId: i + 1 }))   // re-number
-      let params = { ...state.params, ...slotsToParams(slots) }
-      if (slots[0] && slots[0].imageId !== state.refSlots[0]?.imageId) {
-        params = autoSizeParams(params, slots[0])   // a different image became slot #1
-      }
+      // Base stays put: removable only when it is the last slot (see slots.ts)
+      const slots = removeSlot(state.refSlots, action.slotId)
+      return { ...state, refSlots: slots, params: { ...state.params, ...slotsToParams(slots) } }
+    }
+
+    case 'REPLACE_SLOT_IMAGE': {
+      // Dims reset → the base's new image is auto-sized by SET_SLOT_DIMS on load
+      const slots = replaceSlotImage(state.refSlots, action.slotId, action.imageId, action.imageUrl)
+      return { ...state, refSlots: slots, params: { ...state.params, ...slotsToParams(slots) } }
+    }
+
+    case 'SWAP_WITH_BASE': {
+      // The promoted ref's dims are already known → auto-size now
+      const slots = swapWithBase(state.refSlots, action.slotId)
+      if (slots === state.refSlots) return state
+      const params = autoSizeParams({ ...state.params, ...slotsToParams(slots) }, slots[0])
       return { ...state, refSlots: slots, params }
     }
 

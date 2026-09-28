@@ -5,13 +5,29 @@ import { uploadFromUrl } from '../api'
 import HelpTip from './HelpTip'
 import MaskEditor from './MaskEditor'
 
+// ── Drag helpers ──────────────────────────────────────────────────────────────
+
+// A ref card dragged onto the base = swap. Gallery drags carry text/plain (URL).
+const SLOT_DRAG = 'application/x-ref-slot'
+
+const isSlotDrag = (e: React.DragEvent) => e.dataTransfer.types.includes(SLOT_DRAG)
+
+/** File from the OS, or a gallery image URL; null for anything else. */
+function dropSource(e: React.DragEvent): File | string | null {
+  return e.dataTransfer.files[0] ?? (e.dataTransfer.getData('text/plain') || null)
+}
+
 // ── SlotCard ──────────────────────────────────────────────────────────────────
 
 interface SlotCardProps {
   slot:             RefImageSlot
   isBase:           boolean           // true for slot #1
+  canRemove:        boolean           // base only when it is the last slot
   thumbSize:        number
   onRemove:         () => void
+  onPickReplace:    () => void        // open the file picker to replace this image
+  onDropReplace:    (src: File | string) => void
+  onSwapFrom?:      (slotId: number) => void   // base only: a ref card dropped on it
   maskIgnored:      boolean           // slot #2+ mask outside Inpainting Pipeline mode → not sent
   onClearMask:      () => void
   onDrawMask:       () => void
@@ -21,8 +37,27 @@ interface SlotCardProps {
 
 const EXTRA_MASK_HINT = 'Masks on slot #2+ are only used by Iterate Masks (mask mode "Inpainting Pipeline"). Normal Generate uses only the base image mask.'
 
-function SlotCard({ slot, isBase, thumbSize, onRemove, maskIgnored, onClearMask, onDrawMask, onStrengthChange, onDimsLoaded }: SlotCardProps) {
+function SlotCard({
+  slot, isBase, canRemove, thumbSize, onRemove, onPickReplace, onDropReplace, onSwapFrom,
+  maskIgnored, onClearMask, onDrawMask, onStrengthChange, onDimsLoaded,
+}: SlotCardProps) {
   const maskSize = Math.round(thumbSize * 0.7)
+  const [dragOver, setDragOver] = useState(false)
+  const label = isBase ? 'base image' : `reference image ${slot.slotId - 1}`
+
+  // Base accepts a ref card (swap) or a file/gallery image (replace); refs accept only the latter
+  const accepts = (e: React.DragEvent) => !isSlotDrag(e) || (isBase && !!onSwapFrom)
+
+  function handleDrop(e: React.DragEvent) {
+    e.preventDefault()
+    setDragOver(false)
+    if (isSlotDrag(e)) {
+      if (isBase) onSwapFrom?.(Number(e.dataTransfer.getData(SLOT_DRAG)))
+      return
+    }
+    const src = dropSource(e)
+    if (src) onDropReplace(src)
+  }
 
   const maskBox = (
     <div
@@ -65,37 +100,62 @@ function SlotCard({ slot, isBase, thumbSize, onRemove, maskIgnored, onClearMask,
     <div className="shrink-0 flex flex-col gap-1">
       <div className="flex items-end gap-1.5">
 
-        {/* Reference image */}
+        {/* Image — click or drop to replace; refs drag onto the base to swap */}
         <div
-          className="relative rounded-lg overflow-hidden border border-border group"
+          className={`relative rounded-lg overflow-hidden border group
+                      ${dragOver ? 'border-[var(--color-accent)] ring-2 ring-[var(--color-accent)]/40' : 'border-border'}`}
           style={{ width: thumbSize, height: thumbSize }}
+          draggable={!isBase}
+          onDragStart={e => {
+            if (isBase) return
+            e.dataTransfer.setData(SLOT_DRAG, String(slot.slotId))
+            e.dataTransfer.effectAllowed = 'move'
+          }}
+          onDragOver={e => { if (accepts(e)) { e.preventDefault(); setDragOver(true) } }}
+          onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragOver(false) }}
+          onDrop={handleDrop}
         >
-          <img
-            src={slot.imageUrl}
-            alt={`ref #${slot.slotId}`}
-            className="w-full h-full object-cover"
-            onLoad={e => {
-              const img = e.currentTarget
-              onDimsLoaded?.(img.naturalWidth, img.naturalHeight)
-            }}
-          />
+          <button
+            onClick={onPickReplace}
+            aria-label={`Replace ${label}`}
+            className="w-full h-full"
+          >
+            <img
+              src={slot.imageUrl}
+              alt={`ref #${slot.slotId}`}
+              draggable={false}
+              className="w-full h-full object-cover hover:opacity-80 transition-opacity"
+              onLoad={e => {
+                const img = e.currentTarget
+                onDimsLoaded?.(img.naturalWidth, img.naturalHeight)
+              }}
+            />
+          </button>
 
           {/* Slot role badge */}
-          <div className={`absolute top-1 left-1 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-full shadow
+          <div className={`absolute top-1 left-1 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-full shadow pointer-events-none
                            ${isBase ? 'bg-teal-600' : 'bg-accent'}`}>
             {isBase ? 'base' : `ref ${slot.slotId - 1}`}
           </div>
 
-          {/* Remove button */}
-          <button
-            onClick={onRemove}
-            title="Remove reference image"
-            aria-label={isBase ? 'Remove base image' : `Remove reference image ${slot.slotId - 1}`}
-            className="absolute top-1 right-1 bg-black/70 hover:bg-red-600 rounded-full p-0.5
-                       opacity-0 group-hover:opacity-100 transition-all"
-          >
-            <X size={10} aria-hidden="true" />
-          </button>
+          {/* Swap / replace hint while dragging over */}
+          {dragOver && (
+            <div className="absolute inset-x-0 bottom-0 text-[8px] text-center text-white bg-black/60 py-0.5 pointer-events-none">
+              drop to replace
+            </div>
+          )}
+
+          {/* Remove button — the base only when no refs are left */}
+          {canRemove && (
+            <button
+              onClick={onRemove}
+              aria-label={`Remove ${label}`}
+              className="absolute top-1 right-1 bg-black/70 hover:bg-red-600 rounded-full p-0.5
+                         opacity-0 group-hover:opacity-100 transition-all"
+            >
+              <X size={10} aria-hidden="true" />
+            </button>
+          )}
         </div>
 
         {/* Mask thumbnail (click to edit) or draw target */}
@@ -132,6 +192,8 @@ interface Props {
   onAddSlots:           (files: File[]) => void
   onAddSlotDirect?:     (imageId: string, imageUrl: string) => void
   onRemoveSlot:         (slotId: number) => void
+  onReplaceSlot:        (slotId: number, src: File | string) => void
+  onSwapWithBase:       (slotId: number) => void
   onUploadMask:         (slotId: number, file: File) => void
   onClearMask:          (slotId: number) => void
   onSlotStrengthChange: (slotId: number, strength: number) => void
@@ -139,38 +201,85 @@ interface Props {
   onParamChange:        (k: keyof GenerateParams, v: unknown) => void
 }
 
+const SECTION_LABEL = 'text-[10px] text-muted uppercase tracking-wide select-none'
+
 export default function RefImagesRow({
   slots, maskMode, modelChoice,
-  onAddSlots, onAddSlotDirect, onRemoveSlot, onUploadMask, onClearMask,
-  onSlotStrengthChange, onSlotDimsLoaded, onParamChange,
+  onAddSlots, onAddSlotDirect, onRemoveSlot, onReplaceSlot, onSwapWithBase,
+  onUploadMask, onClearMask, onSlotStrengthChange, onSlotDimsLoaded, onParamChange,
 }: Props) {
-  const addRef = useRef<HTMLInputElement>(null)
+  const addRef     = useRef<HTMLInputElement>(null)
+  const replaceRef = useRef<HTMLInputElement>(null)
+  const [replaceTarget, setReplaceTarget] = useState<number | null>(null)
   const [maskEditorSlot, setMaskEditorSlot] = useState<RefImageSlot | null>(null)
   const [thumbSize, setThumbSize] = useState(80)
   const [dragOverNew, setDragOverNew] = useState(false)
 
-  async function handleRefDrop(e: React.DragEvent) {
+  const base = slots[0]
+  const refs = slots.slice(1)
+
+  // Add button drop: a new image (first one becomes the base). Ref cards are ignored.
+  async function handleAddDrop(e: React.DragEvent) {
     e.preventDefault()
     setDragOverNew(false)
-
-    // File drop (from OS)
-    const file = e.dataTransfer.files[0]
-    if (file) {
-      onAddSlots([file])
-      return
-    }
-
-    // Gallery drag (URL string)
-    const srcUrl = e.dataTransfer.getData('text/plain')
-    if (srcUrl && onAddSlotDirect) {
+    if (isSlotDrag(e)) return
+    const src = dropSource(e)
+    if (src instanceof File) { onAddSlots([src]); return }
+    if (src && onAddSlotDirect) {
       try {
-        const { id, url } = await uploadFromUrl(srcUrl)
+        const { id, url } = await uploadFromUrl(src)
         onAddSlotDirect(id, url)
       } catch (err) {
         console.error('Drop upload failed', err)
       }
     }
   }
+
+  function pickReplace(slotId: number) {
+    setReplaceTarget(slotId)
+    replaceRef.current?.click()
+  }
+
+  const addButton = (kind: 'base' | 'ref', disabled = false) => (
+    <button
+      onClick={() => addRef.current?.click()}
+      disabled={disabled}
+      title={disabled ? 'Load a base image first' : `Add ${kind} image (or drop from gallery)`}
+      style={{ width: thumbSize, height: thumbSize }}
+      onDragOver={e => { if (!disabled && !isSlotDrag(e)) { e.preventDefault(); setDragOverNew(true) } }}
+      onDragLeave={() => setDragOverNew(false)}
+      onDrop={handleAddDrop}
+      className={`shrink-0 flex flex-col items-center justify-center rounded-lg
+                 border border-dashed text-muted gap-1 transition-colors
+                 disabled:opacity-40 disabled:cursor-not-allowed
+                 enabled:hover:border-accent enabled:hover:text-white
+                 ${dragOverNew
+                   ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/10 text-white'
+                   : 'border-border'}`}
+    >
+      <Plus size={16} aria-hidden="true" />
+      <span className="text-[9px] leading-none">{kind} img</span>
+    </button>
+  )
+
+  const card = (slot: RefImageSlot) => (
+    <SlotCard
+      key={slot.slotId}
+      slot={slot}
+      isBase={slot.slotId === 1}
+      canRemove={slot.slotId !== 1 || slots.length === 1}
+      thumbSize={thumbSize}
+      onRemove={() => onRemoveSlot(slot.slotId)}
+      onPickReplace={() => pickReplace(slot.slotId)}
+      onDropReplace={src => onReplaceSlot(slot.slotId, src)}
+      onSwapFrom={slot.slotId === 1 ? onSwapWithBase : undefined}
+      maskIgnored={slot.slotId !== 1 && maskMode !== 'Inpainting Pipeline (Quality)'}
+      onClearMask={() => onClearMask(slot.slotId)}
+      onDrawMask={() => setMaskEditorSlot(slot)}
+      onStrengthChange={v => onSlotStrengthChange(slot.slotId, v)}
+      onDimsLoaded={(w, h) => onSlotDimsLoaded?.(slot.slotId, w, h)}
+    />
+  )
 
   return (
     <>
@@ -189,40 +298,27 @@ export default function RefImagesRow({
 
         <div className="flex items-start gap-3 overflow-x-auto pb-1">
 
-          {/* Slot cards */}
-          {slots.map(slot => (
-            <SlotCard
-              key={slot.slotId}
-              slot={slot}
-              isBase={slot.slotId === 1}
-              thumbSize={thumbSize}
-              onRemove={() => onRemoveSlot(slot.slotId)}
-              maskIgnored={slot.slotId !== 1 && maskMode !== 'Inpainting Pipeline (Quality)'}
-              onClearMask={() => onClearMask(slot.slotId)}
-              onDrawMask={() => setMaskEditorSlot(slot)}
-              onStrengthChange={v => onSlotStrengthChange(slot.slotId, v)}
-              onDimsLoaded={(w, h) => onSlotDimsLoaded?.(slot.slotId, w, h)}
-            />
-          ))}
+          {/* Base section — one slot; click/drop replaces, a ref dropped here swaps */}
+          <section aria-label="Base image" className="shrink-0 flex flex-col gap-1">
+            <span className={`${SECTION_LABEL} flex items-center gap-1`}>
+              Base
+              <HelpTip text="The image to edit. Click or drop an image on it to replace it; drag a reference onto it to swap them." />
+            </span>
+            {base ? card(base) : addButton('base')}
+          </section>
 
-          {/* Add ref button — after the last slot; also a drop zone for gallery drag */}
-          <button
-            onClick={() => addRef.current?.click()}
-            title="Add reference image (or drop from gallery)"
-            style={{ width: thumbSize, height: thumbSize }}
-            onDragOver={e => { e.preventDefault(); setDragOverNew(true) }}
-            onDragLeave={() => setDragOverNew(false)}
-            onDrop={handleRefDrop}
-            className={`shrink-0 flex flex-col items-center justify-center rounded-lg
-                       border border-dashed text-muted mt-0
-                       hover:border-accent hover:text-white transition-colors gap-1
-                       ${dragOverNew
-                         ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/10 text-white'
-                         : 'border-border'}`}
-          >
-            <Plus size={16} />
-            <span className="text-[9px] leading-none">ref img</span>
-          </button>
+          {/* References section — add / replace / remove, never shifts into the base */}
+          <section aria-label="Reference images" className="shrink-0 flex flex-col gap-1 pl-3 border-l border-border">
+            <span className={`${SECTION_LABEL} flex items-center gap-1`}>
+              References
+              <HelpTip text="Material / style references (image 2, 3… in the prompt). Click or drop on a card to replace it." />
+            </span>
+            <div className="flex items-start gap-3">
+              {refs.map(card)}
+              {addButton('ref', !base)}
+            </div>
+          </section>
+
           <input
             ref={addRef}
             type="file"
@@ -231,6 +327,18 @@ export default function RefImagesRow({
             className="hidden"
             onChange={e => {
               if (e.target.files) onAddSlots(Array.from(e.target.files))
+              e.target.value = ''
+            }}
+          />
+          <input
+            ref={replaceRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={e => {
+              const file = e.target.files?.[0]
+              if (file && replaceTarget !== null) onReplaceSlot(replaceTarget, file)
+              setReplaceTarget(null)
               e.target.value = ''
             }}
           />
@@ -258,13 +366,6 @@ export default function RefImagesRow({
                 </p>
               )}
             </div>
-          )}
-
-          {/* Empty state hint */}
-          {slots.length === 0 && (
-            <span className="text-[10px] text-muted/50 select-none self-center">
-              Add reference images for img2img / inpainting — #1 = base image, #2+ = style references
-            </span>
           )}
         </div>
       </div>
