@@ -433,6 +433,10 @@ export async function discoverModelSources(): Promise<{ added: number; sources: 
 
 // ── SAM click-to-mask ─────────────────────────────────────────────────────────
 
+export async function segmentStatus(): Promise<{ loaded: boolean }> {
+  return get('/api/segment/status')
+}
+
 export async function segmentPrepare(imageId: string): Promise<{ ready: boolean; ms: number }> {
   return post('/api/segment/prepare', { image_id: imageId })
 }

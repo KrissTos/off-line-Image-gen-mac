@@ -1322,6 +1322,13 @@ def _segment_image_loader(image_id: str):
     return load
 
 
+@app.get("/api/segment/status")
+def api_segment_status():
+    """Whether SAM weights are already loaded (no load triggered)."""
+    import core.segment as seg
+    return {"loaded": seg.get_segmenter().loaded}
+
+
 @app.post("/api/segment/prepare")
 async def api_segment_prepare(req: SegmentPrepareRequest):
     """Load SAM (first call) and cache this image's embedding so clicks are instant."""

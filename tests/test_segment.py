@@ -119,6 +119,13 @@ def test_lru_evicts_oldest():
     assert model.embed_calls == 6
 
 
+def test_loaded_flag_flips_on_first_prepare():
+    seg, _, _ = _segmenter()
+    assert seg.loaded is False
+    seg.prepare("a", _img)
+    assert seg.loaded is True
+
+
 def test_empty_prompts_raise():
     seg, _, _ = _segmenter()
     with pytest.raises(ValueError):
@@ -135,6 +142,7 @@ from fastapi.testclient import TestClient
 class FakeSegmenter:
     def __init__(self):
         self.prepared, self.seen = [], []
+        self.loaded = False
 
     def prepare(self, image_id, image_loader):
         self.prepared.append((image_id, image_loader().size))
@@ -182,6 +190,13 @@ def test_prepare_endpoint(api):
     r = client.post("/api/segment/prepare", json={"image_id": img})
     assert r.status_code == 200 and r.json()["ready"] is True
     assert fake.prepared == [(img, (40, 30))]
+
+
+def test_status_endpoint_reports_model_loaded(api):
+    client, fake, _ = api
+    assert client.get("/api/segment/status").json() == {"loaded": False}
+    fake.loaded = True
+    assert client.get("/api/segment/status").json() == {"loaded": True}
 
 
 def test_segment_endpoint_returns_png_mask(api):

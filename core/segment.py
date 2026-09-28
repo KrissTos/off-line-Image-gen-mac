@@ -34,6 +34,11 @@ class SamSegmenter:
         self._cache_size = cache_size
         self._lock = threading.Lock()
 
+    @property
+    def loaded(self) -> bool:
+        """Weights in memory — the mask editor shows a first-load overlay until then."""
+        return self._model is not None
+
     def _ensure_model(self):
         if self._model is None:
             self._model, self._proc = self._loader()

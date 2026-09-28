@@ -140,6 +140,7 @@ when the restore actually runs.
 | POST | `/api/depth-map` | `{filename, model_repo}`, `ThreadPoolExecutor(1)` |
 | POST | `/api/erase/detect` | FFT heuristic → `{image_id, image_url, mask_id, mask_url}` |
 | POST | `/api/erase` | LaMa fill → `{url, filename}`; `_erased_2.png` collision suffix |
+| GET | `/api/segment/status` | `{loaded}`: SAM weights in memory (no load); mask editor shows a first-load overlay + "SAM ready" toast when false |
 | POST | `/api/segment/prepare` | `{image_id}` → `{ready, ms}`; embeds the image once (SAM encoder), lazy model load |
 | POST | `/api/segment` | `{image_id, points, box}` → PNG mask (255=object); serialized on a dedicated 1-thread executor |
 | GET | `/api/model-sources/discover` | Scan HF orgs + `mps` tag, merge new → `{added, sources}`; base entries filtered to `app.KNOWN_MODELS` |

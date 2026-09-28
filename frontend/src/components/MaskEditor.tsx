@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Brush, Hexagon, Info, Loader2, MousePointerClick, SquareDashed, X, ZoomIn, ZoomOut } from 'lucide-react'
+import { Brush, Check, Hexagon, Info, Loader2, MousePointerClick, SquareDashed, X, ZoomIn, ZoomOut } from 'lucide-react'
 import type { RefImageSlot } from '../types'
 import HelpTip from './HelpTip'
-import { segmentMask, segmentPrepare } from '../api'
+import { segmentMask, segmentPrepare, segmentStatus } from '../api'
 import {
   coverage, createMask, fillPolygon, fromRgba, grow, invert, paintOverlayFull, paintOverlayRect,
   paintStroke, shrink, strokeRect, subtract, toRgba, union, type Mask, type Pt,
@@ -12,6 +12,7 @@ import { fitView, imageToScreen, inImage, screenToImage, zoomAt, type View } fro
 
 type Tool = 'sam' | 'box' | 'brush' | 'poly'
 type SamState = 'loading' | 'ready' | 'running' | 'error'
+type SamFirstLoad = 'no' | 'loading' | 'ready'   // weights not in memory yet → overlay, then a brief ready toast
 type SamPoint = { x: number; y: number; label: 0 | 1 }
 type LastSam = { points: SamPoint[]; box: { x0: number; y0: number; x1: number; y1: number } | null; op: 'add' | 'sub'; before: Mask }
 
@@ -79,6 +80,7 @@ export default function MaskEditor({ slot, baseImageId, baseImageUrl, onClose, o
   const [showMask, setShowMask] = useState(true)
   const [sam, setSam]           = useState<SamState>('loading')
   const [samError, setSamError] = useState('')
+  const [samFirst, setSamFirst] = useState<SamFirstLoad>('no')
   const [dirty, setDirty]       = useState(false)
   const [confirmDiscard, setConfirmDiscard] = useState(false)
   const [poly, setPoly]         = useState<Pt[]>([])
@@ -115,9 +117,22 @@ export default function MaskEditor({ slot, baseImageId, baseImageUrl, onClose, o
       setMask(m)
     }
     img.src = baseImageUrl
-    segmentPrepare(baseImageId)
-      .then(() => setSam('ready'))
-      .catch(e => { setSam('error'); setSamError((e as Error).message) })
+    let alive = true
+    let toast: ReturnType<typeof setTimeout> | undefined
+    ;(async () => {
+      const first = !(await segmentStatus().catch(() => ({ loaded: true }))).loaded
+      if (first && alive) setSamFirst('loading')
+      try {
+        await segmentPrepare(baseImageId)
+        if (!alive) return
+        setSam('ready')
+        if (first) { setSamFirst('ready'); toast = setTimeout(() => setSamFirst('no'), 2500) }
+      } catch (e) {
+        if (!alive) return
+        setSam('error'); setSamError((e as Error).message); setSamFirst('no')
+      }
+    })()
+    return () => { alive = false; clearTimeout(toast) }
   }, [baseImageId, baseImageUrl, slot.maskUrl])
 
   // ── Size canvas to its box, fit on first layout ─────────────────────────────
@@ -490,6 +505,20 @@ export default function MaskEditor({ slot, baseImageId, baseImageUrl, onClose, o
             onPointerLeave={() => setCursor(null)}
           />
           {!mask && <div className="absolute inset-0 flex items-center justify-center text-muted text-sm">Loading image…</div>}
+          {mask && samFirst === 'loading' && (
+            <div className="absolute inset-0 flex items-center justify-center pointer-events-none" role="status">
+              <div className="flex flex-col items-center gap-2 px-6 py-4 rounded-lg bg-surface/90 border border-border shadow-lg">
+                <Loader2 size={28} className="animate-spin text-accent" />
+                <span className="text-sm text-white">Loading SAM model…</span>
+                <span className="text-[11px] text-muted">First use only · Brush and Polygon work meanwhile</span>
+              </div>
+            </div>
+          )}
+          {samFirst === 'ready' && (
+            <div className="absolute top-3 left-1/2 -translate-x-1/2 pointer-events-none flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-surface/90 border border-green-500/40 text-green-400 text-xs" role="status">
+              <Check size={13} /> SAM ready — click an object
+            </div>
+          )}
           <HelpTip text={NAV_TIP} position="left" className="absolute top-2 right-2 inline-flex">
             <span className="p-1 rounded bg-card/80 border border-border text-muted hover:text-white cursor-help" aria-label="Navigation help">
               <Info size={14} aria-hidden="true" />
