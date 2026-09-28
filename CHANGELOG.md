@@ -3,6 +3,7 @@
 History and "why we did X". Operational rules live in `CLAUDE.md`; reference in `docs/`.
 
 ## 2026-09-28
+- Mask editor first-load feedback: `GET /api/segment/status` → `{loaded}` (reads `SamSegmenter.loaded`, never triggers a load). When SAM weights aren't in memory the editor shows a centered, click-through spinner card ("Loading SAM model… First use only") over the canvas, then a green "SAM ready — click an object" toast for 2.5 s; warm opens show neither (the bottom-bar status remains). Verified in Chrome on a cold server: overlay at 0.27 s, toast at 3.9 s, cleared by 7 s. Only reproducible on a freshly started server.
 - Ref images row split into Base and References sections. Why: removing the base to change it shifted ref 1 into the base. Now any slot is replaced in place (click or drop), a ref dragged onto the base swaps them, and the base can't be removed while refs exist (the backend always uses the first image as the img2img base, so an empty base with refs would silently promote a material ref). A base change clears all masks, since they are drawn on the base.
 
 ## 2026-09-27
