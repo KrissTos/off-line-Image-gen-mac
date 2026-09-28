@@ -41,7 +41,7 @@ FastAPI backend + React frontend. UI brand "Local AI Image Gen".
 venv/bin/python server.py --port 7860 --no-auto-shutdown
 cd frontend && npm run build   # after any frontend change
 venv/bin/python -m pytest -q   # full suite
-cd frontend && npm test        # mask editor pure-logic tests (node --test)
+cd frontend && npm test        # pure-logic tests: mask editor + slots (node --test)
 venv/bin/python -m core.run_store migrate <dir> [--apply]   # legacy flat outputs / v1 workflows → run folders (dry run default)
 ```
 1. Server exits 60 s after the last browser ping; use `--no-auto-shutdown` for headless/API testing.
@@ -94,6 +94,7 @@ venv/bin/python -m core.run_store migrate <dir> [--apply]   # legacy flat output
 1. Tailwind tokens: `bg:#0a0a0a` · `surface:#141414` · `card:#1c1c1c` · `border:#2a2a2a` · `accent:#7c3aed` · `muted/label:#6b7280`.
 2. Never put `title` on a Gallery thumbnail's outer div (native tooltip).
 3. Restore goes through `workflowToParams()` (`src/workflow.ts`); a new `GenerateParams` field that should survive reload goes in its key lists.
-4. No UI test runner: verify pure-logic TS modules (`src/mask/*`) with `cd frontend && npm test` (node --test); verify UI in a real browser — claude-in-chrome is reliable for the mask editor, where agent-browser has frozen the tab on Invert/Grow after a polygon edit.
+4. No UI test runner: verify pure-logic TS modules (`src/mask/*`, `src/slots.ts`) with `cd frontend && npm test` (node --test); verify UI in a real browser — claude-in-chrome is reliable for the mask editor, where agent-browser has frozen the tab on Invert/Grow after a polygon edit.
 5. Mask editor keys: Alt = subtract (SAM/box/brush/polygon-close), Shift+click = SAM refine last object.
-6. In claude-in-chrome UI checks, add ref slots by dispatching `dragover`+`drop` `DragEvent`s (a `DataTransfer` with `text/plain` = gallery image URL) on the "+ ref img" button — no file dialog needed.
+6. In claude-in-chrome UI checks, add ref slots by dispatching `dragover`+`drop` `DragEvent`s (a `DataTransfer` with `text/plain` = gallery image URL) on the "+ base img" / "+ ref img" button (or on a card to replace it; `application/x-ref-slot` = slotId on the base card swaps) — no file dialog needed.
+7. Ref row: Base (slot #1) and References are separate; never shift a ref into the base. Base changes only via `REPLACE_SLOT_IMAGE` / `SWAP_WITH_BASE` (`src/slots.ts`); every mask is drawn on the base, so a base change clears all masks.
