@@ -1290,6 +1290,7 @@ def generate_image(
     fast_preview=False,    # LTX-Video: single-pass distilled render (skips multiscale upsampler)
 ):
     global pipe, img2img_pipe, inpaint_pipe, video_pipe, video_upsampler, current_video_device, model_source
+    global current_model, current_lora_paths
 
     # Merge legacy lora_file/lora_strength into lora_files list
     # Also handles lora_files=[] sent by pipeline.py when no new-style LoRAs are set
@@ -1315,6 +1316,11 @@ def generate_image(
                 inpaint_pipe = None
             del pipe
             pipe = None
+            # The image pipe and its adapters are gone: a stale current_model would route
+            # this request down the FLUX branch with pipe=None, and stale LoRA paths would
+            # make a later FLUX request skip reloading its LoRA.
+            current_model = None
+            current_lora_paths = []
             if torch.backends.mps.is_available():
                 torch.mps.empty_cache()
             gc.collect()

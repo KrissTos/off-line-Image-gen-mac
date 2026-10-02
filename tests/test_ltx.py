@@ -158,3 +158,36 @@ def test_progress_callback_maps_to_percent():
     cb(None, 0, None, {})
     assert calls and calls[-1][1] == 100
     assert 0 <= calls[-1][0] <= 100
+
+
+def test_ltx_after_flux_resets_image_pipeline_state(monkeypatch, tmp_path):
+    """Switching FLUX -> LTX unloads the image pipe; current_model and the loaded-LoRA
+    record must go with it. A stale current_model sent generation down the FLUX branch
+    with pipe=None ("'NoneType' object is not callable"), and stale LoRA paths made a
+    later FLUX request think its LoRA was still loaded."""
+    import app
+    monkeypatch.setattr(app, "pipe", object())
+    monkeypatch.setattr(app, "img2img_pipe", None)
+    monkeypatch.setattr(app, "inpaint_pipe", None)
+    monkeypatch.setattr(app, "video_pipe", None)
+    monkeypatch.setattr(app, "video_upsampler", None)
+    monkeypatch.setattr(app, "current_model", "flux2-klein-sdnq")
+    monkeypatch.setattr(app, "current_lora_paths", [{"path": "a.safetensors", "strength": 1.0}])
+    monkeypatch.setattr(app, "load_ltx_pipeline", lambda device: MagicMock())
+    rendered = []
+    monkeypatch.setattr(app, "render_ltx_video",
+                        lambda *a, **k: rendered.append(k) or [Image.new("RGB", (64, 64))])
+    monkeypatch.setattr(app, "export_frames_to_video", lambda frames, path, fps=24: path)
+
+    results = list(app.generate_image(
+        prompt="x", height=320, width=512, steps=8, seed=1, guidance=1.0, device="cpu",
+        model_choice="LTX-Video  (txt2video · img2video with ref)", model_source_choice="Local",
+        input_images=None, lora_file=None, lora_strength=1.0, img_strength=1.0,
+        repeat_count=1, auto_save=False, output_dir=str(tmp_path), upscale_enabled=False,
+        upscale_model_path="", num_frames=25, fps_val=24, fast_preview=True,
+    ))
+
+    assert len(rendered) == 1                       # reached the LTX branch
+    assert app.current_model is None
+    assert app.current_lora_paths == []
+    assert "LTX-Video" in results[-1][2]            # info names the right model
