@@ -34,7 +34,9 @@ dependencies = [
 ]
 
 [dependency-groups]
-dev = []
+dev = [
+    "pytest>=9.1.1",
+]
 
 [tool.uv.sources]
 diffusers = { git = "https://github.com/huggingface/diffusers.git", tag = "v0.40.0" }
