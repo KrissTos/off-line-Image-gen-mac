@@ -1600,13 +1600,6 @@ export default function Sidebar({
 
       {/* Generate / Iterate / Stop — single button that adapts to context */}
       <div className="p-4 border-t border-border space-y-2">
-        {params.model_choice.startsWith('FLUX') &&
-         params.mask_mode === 'Inpainting Pipeline (Quality)' && (
-          <p className="text-[10px] text-amber-400/70 bg-amber-900/20 border border-amber-800/30
-                        rounded px-2 py-1 leading-tight">
-            ⚠ Inpainting Pipeline unavailable for FLUX.2-klein — will use img2img
-          </p>
-        )}
         {isGenerating ? (
           <button onClick={onStop}
             className="w-full py-3 rounded-xl bg-red-600/80 hover:bg-red-600 text-white font-semibold text-sm transition-colors">

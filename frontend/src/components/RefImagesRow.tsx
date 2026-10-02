@@ -188,7 +188,6 @@ function SlotCard({
 interface Props {
   slots:                RefImageSlot[]
   maskMode:             string
-  modelChoice:          string
   onAddSlots:           (files: File[]) => void
   onAddSlotDirect?:     (imageId: string, imageUrl: string) => void
   onRemoveSlot:         (slotId: number) => void
@@ -204,7 +203,7 @@ interface Props {
 const SECTION_LABEL = 'text-[10px] text-muted uppercase tracking-wide select-none'
 
 export default function RefImagesRow({
-  slots, maskMode, modelChoice,
+  slots, maskMode,
   onAddSlots, onAddSlotDirect, onRemoveSlot, onReplaceSlot, onSwapWithBase,
   onUploadMask, onClearMask, onSlotStrengthChange, onSlotDimsLoaded, onParamChange,
 }: Props) {
@@ -359,12 +358,6 @@ export default function RefImagesRow({
                 <option>Crop & Composite (Fast)</option>
                 <option>Inpainting Pipeline (Quality)</option>
               </select>
-              {modelChoice.startsWith('FLUX') && maskMode === 'Inpainting Pipeline (Quality)' && (
-                <p className="text-[9px] text-amber-400/80 bg-amber-900/20 border border-amber-800/30
-                              rounded px-1.5 py-1 leading-tight mt-1">
-                  ⓘ FLUX.2-klein doesn't support inpainting — will use img2img instead
-                </p>
-              )}
             </div>
           )}
         </div>

@@ -167,7 +167,7 @@ A full-screen editor that always works on slot #1's image.
 | Mode | When to use |
 |---|---|
 | **Crop & Composite (Fast)** | Quick edits — crops the masked region, generates at lower res, composites back |
-| **Inpainting Pipeline (Quality)** | Full-resolution inpainting — slower but cleaner results (Z-Image only) |
+| **Inpainting Pipeline (Quality)** | Full-resolution inpainting — slower but cleaner results (Z-Image Full and FLUX.2-klein) |
 
 ### Iterate Masks button
 

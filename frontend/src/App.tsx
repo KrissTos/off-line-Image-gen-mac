@@ -575,7 +575,6 @@ export default function App() {
             <RefImagesRow
               slots={state.refSlots}
               maskMode={state.params.mask_mode}
-              modelChoice={state.params.model_choice}
               onAddSlots={handleAddRefSlots}
               onAddSlotDirect={(imageId, imageUrl) => dispatch({ type: 'ADD_REF_SLOT', imageId, imageUrl })}
               onRemoveSlot={handleRemoveRefSlot}

@@ -49,7 +49,7 @@ def save_setting(key: str, value):
 # Global state
 pipe = None
 img2img_pipe = None   # cached ZImageImg2ImgPipeline — shared weights with pipe
-inpaint_pipe = None   # cached FluxInpaintPipeline / ZImageInpaintPipeline
+inpaint_pipe = None   # cached Flux2KleinInpaintPipeline / ZImageInpaintPipeline
 current_device = None
 current_model = None  # "zimage-quant", "zimage-full", "flux2-klein-int8"
 current_lora_paths: list = []  # [{path: str, strength: float}, ...]
@@ -1375,6 +1375,7 @@ def generate_image(
     #    (auto-outpaint); generated full-frame, then composited so only the mask changes.
     slot1_canvas = None
     fit_warning  = None
+    auto_outpainted = False
     if input_images is not None and len(input_images) > 0 and not is_video_model:
         raw0 = input_images[0][0] if isinstance(input_images[0], tuple) else input_images[0]
         fit = fit_ref_to_canvas(raw0, img_w, img_h, outpaint_align, mask=mask_image,
@@ -1385,6 +1386,7 @@ def generate_image(
         if fit_warning:
             print(f"  ⚠ {fit_warning}")
         if fit.padded:
+            auto_outpainted = True
             mask_mode = "Inpainting Pipeline (Quality)"
             print(f"  Auto-outpaint: {raw0.size[0]}×{raw0.size[1]} → {img_w}×{img_h} "
                   f"(align={outpaint_align}, {'outpaint LoRA' if outpaint_lora else 'blur pad'})")
@@ -1496,17 +1498,57 @@ def generate_image(
         try:
             with torch.inference_mode():
                 if current_model in ("flux2-klein-int8", "flux2-klein-sdnq", "flux2-klein-9b-sdnq"):
-                    # ── FLUX inpainting: FluxInpaintPipeline is incompatible with
-                    #    Flux2KleinPipeline (different transformer/vae types), so fall
-                    #    straight through to img2img for masked generations.
+                    # ── FLUX inpainting: Flux2KleinInpaintPipeline (diffusers >= 0.38) shares the
+                    #    klein weights. FluxInpaintPipeline is incompatible, and auto-outpaint stays
+                    #    on img2img because the 4B outpaint LoRA is trained for that path.
+                    _flux_inpainted = False
                     if (has_mask and mask_full is not None
                             and "Inpainting" in (mask_mode or "")
                             and ref_full is not None):
                         preprocessed_flux_refs = preprocessed_flux_refs or [ref_full]
-                        _dbg("FLUX: inpainting fall-through → img2img (FluxInpaintPipeline incompatible)")
+                        if not auto_outpainted:
+                            try:
+                                from diffusers import Flux2KleinInpaintPipeline
+                                # Rebuild when the wrapped pipe changed (model deleted / reloaded)
+                                if inpaint_pipe is None or getattr(inpaint_pipe, "_klein_src", None) is not pipe:
+                                    print("  Creating Flux2KleinInpaintPipeline (shared weights, one-time cost)...")
+                                    inpaint_pipe = Flux2KleinInpaintPipeline(**pipe.components)
+                                    inpaint_pipe._klein_src = pipe
+                                if hasattr(pipe, "vae") and hasattr(pipe.vae, "disable_tiling"):
+                                    pipe.vae.disable_tiling()
+                                extra_refs = list(preprocessed_flux_refs[1:])
+                                # No padding_mask_crop: it returns a flat rectangle on klein.
+                                image = inpaint_pipe(
+                                    prompt=prompt,
+                                    image=ref_full,
+                                    mask_image=mask_full,
+                                    image_reference=extra_refs or None,
+                                    height=gen_h,
+                                    width=gen_w,
+                                    strength=min(1.0, max(0.01, float(img_strength))),
+                                    num_inference_steps=int(steps),
+                                    guidance_scale=float(guidance),
+                                    generator=generator,
+                                    callback_on_step_end=_cb,
+                                ).images[0]
+                                if hasattr(pipe, "vae") and hasattr(pipe.vae, "enable_tiling"):
+                                    pipe.vae.enable_tiling()
+                                mode = f"inpainting ({1 + len(extra_refs)} ref)"
+                                video_frames = None
+                                _flux_inpainted = True
+                                _dbg("FLUX branch: Flux2KleinInpaintPipeline")
+                            except Exception as _e:
+                                print(f"  Flux2KleinInpaintPipeline failed ({_e}) — falling back to img2img")
+                                _dbg(f"FLUX branch: inpainting failed ({_e}), falling back to img2img")
+                                if hasattr(pipe, "vae") and hasattr(pipe.vae, "enable_tiling"):
+                                    pipe.vae.enable_tiling()
+                        else:
+                            _dbg("FLUX: auto-outpaint → img2img (outpaint LoRA path)")
 
                     # ── FLUX img2img (reference images, incl. inpainting fall-through) ──
-                    if preprocessed_flux_refs is not None:
+                    if _flux_inpainted:
+                        pass
+                    elif preprocessed_flux_refs is not None:
                         if hasattr(pipe, "vae") and hasattr(pipe.vae, "disable_tiling"):
                             pipe.vae.disable_tiling()
 

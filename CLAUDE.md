@@ -66,7 +66,7 @@ venv/bin/python -m core.run_store migrate <dir> [--apply]   # legacy flat output
 3. Guard every endpoint taking a temp file id: `path.resolve().is_relative_to(TEMP_DIR.resolve())`.
 4. Use `manager.stop_requested`, never `_stop_event`, from `server.py`.
 5. Use `core/lora_zimage.load_lora_for_pipeline()` for Z-Image LoRA; never `pipe.load_lora_weights()`.
-6. Never use `FluxInpaintPipeline` with Flux2Klein (incompatible); masked FLUX = img2img + composite.
+6. Never use `FluxInpaintPipeline` with Flux2Klein (incompatible). Masked FLUX: crop mode = img2img on the crop + composite; "Inpainting Pipeline (Quality)" = `Flux2KleinInpaintPipeline` built from `pipe.components` (never `from_pipe`, it casts the quantized dtype; never `padding_mask_crop`, it returns a flat rectangle) + pixel composite; auto-outpaint stays on img2img (outpaint LoRA).
 7. Model keys: internal `current_model` → `startswith("flux2")`; display `model_choice` → `startsWith('FLUX')`. Never mix.
 8. Resize binary masks with `Image.NEAREST`, never LANCZOS.
 9. Default model = `default_model` in `app_settings.json`, read in `App.tsx` bootstrap after `fetchSettings()`.
