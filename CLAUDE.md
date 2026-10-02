@@ -53,7 +53,7 @@ venv/bin/python -m core.run_store migrate <dir> [--apply]   # legacy flat output
 1. Use `uv`, never pip; sync with `UV_PROJECT_ENVIRONMENT=venv uv sync`.
 <!-- plain `uv sync` targets .venv/, the wrong env; Launch.command sets the variable -->
 2. Use `venv/bin/python` for everything (tests, server, scripts).
-3. `diffusers` and `sdnq` come from git main (FLUX.2-klein LoRA needs it).
+3. `diffusers` is pinned to git tag `v0.40.0` (pulls `transformers` 5 + `huggingface-hub` 1); `sdnq` comes from git main.
 4. xformers is not needed on Apple Silicon (MPS has SDPA); don't try to install it.
 5. HF token lives in `huggingface/token` (gitignored, Read type); gated models need terms accepted on their page.
 6. Models live in the global HF cache `~/.cache/huggingface/hub`, not `./models/`.

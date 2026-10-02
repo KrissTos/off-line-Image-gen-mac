@@ -2,6 +2,10 @@
 
 History and "why we did X". Operational rules live in `CLAUDE.md`; reference in `docs/`.
 
+## 2026-10-02
+- Upgraded diffusers git pin (2026-01-15, 0.37.0.dev0) to tag `v0.40.0`; this pulls `transformers` 4.57.5 -> 5.18.0 and `huggingface-hub` 0.36 -> 1.33. Why: Flux2KleinInpaintPipeline, Flux2KleinKVPipeline, a working FLUX.2 small decoder and the native SDNQ backend only exist upstream. Verified over the API against the old stack: FLUX 4B/9B/4B-int8 and Z-Image txt2img, BFL LoRA, ref edit, masked-crop, 4B outpaint LoRA and LTX fast-preview all run with equal timings (4B 18.7 vs 17.8 s, 9B 43 vs 42 s) and the same compositions; same-seed txt2img is not bit-identical across stacks (PSNR 16-27 dB). 108 tests pass. Not verified: Z-Image Full + LoRA (weights not cached). `torch_dtype` now logs a deprecation warning (still works).
+- Known, unrelated (on both stacks): switching a FLUX model to LTX in one process fails with `'NoneType' object is not callable` (`app.generate_image` takes the FLUX branch with `pipe=None` because `current_model` is stale); LTX works on a fresh server or after Z-Image.
+
 ## 2026-09-28
 - Mask editor first-load feedback: `GET /api/segment/status` → `{loaded}` (reads `SamSegmenter.loaded`, never triggers a load). When SAM weights aren't in memory the editor shows a centered, click-through spinner card ("Loading SAM model… First use only") over the canvas, then a green "SAM ready — click an object" toast for 2.5 s; warm opens show neither (the bottom-bar status remains). Verified in Chrome on a cold server: overlay at 0.27 s, toast at 3.9 s, cleared by 7 s. Only reproducible on a freshly started server.
 - Ref images row split into Base and References sections. Why: removing the base to change it shifted ref 1 into the base. Now any slot is replaced in place (click or drop), a ref dragged onto the base swaps them, and the base can't be removed while refs exist (the backend always uses the first image as the img2img base, so an empty base with refs would silently promote a material ref). A base change clears all masks, since they are drawn on the base.

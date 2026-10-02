@@ -37,5 +37,5 @@ dependencies = [
 dev = []
 
 [tool.uv.sources]
-diffusers = { git = "https://github.com/huggingface/diffusers.git" }
+diffusers = { git = "https://github.com/huggingface/diffusers.git", tag = "v0.40.0" }
 sdnq = { git = "https://github.com/Disty0/sdnq.git" }
