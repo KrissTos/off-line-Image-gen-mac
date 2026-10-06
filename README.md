@@ -64,7 +64,7 @@ Then **double-click `Launch.command`** in Finder.
 
 The first launch installs all dependencies (~5 min). The UI opens automatically in Google Chrome (default browser if Chrome is missing) at `http://localhost:7860`.
 
-> **Terminal lifecycle**: The Terminal window that opens is managed automatically. When you close the browser tab the server shuts down and **Terminal closes itself** — you don't need to quit it manually. Refreshing the page reconnects within ~1 s and cancels the shutdown.
+> **Terminal lifecycle**: The Terminal window that opens is managed automatically. When you close the browser tab the server shuts down and the script exits to the shell; **close the Terminal window yourself** (the launcher no longer closes it, since that could hit the wrong window). Refreshing the page reconnects within ~1 s and cancels the shutdown.
 
 ---
 

@@ -47,7 +47,7 @@ venv/bin/python -m core.run_store migrate <dir> [--apply]   # legacy flat output
 1. Server exits 60 s after the last browser ping; use `--no-auto-shutdown` for headless/API testing.
 2. Restart the server after backend changes (no auto-reload).
 3. `generate.py` CLI is Z-Image Turbo only.
-4. Killing a `Launch.command` server also closes its Terminal window; restart from CC with `venv/bin/python server.py --port 7860` via `run_in_background`, and say so.
+4. `Launch.command` never closes its Terminal window (the old 'close front window' hit whichever window was frontmost); it exits to the shell. A server you stopped can be restarted from CC with `venv/bin/python server.py --port 7860` via `run_in_background`, and say so.
 
 ## 5. Environment
 1. Use `uv`, never pip; sync with `UV_PROJECT_ENVIRONMENT=venv uv sync`.
