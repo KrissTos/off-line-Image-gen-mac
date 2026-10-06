@@ -11,14 +11,10 @@ import {
   fetchModelSources, saveModelSources, discoverModelSources,
   type ModelUpdateResult, type ModelExtras, type ModelSource,
 } from '../api'
+import SourceFolder from './SourceFolder'
+import { groupSources, functionCounts, filterByFunction, parseOpenState } from '../sourceGroups'
 import { applyThemeColors } from '../App'
 import { useAppState } from '../store'
-
-const TYPE_GROUPS: { type: ModelSource['type']; label: string }[] = [
-  { type: 'base',     label: 'Models' },
-  { type: 'lora',     label: 'LoRAs' },
-  { type: 'upscaler', label: 'Upscalers' },
-]
 
 // Best image model that fits the Mac: the largest-VRAM base model (excluding video)
 // whose requirement sits within 90% of the GPU-usable memory ceiling.
@@ -108,6 +104,20 @@ export default function SettingsDrawer({ open, onClose }: Props) {
   const [downloadingSource, setDownloadingSource] = useState<string | null>(null)
   const [discovering, setDiscovering]       = useState(false)
   const [discoverMsg, setDiscoverMsg]       = useState<string | null>(null)
+  // Folder open/closed state (remembered) and the per-folder function filter
+  const OPEN_KEY = 'modelSources.open'
+  const [openState, setOpenState] = useState<Record<string, boolean>>(() => {
+    try { return parseOpenState(localStorage.getItem(OPEN_KEY)) } catch { return {} }
+  })
+  const [fnFilter, setFnFilter] = useState<Record<string, string | null>>({})
+  const isOpen = (key: string, dflt = false) => openState[key] ?? dflt
+  function toggleOpen(key: string, dflt = false) {
+    setOpenState(prev => {
+      const next = { ...prev, [key]: !(prev[key] ?? dflt) }
+      try { localStorage.setItem(OPEN_KEY, JSON.stringify(next)) } catch { /* storage unavailable */ }
+      return next
+    })
+  }
 
   const loadData = useCallback(async () => {
     setRefreshing(true)
@@ -321,14 +331,19 @@ export default function SettingsDrawer({ open, onClose }: Props) {
     setDiscovering(true)
     setDiscoverMsg(null)
     try {
-      const { added, sources: updated } = await discoverModelSources()
+      const { added, skipped, described, sources: updated } = await discoverModelSources()
       setSources(updated)
-      setDiscoverMsg(added > 0 ? `${added} new source${added > 1 ? 's' : ''} added` : 'Already up to date')
+      const parts = [
+        added > 0 ? `${added} new source${added > 1 ? 's' : ''} added` : 'Already up to date',
+        skipped > 0 ? `${skipped} skipped (not usable here)` : '',
+        described > 0 ? `${described} described` : '',
+      ].filter(Boolean)
+      setDiscoverMsg(parts.join(' · '))
     } catch {
       setDiscoverMsg('Could not reach HuggingFace')
     } finally {
       setDiscovering(false)
-      setTimeout(() => setDiscoverMsg(null), 4000)
+      setTimeout(() => setDiscoverMsg(null), 8000)
     }
   }
 
@@ -346,6 +361,7 @@ export default function SettingsDrawer({ open, onClose }: Props) {
       name: newSource.name.trim(),
       url: newSource.url.trim(),
       description: newSource.description.trim(),
+      custom: true,
     }
     const next = [...sources, entry]
     setSources(next)
@@ -850,12 +866,17 @@ export default function SettingsDrawer({ open, onClose }: Props) {
                                 ★ Recommended
                               </span>
                             )}
+                            {src.type === 'lora' && src.function && (
+                              <span className="shrink-0 text-[9px] px-1.5 py-0.5 rounded bg-white/5 text-muted border border-border">
+                                {src.function}
+                              </span>
+                            )}
                             {src.type === 'base' && src.vram_gb != null && (
                               <span className="shrink-0 text-[9px] text-muted/60 font-mono">~{src.vram_gb} GB</span>
                             )}
                           </div>
                           {src.description && (
-                            <div className="text-[10px] text-muted/70 truncate mt-0.5">{src.description}</div>
+                            <div className="text-[10px] text-muted/70 line-clamp-2 mt-0.5">{src.description}</div>
                           )}
                         </div>
                         <div className="flex items-center gap-1 shrink-0">
@@ -908,16 +929,43 @@ export default function SettingsDrawer({ open, onClose }: Props) {
                   )
                   }
 
-                  return TYPE_GROUPS.map(g => {
-                    const items = sources.filter(s => s.type === g.type)
-                    if (!items.length) return null
-                    return (
-                      <div key={g.type} className="space-y-2">
-                        <h4 className="text-[10px] font-semibold uppercase tracking-wider text-muted/60">{g.label}</h4>
-                        {items.map(renderCard)}
-                      </div>
-                    )
-                  })
+                  return groupSources(sources).map(cat => (
+                    <SourceFolder
+                      key={cat.type} label={cat.label} count={cat.items.length}
+                      open={isOpen(cat.type, cat.type === 'base')}
+                      onToggle={() => toggleOpen(cat.type, cat.type === 'base')}
+                    >
+                      {cat.folders ? cat.folders.map(folder => {
+                        const fKey = `${cat.type}.${folder.key}`
+                        const active = fnFilter[fKey] ?? null
+                        const chips = functionCounts(folder.items)
+                        return (
+                          <SourceFolder
+                            key={fKey} level={2} label={folder.label} count={folder.items.length}
+                            open={isOpen(fKey)} onToggle={() => toggleOpen(fKey)}
+                          >
+                            {chips.length > 1 && (
+                              <div className="flex flex-wrap gap-1">
+                                {chips.map(c => (
+                                  <button
+                                    key={c.fn}
+                                    onClick={() => setFnFilter(prev => ({ ...prev, [fKey]: active === c.fn ? null : c.fn }))}
+                                    aria-pressed={active === c.fn}
+                                    className={`text-[10px] px-1.5 py-0.5 rounded border transition-colors ${
+                                      active === c.fn ? 'bg-accent/20 border-accent/50 text-accent'
+                                                      : 'border-border text-muted hover:text-white'}`}
+                                  >
+                                    {c.fn} <span className="font-mono opacity-60">{c.count}</span>
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                            {filterByFunction(folder.items, active).map(renderCard)}
+                          </SourceFolder>
+                        )
+                      }) : cat.items.map(renderCard)}
+                    </SourceFolder>
+                  ))
                 })()}
 
                 {/* Add new source */}
