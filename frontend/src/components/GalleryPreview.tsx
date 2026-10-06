@@ -1,10 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { X, Copy, Check, Trash2, ChevronLeft, ChevronRight, Download } from 'lucide-react'
 import type { OutputItem } from '../types'
 import type { WorkflowData } from '../workflow'
 import { loadRun } from '../api'
-import { neighbor, paramRows, loraRows, upscaleSource } from '../previewModel'
+import { neighbor, paramRows, loraRows, upscaleSource, keyAction } from '../previewModel'
 
 interface Props {
   item:       OutputItem
@@ -34,15 +34,37 @@ export default function GalleryPreview({ item, outputs, canLoad, onClose, onNavi
     return () => { cancelled = true }
   }, [item.run])
 
+  // Focus: remember the opener to hand focus back on close; Tab cycles inside the dialog.
+  const dialogRef = useRef<HTMLDivElement>(null)
+  // Captured during the first render: autoFocus on the close button has already run by effect time.
+  const [opener] = useState(() => document.activeElement as HTMLElement | null)
+  useEffect(() => () => { if (opener?.isConnected) opener.focus() }, [opener])
+
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape') onClose()
-      else if (e.key === 'ArrowLeft' && prev) onNavigate(prev)
-      else if (e.key === 'ArrowRight' && next) onNavigate(next)
+      const t = e.target as HTMLElement | null
+      const act = keyAction({
+        key: e.key, metaKey: e.metaKey, ctrlKey: e.ctrlKey, altKey: e.altKey,
+        targetTag: t?.tagName ?? '', targetEditable: !!t?.isContentEditable,
+      })
+      if (act === 'close') onClose()
+      else if (act === 'prev' && prev) onNavigate(prev)
+      else if (act === 'next' && next) onNavigate(next)
+      else if (e.key === 'Tab' && dialogRef.current) {
+        const els = [...dialogRef.current.querySelectorAll<HTMLElement>('button:not([disabled]), a[href], video[controls]')]
+        if (!els.length) return
+        const first = els[0], last = els[els.length - 1]
+        if (!dialogRef.current.contains(document.activeElement)) { e.preventDefault(); first.focus() }
+        else if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus() }
+        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus() }
+      }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose, onNavigate, prev, next])
+
+  // Close on backdrop only when press AND release land on it (a text selection that ends there must not close).
+  const downOnBackdrop = useRef(false)
 
   const slots   = wf?.ref_slots ?? []
   const source  = upscaleSource(outputs, wf, item)
@@ -61,11 +83,12 @@ export default function GalleryPreview({ item, outputs, canLoad, onClose, onNavi
   return createPortal(
     <div
       className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-6"
-      onClick={onClose}
+      onMouseDown={e => { downOnBackdrop.current = e.target === e.currentTarget }}
+      onClick={e => { if (e.target === e.currentTarget && downOnBackdrop.current) onClose() }}
     >
       <div
+        ref={dialogRef}
         role="dialog" aria-modal="true" aria-label="Output preview"
-        onClick={e => e.stopPropagation()}
         className="relative flex w-full max-w-6xl h-[85vh] bg-surface border border-border rounded-xl overflow-hidden"
       >
         {/* Image */}

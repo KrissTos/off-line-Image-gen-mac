@@ -40,3 +40,18 @@ export function upscaleSource(outputs: OutputItem[], wf: WorkflowData | null, it
   if (!from) return null
   return outputs.find(o => o.run === item.run && o.file === from) ?? null
 }
+
+export interface KeyInfo {
+  key: string; metaKey: boolean; ctrlKey: boolean; altKey: boolean
+  targetTag: string; targetEditable: boolean
+}
+
+/** Modal keyboard map. Arrows are left alone when a modifier is held (browser back/forward) or the
+ *  focus is a control that owns them (video seek, text fields). */
+export function keyAction(e: KeyInfo): 'close' | 'prev' | 'next' | null {
+  if (e.key === 'Escape') return 'close'
+  if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return null
+  if (e.metaKey || e.ctrlKey || e.altKey) return null
+  if (e.targetEditable || ['VIDEO', 'INPUT', 'TEXTAREA', 'SELECT'].includes(e.targetTag)) return null
+  return e.key === 'ArrowLeft' ? 'prev' : 'next'
+}
