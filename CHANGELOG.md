@@ -3,6 +3,7 @@
 History and "why we did X". Operational rules live in `CLAUDE.md`; reference in `docs/`.
 
 ## 2026-10-06
+- LoRA trigger hint for `refcontrol_depth_klein9b.safetensors` (thedeoxen RefControl depth LoRA, klein-9B): trigger `refcontrol`, slot #1 = depth map, slot #2 = reference. A/B on one seed (distilled klein-9B, DA2 depth): with the LoRA the reference person takes the depth map's pose and the scene is photoreal; without it the model blends the depth map's tones and ignores the pose. Trained on klein-9B Base (guidance 5); the app runs distilled, so results may differ from the author's examples.
 - DA3 depth restored: `depth_anything_3` was never declared, so every `uv sync` (exact by default) removed it and the Depth Map failed with `No module named 'depth_anything_3'`. It is now the `depth` dependency group (git source, heavy 3D-export deps excluded, `default-groups` includes it); the lock only gained 7 packages and no existing pin moved.
 - Slot badges and the gallery preview thumbs read `img 1 · base`, `img 2`, `img 3`… (were `base`, `ref 1`, `ref 2`), matching how FLUX.2 prompts name images (`image 2` = the first reference).
 - Bug pass: server startup trashes `.tmp_uploads/` files older than 24 h (`_prune_temp_dir`).

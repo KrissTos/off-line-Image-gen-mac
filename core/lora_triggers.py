@@ -23,6 +23,13 @@ _BFS_PROMPT = (
 _BFS_NOTE = ("Image 1 = target body, image 2 = the head to use (don't reverse). "
              "Start at strength 1.0.")
 
+_REFCONTROL = {
+    "trigger": "refcontrol",
+    "note": "Slot #1 = depth map of the pose/scene, slot #2 = reference (identity, clothes). "
+            "Prompt just the trigger. Trained on klein-9B Base, mostly humans. Strength 1.0.",
+    "source": _HF + "thedeoxen/refcontrol-FLUX.2-klein-9B-reference-depth-lora",
+}
+
 # file name -> {trigger, note, source}. trigger None = the model needs none.
 SEED: dict[str, dict] = {
     "realistic.safetensors": {
@@ -49,6 +56,8 @@ SEED: dict[str, dict] = {
         "trigger": _BFS_PROMPT, "note": _BFS_NOTE,
         "source": _HF + "Alissonerdx/BFS-Best-Face-Swap",
     },
+    "refcontrol_depth_klein9b.safetensors": _REFCONTROL,
+    "flux2_klein_9b_refcontrol_depth.safetensors": _REFCONTROL,
     "Eyes_direction_Lora_Flux2Klein_9B_v1.safetensors": {
         "trigger": "change the eyes to match the reference dot direction",
         "note": "Needs the red-dot control image as ref #2. Strength 0.5-1 realistic, "

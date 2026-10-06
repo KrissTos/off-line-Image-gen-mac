@@ -79,3 +79,10 @@ def test_clearing_an_override_falls_back_to_the_seed(store, tmp_path):
 def test_set_trigger_rejects_path_names(store):
     with pytest.raises(ValueError):
         store.set_trigger("../evil.safetensors", "x")
+
+
+def test_refcontrol_depth_seeded_under_both_file_names(store, tmp_path):
+    for n in ("refcontrol_depth_klein9b.safetensors", "flux2_klein_9b_refcontrol_depth.safetensors"):
+        info = store.get_trigger_info(_lora(tmp_path, n))
+        assert info["trigger"] == "refcontrol"
+        assert "depth" in info["note"].lower() and info["source"].endswith("reference-depth-lora")
