@@ -28,7 +28,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from core import run_store
+from core import model_sources, run_store
 
 # ── Suppress semaphore-leak warning ───────────────────────────────────────────
 # The warning is emitted by Python's multiprocessing.resource_tracker *daemon*
@@ -1410,20 +1410,33 @@ async def api_update_settings(req: UpdateSettingsRequest):
 def api_get_model_sources():
     """Return the model sources list. Seeds from DEFAULT_SOURCES if file missing.
     Always merges model_choice from DEFAULT_SOURCES by ID so existing saved files
-    get the field even if they were written before it existed."""
+    get the field even if they were written before it existed. LoRAs this app cannot use
+    (wrong model family) are pruned unless the user added them by hand (`custom`)."""
     _defaults_by_id = {s["id"]: s for s in DEFAULT_SOURCES}
-    sources = DEFAULT_SOURCES
-    if MODEL_SOURCES_FILE.exists():
-        try:
-            data = json.loads(MODEL_SOURCES_FILE.read_text())
-            sources = data.get("sources", DEFAULT_SOURCES)
-        except Exception:
-            pass
+    sources = _read_sources_file().get("sources", DEFAULT_SOURCES)
     # Merge model_choice from DEFAULT_SOURCES for any entry that lacks it
     for s in sources:
         if "model_choice" not in s and s.get("id") in _defaults_by_id:
             s["model_choice"] = _defaults_by_id[s["id"]].get("model_choice", "")
-    return {"sources": _sort_sources(_drop_unusable_base(sources))}
+    return {"sources": _sort_sources(model_sources.prune_list(_drop_unusable_base(sources)))}
+
+
+def _read_sources_file() -> dict:
+    """Raw model_sources.json ({} when missing or unreadable)."""
+    if MODEL_SOURCES_FILE.exists():
+        try:
+            data = json.loads(MODEL_SOURCES_FILE.read_text())
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            pass
+    return {}
+
+
+def _write_sources_file(sources: list[dict], ignored: list[str]) -> None:
+    data = {"version": 1, "sources": sources}
+    if ignored:
+        data["ignored"] = ignored
+    MODEL_SOURCES_FILE.write_text(json.dumps(data, indent=2))
 
 
 _TYPE_ORDER = {"base": 0, "lora": 1, "upscaler": 2}
@@ -1442,9 +1455,8 @@ def _drop_unusable_base(sources: list[dict]) -> list[dict]:
     return [s for s in sources if s.get("type") != "base" or s.get("url") in supported]
 
 
-@app.get("/api/model-sources/discover")
-def api_discover_model_sources():
-    """Search HuggingFace for new Apple Silicon-compatible models not already in the source list."""
+def _discover_candidates(existing_urls: set[str], next_id: int) -> list[dict]:
+    """Search HuggingFace for Apple Silicon-compatible repos not already in the source list."""
     from huggingface_hub import HfApi
 
     # Repo IDs that are incompatible with Apple Silicon — never add these
@@ -1480,15 +1492,6 @@ def api_discover_model_sources():
         if author in LORA_ORGS or "lora" in repo_id.lower() or "lora" in tag_str:
             return "lora"
         return "base"
-
-    current = api_get_model_sources()["sources"]
-    existing_urls = {s["url"] for s in current}
-
-    existing_ids = [
-        int(s["id"].replace("src-", ""))
-        for s in current if s.get("id", "").startswith("src-") and s["id"][4:].isdigit()
-    ]
-    next_id = max(existing_ids, default=0) + 1
 
     api  = HfApi()
     candidates: list[dict] = []
@@ -1545,16 +1548,27 @@ def api_discover_model_sources():
     except Exception:
         pass
 
-    candidates = _drop_unusable_base(candidates)  # never surface base models the loader can't load
+    return candidates
 
-    if candidates:
-        updated = _sort_sources(current + candidates)
-        MODEL_SOURCES_FILE.write_text(json.dumps({"version": 1, "sources": updated}, indent=2))
-    else:
-        updated = _sort_sources(current)
-        MODEL_SOURCES_FILE.write_text(json.dumps({"version": 1, "sources": updated}, indent=2))
 
-    return {"added": len(candidates), "sources": updated}
+@app.get("/api/model-sources/discover")
+def api_discover_model_sources():
+    """Update: find new repos, keep only those this app can use, fill in what each one does."""
+    current = api_get_model_sources()["sources"]
+    ignored = list(_read_sources_file().get("ignored", []))
+    existing_urls = {s["url"] for s in current}
+    existing_ids = [
+        int(s["id"].replace("src-", ""))
+        for s in current if s.get("id", "").startswith("src-") and s["id"][4:].isdigit()
+    ]
+    next_id = max(existing_ids, default=0) + 1
+
+    candidates = _drop_unusable_base(_discover_candidates(existing_urls, next_id))  # never surface base models the loader can't load
+    merged, ignored, report = model_sources.merge_discovery(
+        current, candidates, ignored, model_sources.hf_fetch_files, model_sources.hf_fetch_card)
+    updated = _sort_sources(merged)
+    _write_sources_file(updated, ignored)
+    return {**report, "sources": updated}
 
 
 @app.post("/api/model-sources")
@@ -1567,7 +1581,7 @@ def api_save_model_sources(payload: dict = Body(...)):
             raise HTTPException(400, "Each source must have a non-empty name and url.")
         if s.get("type") not in valid_types:
             raise HTTPException(400, f"Invalid type '{s.get('type')}'. Must be base, lora, or upscaler.")
-    MODEL_SOURCES_FILE.write_text(json.dumps({"version": 1, "sources": sources}, indent=2))
+    _write_sources_file(sources, list(_read_sources_file().get("ignored", [])))
     return {"ok": True}
 
 

@@ -89,7 +89,7 @@ Center layout: Canvas (flex 5) / RefImagesRow (flex 4) / Gallery (flex 1) → 50
 - `Gallery.tsx` — toggle (top-right) between horizontal strip (wheel scrolls sideways) and vertical auto-fill grid (native scroll, letterboxed thumbs); choice kept in `localStorage['gallery.layout']`. `draggable` thumbs (gallery → ref slot). Click = open `GalleryPreview`; Cmd/Ctrl-click = load the whole run directly (see below). Hover: Info, Upscale ×4, Delete; video thumbs only Delete.
 - `GalleryPreview.tsx` — modal portaled to `document.body`: image/video, prompt (Copy), params + LoRAs, ref thumbs (base/ref N, mask badge), "Upscaled from" link, Left/Right/Esc (`keyAction`: arrows ignored with a modifier or while a video/input has focus), Tab cycles inside the dialog, focus returns to the opener on close, backdrop closes only on press+release (a text selection ending there doesn't), Load in workflow / Download / Delete. Fetches `loadRun(item.run)`; legacy outputs without a run show the image only (Load disabled). Pure helpers in `src/previewModel.ts` (`paramRows`, `loraRows`, `neighbor`, `upscaleSource`), tested in `frontend/tests/previewModel.test.ts`. `App.tsx` owns `previewUrl`; "Load" = `handleLoadOutput` (old gallery-click behavior).
 - Workflows panel (`Sidebar.tsx` `WorkflowPanel`) — after a saved workflow loads, "Save (overwrite <name>)" rewrites that folder; "Save as new" makes a copy. A gallery run load clears the target.
-- `SettingsDrawer.tsx` (`w-96`) — output folder, default model, HF login, model + upscaler lists, storage, server log, Model Sources.
+- `SettingsDrawer.tsx` (`w-96`) — output folder, default model, HF login, model + upscaler lists, storage, server log, Model Sources (collapsible categories Models / LoRAs / Upscalers; LoRAs nested in family folders klein-9B, klein-4B, klein, Z-Image, LTX-Video 0.9, Other; function chips filter a folder; open state in `localStorage['modelSources.open']`; rows show a 2-line description). Pure grouping in `src/sourceGroups.ts`, folder header in `SourceFolder.tsx`.
 - `TopBar.tsx` — brand, model, device, VRAM, "generating…" pulse, settings gear.
 
 ### Ref-slot state
@@ -144,7 +144,7 @@ when the restore actually runs.
 | GET | `/api/segment/status` | `{loaded}`: SAM weights in memory (no load); mask editor shows a first-load overlay + "SAM ready" toast when false |
 | POST | `/api/segment/prepare` | `{image_id}` → `{ready, ms}`; embeds the image once (SAM encoder), lazy model load |
 | POST | `/api/segment` | `{image_id, points, box}` → PNG mask (255=object); serialized on a dedicated 1-thread executor |
-| GET | `/api/model-sources/discover` | Scan HF orgs + `mps` tag, merge new → `{added, sources}`; base entries filtered to `app.KNOWN_MODELS` |
+| GET | `/api/model-sources/discover` | "Update": scan HF orgs + `mps` tag, screen new repos against what the app can use (`core/model_sources.screen`), merge, fill descriptions from the HF cards → `{added, skipped, described, failed, sources}`; skipped repos are remembered in `model_sources.json` `ignored` |
 
 ### SSE events
 ```json
@@ -157,4 +157,5 @@ when the restore actually runs.
 
 ## Model Sources (Settings drawer)
 - List shows only loadable base models: `server._drop_unusable_base()` keeps base repos in `app.KNOWN_MODELS`, on read and on discover (self-heals `model_sources.json`).
-- Grouped Models / LoRAs / Upscalers (`TYPE_GROUPS`). `recommendedSourceId()` tags the largest-VRAM image model (LTX excluded) fitting in 90% of `total_vram_gb` as ★ Recommended.
+- Model Sources filter (`core/model_sources.py`, pure + injected network): `lora_family(name)` decides which of the app's models a LoRA is for (klein 9B/4B/any size, Z-Image, LTX-Video 0.9.x; LTX-2.x, FLUX.1/FLUX.2-dev, SDXL, Qwen, Krea, Wan = unsupported); `prune_list` drops unsupported LoRAs on read unless `custom: true` (set by "Add source") and sets `family`/`function`; `screen` needs a `.safetensors` file (LoRA) or `.safetensors/.pth` plus an upscaler name (upscaler); `enrich` fills empty `description`/`function` from the card (first real sentence; upscalers prefer a name summary like `4x upscaler · ATD architecture`), never overwriting text and retrying only failed fetches (`described` marks done). Keep `lora_family` in sync when a new model family is added.
+- Grouped by `groupSources()` (`src/sourceGroups.ts`). `recommendedSourceId()` tags the largest-VRAM image model (LTX excluded) fitting in 90% of `total_vram_gb` as ★ Recommended.

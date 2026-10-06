@@ -53,6 +53,9 @@ export interface ModelSource {
   description:  string
   model_choice?: string   // exact MODEL_CHOICES string for local-cache detection (base type only)
   vram_gb?:     number    // approx GPU memory the model needs (base type only) — drives Recommended tag
+  family?:      string    // LoRA only: klein-9B | klein-4B | klein | Z-Image | LTX-Video (set by the server)
+  function?:    string    // LoRA only: what it does (style, camera, detail, ...), filled from the model card
+  custom?:      boolean   // added by hand: never pruned or auto-described
 }
 
 export interface ModelUpdateResult {
@@ -438,7 +441,9 @@ export async function saveModelSources(sources: ModelSource[]): Promise<void> {
   }
 }
 
-export async function discoverModelSources(): Promise<{ added: number; sources: ModelSource[] }> {
+export interface DiscoverResult { added: number; skipped: number; described: number; failed: number; sources: ModelSource[] }
+
+export async function discoverModelSources(): Promise<DiscoverResult> {
   const r = await fetch('/api/model-sources/discover')
   if (!r.ok) throw new Error(`Discovery failed: ${r.status}`)
   return r.json()
