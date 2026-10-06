@@ -957,16 +957,35 @@ def api_list_loras():
     """Return all .safetensors/.pt/.bin files in lora_uploads/ with model_type tag and, for
     FLUX LoRAs, the klein size ("4b" | "9b" | null) so the UI can grey out mismatches."""
     from core.lora_flux2 import lora_variant
+    from core.lora_triggers import get_trigger_info
     lora_dir = ROOT / "lora_uploads"
     if not lora_dir.exists():
         return {"files": []}
     files = [
         {"name": f.name, "path": str(f), "model_type": (mt := _detect_lora_type(str(f))),
-         "variant": lora_variant(str(f)) if mt == "flux" else None}
+         "variant": lora_variant(str(f)) if mt == "flux" else None,
+         **{f"trigger_{k}" if k != "trigger" else k: v
+            for k, v in get_trigger_info(str(f)).items()}}
         for f in sorted(lora_dir.iterdir(), key=lambda f: f.stat().st_mtime, reverse=True)
         if f.suffix in (".safetensors", ".pt", ".bin") and f.is_file()
     ]
     return {"files": files}
+
+
+class LoraTriggerRequest(BaseModel):
+    name:    str   # file name inside lora_uploads/
+    trigger: str   # "" clears the user override
+
+
+@app.put("/api/lora/trigger")
+def api_set_lora_trigger(req: LoraTriggerRequest):
+    """Save the user's trigger word/prompt for a LoRA (shown as a hint in the LoRA panel)."""
+    from core.lora_triggers import set_trigger, get_trigger_info
+    try:
+        set_trigger(req.name, req.trigger)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    return get_trigger_info(str(ROOT / "lora_uploads" / req.name))
 
 
 @app.post("/api/lora/load")

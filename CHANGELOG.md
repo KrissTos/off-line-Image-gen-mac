@@ -3,6 +3,7 @@
 History and "why we did X". Operational rules live in `CLAUDE.md`; reference in `docs/`.
 
 ## 2026-10-06
+- LoRA trigger hints + alphabetical LoRA list: each selected LoRA shows its trigger (Copy, Insert at prompt start, Edit). Triggers come from a seed table of the installed LoRAs (looked up on their HF pages: realistic = `realistic`, devil may cry = `dmc_style`, BFS head swap = a full `head_swap:` prompt, Klein-consistency = none needed, Eyes Direction = its sentence) plus per-file user overrides in `lora_triggers.json`. The LoRA dropdown is sorted by name instead of upload time.
 - LoRA size guardrail: klein LoRAs are size-specific (4B hidden 3072, 9B 4096) and a 9B LoRA picked with the 4B model failed at generate time with a raw state_dict size-mismatch dump. `core/lora_flux2.lora_variant()` reads the size from the safetensors header (`/api/lora/list` returns `variant`: `4b`/`9b`/null); the LoRA dropdown greys out the other size ("(9B only)", `frontend/src/loraCompat.ts`); `load_loras`/`load_lora` raise a one-line error via `assert_lora_matches_model()` as a backstop. Unclassifiable LoRAs stay selectable. Also fixed `check_lora_compatibility`, which rejected every 9B LoRA (limits were klein-4B's 20 single / 19 double; now 24 / 8, FLUX.2-dev's 48 still rejected). Verified in Chrome: 4B model greys all five 9B LoRAs, 9B model enables them.
 
 ## 2026-10-02

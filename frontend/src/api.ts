@@ -282,7 +282,20 @@ export async function importComfyUI(file: File) {
 export const loadLora  = (lora_path: string, strength: number, device: string) =>
   post<{ status: string }>('/api/lora/load', { lora_path, strength, device })
 export const clearLora = () => del<{ status: string }>('/api/lora')
-export const listLoras = () => get<{ files: Array<{ name: string; path: string; model_type: string; variant?: string | null }> }>('/api/lora/list')
+export interface LoraLibraryEntry {
+  name: string; path: string; model_type: string; variant?: string | null
+  trigger?: string | null; trigger_note?: string; trigger_source?: string; trigger_origin?: string
+}
+export const listLoras = () => get<{ files: LoraLibraryEntry[] }>('/api/lora/list')
+export async function setLoraTrigger(name: string, trigger: string): Promise<{ trigger: string | null }> {
+  const r = await fetch('/api/lora/trigger', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, trigger }),
+  })
+  if (!r.ok) throw new Error(`Saving trigger failed: ${r.status}`)
+  return r.json()
+}
 
 // ── Settings ──────────────────────────────────────────────────────────────────
 

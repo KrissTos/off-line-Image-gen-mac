@@ -20,3 +20,24 @@ test('matching, unclassified or non-klein model stays enabled', () => {
   assert.equal(loraDisabledReason({ variant: undefined }, '4b'), null)
   assert.equal(loraDisabledReason({ variant: '9b' }, null), null)
 })
+
+import { sortLoras, insertTrigger } from '../src/loraCompat.ts'
+
+test('sortLoras orders by name, case-insensitive, without mutating the input', () => {
+  const input = [{ name: 'realistic.safetensors' }, { name: 'bfs_b' }, { name: 'Klein-consistency' }, { name: 'Bfs_a' }]
+  const out = sortLoras(input)
+  assert.deepEqual(out.map(l => l.name), ['Bfs_a', 'bfs_b', 'Klein-consistency', 'realistic.safetensors'])
+  assert.equal(input[0].name, 'realistic.safetensors')
+})
+
+test('insertTrigger puts the trigger first, once', () => {
+  assert.equal(insertTrigger('', 'dmc_style'), 'dmc_style')
+  assert.equal(insertTrigger('a cat on a roof', 'dmc_style'), 'dmc_style, a cat on a roof')
+  assert.equal(insertTrigger('dmc_style, a cat', 'dmc_style'), 'dmc_style, a cat')
+  assert.equal(insertTrigger('x DMC_STYLE y', 'dmc_style'), 'x DMC_STYLE y')
+})
+
+test('insertTrigger joins a sentence trigger with a space and ignores surrounding blanks', () => {
+  assert.equal(insertTrigger('  keep the pose  ', 'Transform into dmc_style.'), 'Transform into dmc_style. keep the pose')
+  assert.equal(insertTrigger('anything', ''), 'anything')
+})

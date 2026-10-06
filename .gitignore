@@ -28,3 +28,4 @@ node-jiti/
 uv-setuptools-*.lock
 .pytest_cache/
 work/
+lora_triggers.json

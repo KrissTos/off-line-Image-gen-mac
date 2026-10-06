@@ -3,12 +3,13 @@ import {
   ChevronDown, ChevronRight, Play, Square,
   Layers, Sliders, Video, UploadCloud, X, Workflow, Cpu,
   Wand2, ArrowUpCircle, FolderInput, ListOrdered, FolderOpen, ImagePlus, Plus,
-  Eraser,
+  Eraser, Copy, ArrowDownToLine, Pencil, Check,
 } from 'lucide-react'
 import type { GenerateParams, RefImageSlot, LoraSlot } from '../types'
-import { modelVariant, loraDisabledReason } from '../loraCompat'
+import { modelVariant, loraDisabledReason, sortLoras, insertTrigger } from '../loraCompat'
 import type { WorkflowData } from '../workflow'
-import { importComfyUI, loadWorkflow, saveWorkflow, uploadLora, uploadUpscaleModel, streamBatchUpscale, streamBatchGenerate, openFolderDialog, openFileDialog, upscaleSingleImage, updateSettings, openWorkflowFolderDialog, listLoras, stopGeneration, generateDepthMap, eraseDetect, eraseRemove } from '../api'
+import { importComfyUI, loadWorkflow, saveWorkflow, uploadLora, uploadUpscaleModel, streamBatchUpscale, streamBatchGenerate, openFolderDialog, openFileDialog, upscaleSingleImage, updateSettings, openWorkflowFolderDialog, listLoras, setLoraTrigger, stopGeneration, generateDepthMap, eraseDetect, eraseRemove } from '../api'
+import type { LoraLibraryEntry } from '../api'
 import HelpTip from './HelpTip'
 import { canvasForRef, sizeFamily } from '../canvasSize'
 import EraseEditorModal from './EraseEditorModal'
@@ -300,18 +301,22 @@ interface LoraPanelProps {
   onChange:    (files: LoraSlot[]) => void
   onStatus:    (msg: string) => void
   modelChoice: string
+  prompt:      string
+  onPromptChange: (p: string) => void
 }
-function LoraPanel({ loraFiles, onChange, onStatus, modelChoice }: LoraPanelProps) {
-  const [library, setLibrary] = useState<Array<{ name: string; path: string; model_type: string; variant?: string | null }>>([])
+function LoraPanel({ loraFiles, onChange, onStatus, modelChoice, prompt, onPromptChange }: LoraPanelProps) {
+  const [library, setLibrary] = useState<LoraLibraryEntry[]>([])
+  const [editingTrigger, setEditingTrigger] = useState<string | null>(null)  // slot path being edited
+  const [triggerDraft, setTriggerDraft] = useState('')
 
   // Which LoRA type is compatible with the current model?
   const compatibleType = modelChoice.startsWith('FLUX') ? 'flux'
     : (modelChoice.includes('Z-Image') && modelChoice.includes('Full')) ? 'zimage'
     : null
   // Show compatible LoRAs + unknowns (undetectable type); hide only positively incompatible ones
-  const filteredLibrary = compatibleType
+  const filteredLibrary = sortLoras(compatibleType
     ? library.filter(l => l.model_type === compatibleType || l.model_type === 'unknown')
-    : library
+    : library)
   const loadedVariant = modelVariant(modelChoice)
   const [uploading, setUploading] = useState<number | null>(null)  // slot index being uploaded
   const fileRefs = useRef<(HTMLInputElement | null)[]>([])
@@ -367,6 +372,21 @@ function LoraPanel({ loraFiles, onChange, onStatus, modelChoice }: LoraPanelProp
     onChange(loraFiles.map((s, i) =>
       i === idx ? { ...s, path, name: entry?.name, model_type: entry?.model_type } : s
     ))
+  }
+
+  async function saveTrigger(entry: LoraLibraryEntry) {
+    try {
+      await setLoraTrigger(entry.name, triggerDraft)
+      setEditingTrigger(null)
+      refreshLibrary()
+      onStatus(triggerDraft.trim() ? `Trigger saved for ${entry.name}` : `Trigger cleared for ${entry.name}`)
+    } catch (e: unknown) {
+      onStatus((e as Error).message)
+    }
+  }
+
+  function copyTrigger(trigger: string) {
+    navigator.clipboard?.writeText(trigger).then(() => onStatus('Trigger copied')).catch(() => onStatus('Copy failed'))
   }
 
   function setStrength(idx: number, strength: number) {
@@ -436,6 +456,53 @@ function LoraPanel({ loraFiles, onChange, onStatus, modelChoice }: LoraPanelProp
             onChange={v => setStrength(idx, v)}
             helpTip={<HelpTip text="How strongly this LoRA is applied. 0 = no effect, 1 = full strength." />}
           />
+
+          {/* Trigger hint: copy / insert into the prompt / edit */}
+          {(() => {
+            const entry = library.find(l => l.path === slot.path)
+            if (!entry) return null
+            const trig = entry.trigger ?? null
+            if (editingTrigger === entry.path) {
+              return (
+                <div className="flex items-center gap-1.5">
+                  <input
+                    autoFocus
+                    value={triggerDraft}
+                    onChange={e => setTriggerDraft(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') saveTrigger(entry); if (e.key === 'Escape') setEditingTrigger(null) }}
+                    placeholder="trigger word or prompt (empty = reset)"
+                    className="flex-1 min-w-0 bg-bg border border-border rounded px-2 py-1 text-[11px] text-white focus:outline-none focus:border-accent"
+                  />
+                  <button title="Save trigger" onClick={() => saveTrigger(entry)}
+                    className="shrink-0 p-1.5 rounded border border-border text-muted hover:text-white hover:border-accent"><Check size={12} /></button>
+                </div>
+              )
+            }
+            return (
+              <div className="space-y-1">
+                <div className="flex items-center gap-1.5 text-[11px]">
+                  <span className="text-label shrink-0">Trigger</span>
+                  {trig ? (
+                    <code className="flex-1 min-w-0 truncate text-white bg-bg border border-border rounded px-1.5 py-0.5"
+                          title={trig}>{trig}</code>
+                  ) : (
+                    <span className="flex-1 min-w-0 truncate text-muted">{entry.trigger_note ? 'none needed' : 'none set'}</span>
+                  )}
+                  {trig && (
+                    <>
+                      <button title="Copy trigger" onClick={() => copyTrigger(trig)}
+                        className="shrink-0 p-1 rounded border border-border text-muted hover:text-white hover:border-accent"><Copy size={11} /></button>
+                      <button title="Insert at the start of the prompt" onClick={() => onPromptChange(insertTrigger(prompt, trig))}
+                        className="shrink-0 p-1 rounded border border-border text-muted hover:text-white hover:border-accent"><ArrowDownToLine size={11} /></button>
+                    </>
+                  )}
+                  <button title="Edit trigger" onClick={() => { setTriggerDraft(trig ?? ''); setEditingTrigger(entry.path) }}
+                    className="shrink-0 p-1 rounded border border-border text-muted hover:text-white hover:border-accent"><Pencil size={11} /></button>
+                </div>
+                {entry.trigger_note && <p className="text-[10px] text-muted leading-snug">{entry.trigger_note}</p>}
+              </div>
+            )
+          })()}
         </div>
       ))}
 
@@ -1503,6 +1570,8 @@ export default function Sidebar({
             onChange={files => onParamChange('lora_files', files)}
             onStatus={onStatus}
             modelChoice={params.model_choice}
+            prompt={params.prompt}
+            onPromptChange={p => onParamChange('prompt', p)}
           />
           {isFlux && !isZImageFull && (
             <p className="text-[11px] text-[var(--color-muted)] flex items-start gap-1 mt-1">

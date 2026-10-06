@@ -20,3 +20,18 @@ export function loraDisabledReason(
   if (!model || !lora.variant || lora.variant === model) return null
   return `${lora.variant.toUpperCase()} LoRA — needs klein-${lora.variant.toUpperCase()}`
 }
+
+/** LoRA lists are shown alphabetically (case-insensitive), whatever order the server sends. */
+export function sortLoras<T extends { name: string }>(loras: T[]): T[] {
+  return [...loras].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
+}
+
+/** Prepend a LoRA trigger to the prompt, unless it is already there (case-insensitive). */
+export function insertTrigger(prompt: string, trigger: string): string {
+  const t = trigger.trim()
+  const p = prompt.trim()
+  if (!t) return prompt
+  if (!p) return t
+  if (p.toLowerCase().includes(t.toLowerCase())) return prompt
+  return `${t}${/[.!?:]$/.test(t) ? ' ' : ', '}${p}`
+}
