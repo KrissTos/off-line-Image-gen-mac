@@ -179,8 +179,8 @@ export default function GalleryPreview({ item, outputs, canLoad, onClose, onNavi
                 <div className="flex flex-wrap gap-2">
                   {slots.map((s, i) => (
                     <div key={s.imageUrl} className="relative w-16 h-16 rounded border border-border overflow-hidden bg-card">
-                      <img src={s.imageUrl} alt={i === 0 ? 'Base image' : `Reference ${i}`} className="w-full h-full object-cover" />
-                      <span className="absolute bottom-0 left-0 bg-black/70 text-[9px] px-1">{i === 0 ? 'base' : `ref ${i}`}</span>
+                      <img src={s.imageUrl} alt={i === 0 ? 'Base image' : `Image ${i + 1}`} className="w-full h-full object-cover" />
+                      <span className="absolute bottom-0 left-0 bg-black/70 text-[9px] px-1">{i === 0 ? 'img 1 · base' : `img ${i + 1}`}</span>
                       {s.maskUrl && <span className="absolute top-0 right-0 bg-accent text-[9px] px-1">mask</span>}
                     </div>
                   ))}
