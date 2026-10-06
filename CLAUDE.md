@@ -59,6 +59,7 @@ venv/bin/python -m core.run_store migrate <dir> [--apply]   # legacy flat output
 6. Models live in the global HF cache `~/.cache/huggingface/hub`, not `./models/`.
 7. Enable the terminal commit gate once per clone: `git config core.hooksPath .githooks`.
 8. Commits are test-gated (`.claude/hooks/pre-commit-test-gate.sh` + `.githooks/pre-commit`); keep `tests/` green.
+9. DA3 (`depth_anything_3`) is the `depth` dependency group in `pyproject.toml` (git source; its xformers/open3d/pycolmap/evo/e3nn/moviepy/gsplat deps are excluded, `core/depth_map.py` mocks the export modules). Plain `uv sync` keeps it; it was never declared before, so every earlier `uv sync` removed it.
 
 ## 6. Backend rules
 1. Keep the SPA wildcard route `/{path:path}` LAST in `server.py`; routes after it are unreachable.
@@ -84,7 +85,7 @@ venv/bin/python -m core.run_store migrate <dir> [--apply]   # legacy flat output
 6. Mark slots restored from Load Params / workflows with `keepSize: true`.
 7. All current models are distilled: guidance 0 (LTX 1.0), steps 20 FLUX / 4 Z-Image; guidance slider stays hidden.
 8. FLUX 4B + padding → outpaint LoRA path (green pad, auto LoRA, trigger prompt); don't send it for 9B/Z-Image.
-9. Load FLUX LoRAs only through `core/lora_flux2` (own BFL converter) and `sync_loras()`; never ignore a load status.
+9. Load FLUX LoRAs only through `core/lora_flux2` (own BFL converter) and `sync_loras()`; never ignore a load status. `ensure_loras_loaded()` treats a status starting with `Loaded` as success, so a partial failure (Z-Image too) must never begin with it.
 10. klein LoRAs are size-specific (4B hidden 3072, 9B 4096): classify with `lora_variant()` (header only), never hardcode block counts; `/api/lora/list` exposes `variant` and the UI greys mismatches (`src/loraCompat.ts`); keep `assert_lora_matches_model()` in both loaders.
 
 ## 8. Video (LTX) rules

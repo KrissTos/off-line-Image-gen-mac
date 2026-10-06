@@ -37,7 +37,20 @@ dependencies = [
 dev = [
     "pytest>=9.1.1",
 ]
+# Depth Anything 3 (Depth Map accordion). Its own pyproject pulls xformers, open3d, pycolmap,
+# evo, e3nn, moviepy and gsplat for 3D/video export, none of which the depth map needs
+# (core/depth_map.py mocks those modules), so they are excluded below.
+depth = [
+    "depth-anything-3",
+    "omegaconf",
+    "addict",
+]
 
 [tool.uv.sources]
 diffusers = { git = "https://github.com/huggingface/diffusers.git", tag = "v0.40.0" }
 sdnq = { git = "https://github.com/Disty0/sdnq.git" }
+depth-anything-3 = { git = "https://github.com/ByteDance-Seed/Depth-Anything-3.git" }
+
+[tool.uv]
+default-groups = ["dev", "depth"]
+exclude-dependencies = ["xformers", "open3d", "pycolmap", "evo", "e3nn", "moviepy", "pre-commit", "gsplat"]

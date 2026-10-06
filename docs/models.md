@@ -57,4 +57,5 @@ All distilled → guidance slider hidden; defaults from `guidanceForModel()` / `
 
 ## Depth map (DA3 / DA2)
 - Default repo `istiakiat/DA3MONO-LARGE` (mirror, not official `depth-anything/…`) in `core/depth_map.py` and `server.py`. Weights load first from flat `./models/da3mono-large/` (`_load_da3`); delete it → downloads the mirror into the global cache.
+- Install: the `depth` dependency group in `pyproject.toml` (`depth-anything-3` from git + `omegaconf`, `addict`; `exclude-dependencies` drops its xformers/open3d/pycolmap/evo/e3nn/moviepy/gsplat/pre-commit, which Apple Silicon can't build and the depth map doesn't need). Verified 2026-10-06: DA3MONO-LARGE from `./models/da3mono-large/` runs on MPS in ~1.3 s (first call ~4 s incl. load).
 - DA3 = invert, DA2 = no invert; output LANCZOS-resized to source; GS/3D export deps mocked via `sys.modules`.

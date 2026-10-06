@@ -3,6 +3,7 @@
 History and "why we did X". Operational rules live in `CLAUDE.md`; reference in `docs/`.
 
 ## 2026-10-06
+- DA3 depth restored: `depth_anything_3` was never declared, so every `uv sync` (exact by default) removed it and the Depth Map failed with `No module named 'depth_anything_3'`. It is now the `depth` dependency group (git source, heavy 3D-export deps excluded, `default-groups` includes it); the lock only gained 7 packages and no existing pin moved.
 - Slot badges and the gallery preview thumbs read `img 1 · base`, `img 2`, `img 3`… (were `base`, `ref 1`, `ref 2`), matching how FLUX.2 prompts name images (`image 2` = the first reference).
 - Bug pass: server startup trashes `.tmp_uploads/` files older than 24 h (`_prune_temp_dir`).
 - Bug pass: `pipeline.py` and `server._run_events` print the full traceback of a failed generation to `server.log`; the client message stays `str(exc)`.
