@@ -257,17 +257,20 @@ def _prune_temp_dir(max_age_s: float = 86400, now: float | None = None) -> int:
     n = 0
     for f in TEMP_DIR.iterdir():
         if f.is_file() and now - f.stat().st_mtime > max_age_s:
-            run_store.trash(f)
-            n += 1
+            try:
+                run_store.trash(f)
+                n += 1
+            except Exception as e:   # one stuck file must not stop the rest
+                print(f"[tmp_uploads] could not trash {f.name}: {e}")
     return n
 
 
 @app.on_event("startup")
 async def _prune_stale_uploads() -> None:
-    try:
-        _prune_temp_dir()
-    except Exception as e:   # housekeeping must never block the server
-        print(f"[tmp_uploads] prune failed: {e}")
+    # One `trash` process per file: run it in a thread, in the background, so startup never waits.
+    task = asyncio.create_task(asyncio.to_thread(_prune_temp_dir))
+    _RUN_TASKS.add(task)
+    task.add_done_callback(_RUN_TASKS.discard)
 
 
 # ── Lazy imports (avoid loading torch at import time) ─────────────────────────
