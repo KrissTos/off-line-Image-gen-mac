@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback, useState } from 'react'
+import { useEffect, useRef, useCallback, useState, useMemo } from 'react'
 import { useAppState } from './store'
 import type { GenerateParams, SSEEvent, OutputItem } from './types'
 import {
@@ -28,6 +28,8 @@ import Sidebar       from './components/Sidebar'
 import Canvas        from './components/Canvas'
 import RefImagesRow  from './components/RefImagesRow'
 import Gallery       from './components/Gallery'
+import GalleryPreview from './components/GalleryPreview'
+import { neighbor }  from './previewModel'
 import SettingsDrawer from './components/SettingsDrawer'
 
 // ── Row resize drag handle ─────────────────────────────────────────────────────
@@ -79,6 +81,7 @@ export default function App() {
   const isRestoringWorkflow   = useRef(false)
   const [statusMsg, setStatusMsg] = useState('')
   const [upscalingGalleryUrl, setUpscalingGalleryUrl] = useState<string | null>(null)
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const [loadedWorkflow, setLoadedWorkflow] = useState<string | null>(null)   // saved workflow the panel would overwrite
   const centerRef   = useRef<HTMLDivElement>(null)
   const [rowPcts, setRowPcts] = useState<[number, number, number]>([50, 36, 14])
@@ -481,8 +484,9 @@ export default function App() {
     }
   }, [dispatch, setStatusMsg])
 
-  // Gallery click: preview + reload the run's whole workflow with this output's seed
-  const handleSelectGallery = useCallback(async (item: OutputItem) => {
+  // Load a run into the sidebar with this output's seed (modal button, or Cmd/Ctrl-click on a thumbnail)
+  const handleLoadOutput = useCallback(async (item: OutputItem) => {
+    setPreviewUrl(null)
     dispatch({ type: 'SET_RESULT_URL', url: item.url })
     if (state.isGenerating || !item.run) return
     try {
@@ -492,6 +496,24 @@ export default function App() {
       setStatusMsg(`Could not load run ${item.run}: ${(err as Error).message}`)
     }
   }, [state.isGenerating, dispatch, applyWorkflow, setStatusMsg])
+
+  // Plain click opens the preview modal; it changes nothing in the sidebar
+  const handleSelectGallery = useCallback((item: OutputItem, opts: { direct: boolean }) => {
+    if (opts.direct) void handleLoadOutput(item)
+    else setPreviewUrl(item.url)
+  }, [handleLoadOutput])
+
+  const previewItem = useMemo(
+    () => state.outputs.find(o => o.url === previewUrl) ?? null,
+    [state.outputs, previewUrl],
+  )
+
+  // Deleting from the modal moves to the next output (else the previous, else closes)
+  const handlePreviewDelete = useCallback(async (item: OutputItem) => {
+    const after = neighbor(state.outputs, item.url, 1) ?? neighbor(state.outputs, item.url, -1)
+    setPreviewUrl(after?.url ?? null)
+    await handleDeleteOutput(item.name)
+  }, [state.outputs, handleDeleteOutput])
 
   const handleWorkflowLoad = useCallback(async (wf: WorkflowData, name: string) => {
     await applyWorkflow(wf, { label: name, loaded: name })
@@ -604,6 +626,18 @@ export default function App() {
 
         </div>
       </div>
+
+      {previewItem && (
+        <GalleryPreview
+          item={previewItem}
+          outputs={state.outputs}
+          canLoad={!state.isGenerating}
+          onClose={() => setPreviewUrl(null)}
+          onNavigate={o => setPreviewUrl(o.url)}
+          onLoad={handleLoadOutput}
+          onDelete={handlePreviewDelete}
+        />
+      )}
 
       {/* Settings drawer */}
       <SettingsDrawer
