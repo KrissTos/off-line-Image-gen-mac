@@ -18,9 +18,9 @@
 - **Multi-LoRA stacking** — load up to 5 `.safetensors` LoRA adapters simultaneously, each with its own strength slider; the dropdown is filtered to only show LoRAs compatible with the active model
 - **Batch img2img** — point at a folder of images and run the current prompt + params over all of them automatically; gallery updates after each image
 - **Upscaling** — 4× single image or batch-folder upscale with any Spandrel-compatible model
-- **Every generation is reproducible** — each run is saved as one folder with its parameters, reference images, masks and outputs; click any gallery thumbnail to reload the whole setup
+- **Every generation is reproducible** — each run is saved as one folder with its parameters, reference images, masks and outputs; open any gallery thumbnail to see its prompt and settings, then load the whole setup with one button
 - **Workflow save/load** — save a setup under a name (model, params, reference images, masks) and reload or overwrite it later
-- **Gallery** — strip or grid view; click to reload a run, drag thumbnails into reference slots, upscale or delete
+- **Gallery** — strip or grid view; click a thumbnail for a preview popup (prompt, parameters, LoRAs, reference images; load it back, download or delete), drag thumbnails into reference slots, upscale or delete
 - **Watermark remover** — auto-detect or hand-paint a mask, then fill it with LaMa
 - **Depth map generation** — generate 16-bit DA3 depth maps directly from the Gallery; white = near, black = far
 - **Auto-outpaint** — when the base image has a different aspect ratio than the output, it is fitted (never stretched) and the borders are filled; FLUX 4B uses a dedicated outpaint LoRA
@@ -177,7 +177,10 @@ When **Inpainting Pipeline (Quality)** is selected and you have masks on multipl
 
 ## Gallery
 
-- **Click** a thumbnail → it shows in the canvas and the whole run is reloaded: prompt, model, size, steps, LoRAs, every reference image with its strength and mask, and **that output's seed** (an upscale reloads with its source's seed). While a generation is running, a click only previews.
+- **Click** a thumbnail → a preview popup opens and **nothing in the sidebar changes**. It shows the large image (or the video player), the prompt (with Copy), the parameters, the LoRAs with their strengths and the reference images used (masked ones carry a badge). An upscale links back to the output it came from.
+  - **Load in workflow** reloads the whole run: prompt, model, size, steps, LoRAs, every reference image with its strength and mask, and **that output's seed** (an upscale reloads with its source's seed). It is disabled while a generation is running and for old outputs that have no saved workflow.
+  - **← / →** browse the outputs, **Esc** or a click on the backdrop closes the popup, **Download** and **Delete** are in the popup too. If a delete fails, the popup stays on that output and says so.
+  - **Cmd/Ctrl-click** a thumbnail to skip the popup and load the run directly.
 - **Hover** → info, upscale ×4, delete. Deleting the last output of a run moves the whole run folder to the macOS Trash.
 - The toggle at the top-right switches between strip and grid view.
 
@@ -223,12 +226,23 @@ Open **Settings** (gear icon, top-right):
 
 | Setting | Description |
 |---|---|
+| Theme colors | Background, surface, accent and text colors; they preview live and are saved with **Save** (first card) |
 | Output folder | Where run folders are saved |
 | HuggingFace token | Required for gated models |
 | Models | See which models are cached, download, delete |
 | Upscale models | Manage upscaler weights |
-| Model Sources | Curated list of base models, LoRAs, and upscalers — open HF page or download; locally cached entries highlighted with a green border |
+| Model Sources | List of base models, LoRAs and upscalers, see below |
 | Server log | View and save the current session log |
+
+### Model Sources
+
+The list only holds things this app can actually use, and each LoRA says what it does:
+
+- **Collapsible categories** — Models, LoRAs, Upscalers, each with a count. LoRAs sit in **folders per base model** (FLUX.2-klein 9B, 4B, any size, Z-Image, LTX-Video 0.9). Inside a folder, **function chips** (camera, detail, edit, lighting, style, ...) filter the rows. Open/closed state is remembered.
+- **What it does** — every row shows a one-line description and a function tag. They are filled automatically from the model card on Hugging Face; a description you write yourself is never overwritten.
+- **Update** — searches Hugging Face for new repos and keeps only those the app can use: a LoRA needs a supported model family and a `.safetensors` file, an upscaler a usable weights file. LoRAs for models the app cannot run (SDXL, FLUX.1, Qwen, Krea, Wan, LTX-2.x) are skipped and remembered so they do not come back. The result line says how many were added, skipped and described.
+- **Add source** — a source you add by hand is never pruned or auto-described.
+- Locally cached models are highlighted with a green border.
 
 ---
 
@@ -264,6 +278,8 @@ off-line-Image-gen-mac/
 │   └── src/
 │       ├── App.tsx            ← Root: SSE handler, ref-slot logic, iterate loop, workflow restore
 │       ├── workflow.ts        ← Run / workflow → params (pure, node-tested)
+│       ├── previewModel.ts    ← Preview popup helpers (pure, node-tested)
+│       ├── sourceGroups.ts    ← Model Sources grouping + filters (pure, node-tested)
 │       ├── store.ts           ← useReducer global state
 │       ├── api.ts             ← Typed fetch helpers
 │       ├── types.ts           ← Shared TypeScript types
@@ -272,14 +288,17 @@ off-line-Image-gen-mac/
 │           ├── Canvas.tsx         ← Result image / video + progress overlay
 │           ├── RefImagesRow.tsx   ← Reference image slots + mask editor
 │           ├── Gallery.tsx        ← Recent outputs, strip / grid
+│           ├── GalleryPreview.tsx ← Preview popup: details, refs, load / download / delete
 │           ├── TopBar.tsx         ← Brand, model, device, VRAM status
-│           ├── SettingsDrawer.tsx ← HF login, model list, storage, log
+│           ├── SettingsDrawer.tsx ← Theme, HF login, model list, storage, log, Model Sources
+│           ├── SourceFolder.tsx   ← Collapsible folder header for Model Sources
 │           ├── MaskEditor.tsx     ← Full-screen SAM / brush / polygon mask editor
 │           ├── EraseEditorModal.tsx ← Watermark mask editor
 │           └── HelpTip.tsx        ← Inline ⓘ tooltips
 │
 ├── core/
 │   ├── run_store.py       ← Run folders: create, record outputs, list, load, save workflows, migrate
+│   ├── model_sources.py   ← What the app can use, LoRA family / function, card descriptions
 │   ├── segment.py         ← SAM click-to-mask (mask editor)
 │   ├── erase.py           ← Watermark detect + LaMa removal
 │   ├── depth_map.py       ← DA3 / DA2 depth estimation → 16-bit PNG
