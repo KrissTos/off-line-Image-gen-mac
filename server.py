@@ -409,6 +409,8 @@ def _record_output(run_dir: Path, event: dict, requested_seed: int) -> None:
         run_store.add_output(run_dir, dst, event["type"], seed=seed)
     except Exception as e:
         print(f"[run_store] could not record {src.name}: {e}")
+    if event.get("info"):
+        event["info"] = event["info"].replace(str(src), str(dst))
     event["path"] = str(dst)
     event["url"]  = f"/api/output/{run_dir.name}/outputs/{dst.name}"
 

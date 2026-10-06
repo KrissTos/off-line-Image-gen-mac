@@ -17,7 +17,7 @@
 - `.tmp_uploads/` grows without cleanup.
 - Text-to-mask (SAM 3 / Grounded-SAM) = phase 2.
 - MaskEditor residual races (rare, from the final review): dirty rect is overwritten not unioned across coalesced pointermoves (overlay gap until next rebuild); `maskRef` synced in a passive `useEffect` (move to render body / `useLayoutEffect`); brush pointermove doesn't clear `lastSam`, so Shift-refine after a mid-stroke SAM result can drop the stroke tail unundoably; a pointermove from a stale closure can overwrite a just-landed SAM result.
-- Run folders, deferred minors (2026-09-27 final review): LTX video `info` still says `Saved: <old path>` after the rename; migration leaves `X.png`+`X.mp4` same-stem pairs, upscale-of-upscale and prompt stems ending `_NNNxNNN` untouched (fail safe); overwriting an unmigrated v1 workflow leaves root `slot_N_image.png` strays.
+- Run folders, deferred minors (2026-09-27 final review): migration leaves `X.png`+`X.mp4` same-stem pairs, upscale-of-upscale and prompt stems ending `_NNNxNNN` untouched (fail safe); overwriting an unmigrated v1 workflow leaves root `slot_N_image.png` strays.
 - Depth map `filename` (legacy output-dir name) uses `Path(name).name`, so it can't reach files inside run folders; UI sends `file_path` only.
 - Evaluate on diffusers 0.40: `black-forest-labs/FLUX.2-small-decoder` (1.4x faster decode, 0.38 s vs 0.54 s at 1024px), native diffusers SDNQ backend; switch `torch_dtype` to `dtype`.
 

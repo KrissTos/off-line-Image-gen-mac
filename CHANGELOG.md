@@ -3,6 +3,7 @@
 History and "why we did X". Operational rules live in `CLAUDE.md`; reference in `docs/`.
 
 ## 2026-10-06
+- Bug pass: an LTX video event `info` now says `Saved: <renamed run path>` (it kept the pre-rename path).
 - Bug pass: `DELETE /api/output/<run>/...` refuses anything outside `<run>/outputs/` (it used to delete `workflow.json` and `refs/*` on a hand-built request).
 - Bug pass: `_load_pil` applies EXIF orientation, so a phone JPEG generates from the same upright pixels the SAM mask was built on.
 - Bug pass: `/api/models` `available` and the ComfyUI import now scan the global HF cache (`get_local_models_dir()`), not the empty repo `models/`.
