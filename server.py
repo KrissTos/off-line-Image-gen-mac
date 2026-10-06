@@ -769,7 +769,10 @@ def api_delete_output(filename: str):
         raise HTTPException(404, detail="File not found")
     parts = p.relative_to(base).parts
     run_dir = base / parts[0]
-    if len(parts) > 1 and (run_dir / "workflow.json").is_file():
+    in_run = len(parts) > 1 and (run_dir / "workflow.json").is_file()
+    if in_run and not (len(parts) > 2 and parts[1] == "outputs"):
+        raise HTTPException(400, detail="Only files in outputs/ can be deleted")
+    if in_run:
         if run_store.remove_output(run_dir, "/".join(parts[1:])):
             run_store.trash(run_dir)
     else:

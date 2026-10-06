@@ -66,3 +66,14 @@ def test_upscale_gallery_output_lands_in_run(api, monkeypatch):
     up = json.loads((run / "workflow.json").read_text())["outputs"][-1]
     assert up["upscaled_from"] == files[0].split("/", 1)[1]
     assert up["file"].endswith("_32x24.png") and (run / up["file"]).is_file()
+
+
+def test_delete_refuses_non_output_files(api):
+    client, run, files, trashed = api
+    refs = run / "refs"
+    refs.mkdir(exist_ok=True)
+    (refs / "x.png").write_bytes(b"x")
+    for rel in (f"{run.name}/workflow.json", f"{run.name}/refs/x.png"):
+        assert client.delete(f"/api/output/{rel}").status_code == 400
+    assert (run / "workflow.json").is_file() and (refs / "x.png").is_file()
+    assert client.delete(f"/api/output/{files[0]}").status_code == 200
