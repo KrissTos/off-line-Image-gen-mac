@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { replaceSlotImage, removeSlot, swapWithBase, hasMasks } from '../src/slots.ts'
+import { replaceSlotImage, removeSlot, swapWithBase, hasMasks, neighborSlot, isReplaceClick, swapRefs } from '../src/slots.ts'
 import type { RefImageSlot } from '../src/types.ts'
 
 const slot = (slotId: number, extra: Partial<RefImageSlot> = {}): RefImageSlot => ({
@@ -54,4 +54,38 @@ test('swapWithBase with the base itself or a missing slot is a no-op', () => {
   const slots = [slot(1), slot(2)]
   assert.equal(swapWithBase(slots, 1), slots)
   assert.equal(swapWithBase(slots, 9), slots)
+})
+
+test('neighborSlot steps through slots in order and stops at both ends', () => {
+  const s = [slot(1), slot(2), slot(3)]
+  assert.equal(neighborSlot(s, 2, 1)?.slotId, 3)
+  assert.equal(neighborSlot(s, 2, -1)?.slotId, 1)
+  assert.equal(neighborSlot(s, 3, 1), null)
+  assert.equal(neighborSlot(s, 1, -1), null)
+  assert.equal(neighborSlot(s, 9, 1), null)      // unknown slot (removed while open)
+  assert.equal(neighborSlot([], 1, 1), null)
+})
+
+test('a plain click enlarges; Ctrl or Cmd click replaces', () => {
+  assert.equal(isReplaceClick({ metaKey: false, ctrlKey: false }), false)
+  assert.equal(isReplaceClick({ metaKey: true,  ctrlKey: false }), true)
+  assert.equal(isReplaceClick({ metaKey: false, ctrlKey: true  }), true)
+})
+
+test('swapRefs exchanges two reference cards whole (image, dims, mask, strength); ids stay positional', () => {
+  const out = swapRefs([masked(1), masked(2), slot(3), slot(4)], 2, 4)
+  assert.deepEqual(out.map(s => s.slotId), [1, 2, 3, 4])
+  assert.deepEqual(out.map(s => s.imageId), ['img1', 'img4', 'img3', 'img2'])
+  assert.deepEqual(out.map(s => s.w), [100, 400, 300, 200])
+  assert.deepEqual(out.map(s => s.strength), [0.6, 0.9, 0.8, 0.7])
+  assert.equal(out[3].maskId, 'm2')                 // the mask travels with its image
+  assert.equal(out[0].maskId, 'm1')                 // the base and its mask are untouched
+})
+
+test('swapRefs never touches the base and ignores same / missing slots', () => {
+  const slots = [masked(1), slot(2), slot(3)]
+  assert.equal(swapRefs(slots, 1, 2), slots)
+  assert.equal(swapRefs(slots, 2, 1), slots)
+  assert.equal(swapRefs(slots, 2, 2), slots)
+  assert.equal(swapRefs(slots, 2, 9), slots)
 })

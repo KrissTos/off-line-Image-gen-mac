@@ -1,7 +1,7 @@
 import { useReducer } from 'react'
 import type { GenerateParams, OutputItem, AppStatus, RefImageSlot } from './types'
 import { canvasForRef, sizeFamily } from './canvasSize'
-import { removeSlot, replaceSlotImage, swapWithBase } from './slots'
+import { removeSlot, replaceSlotImage, swapWithBase, swapRefs } from './slots'
 
 // ── State ─────────────────────────────────────────────────────────────────────
 
@@ -101,6 +101,7 @@ export type Action =
   | { type: 'REMOVE_REF_SLOT';      slotId: number }
   | { type: 'REPLACE_SLOT_IMAGE';   slotId: number; imageId: string; imageUrl: string }
   | { type: 'SWAP_WITH_BASE';       slotId: number }
+  | { type: 'SWAP_REFS';            a: number; b: number }
   | { type: 'SET_SLOT_MASK';        slotId: number; maskId: string; maskUrl: string }
   | { type: 'CLEAR_SLOT_MASK';      slotId: number }
   | { type: 'CLEAR_ALL_SLOTS' }
@@ -218,6 +219,12 @@ function reducer(state: State, action: Action): State {
       // Dims reset → the base's new image is auto-sized by SET_SLOT_DIMS on load
       const slots = replaceSlotImage(state.refSlots, action.slotId, action.imageId, action.imageUrl)
       return { ...state, refSlots: slots, params: { ...state.params, ...slotsToParams(slots) } }
+    }
+
+    case 'SWAP_REFS': {
+      // Pure reorder of two references: the base (and its size / masks) is untouched
+      const slots = swapRefs(state.refSlots, action.a, action.b)
+      return slots === state.refSlots ? state : { ...state, refSlots: slots }
     }
 
     case 'SWAP_WITH_BASE': {

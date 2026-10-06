@@ -39,3 +39,22 @@ export function swapWithBase(slots: RefImageSlot[], slotId: number): RefImageSlo
     return { ...s, ...noMask }
   })
 }
+
+/** Reorder two references by exchanging whole cards (image, dims, mask, strength); slot ids stay positional.
+ *  The base is never involved (use swapWithBase), so no mask is invalidated. */
+export function swapRefs(slots: RefImageSlot[], a: number, b: number): RefImageSlot[] {
+  const A = slots.find(s => s.slotId === a)
+  const B = slots.find(s => s.slotId === b)
+  if (!A || !B || a === b || a === 1 || b === 1) return slots
+  return slots.map(s =>
+    s.slotId === a ? { ...B, slotId: a } : s.slotId === b ? { ...A, slotId: b } : s)
+}
+
+/** The slot before (-1) or after (+1) `slotId` in display order; null at the ends or for an unknown id. */
+export function neighborSlot(slots: RefImageSlot[], slotId: number, dir: -1 | 1): RefImageSlot | null {
+  const i = slots.findIndex(s => s.slotId === slotId)
+  return i < 0 ? null : (slots[i + dir] ?? null)
+}
+
+/** Ctrl/Cmd-click on a slot image replaces it (file picker); a plain click enlarges it. */
+export const isReplaceClick = (e: { metaKey: boolean; ctrlKey: boolean }) => e.metaKey || e.ctrlKey

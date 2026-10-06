@@ -329,6 +329,10 @@ export default function App() {
     dispatch({ type: 'SWAP_WITH_BASE', slotId })
   }, [dispatch, noteMasksCleared])
 
+  const handleSwapRefs = useCallback((a: number, b: number) => {
+    dispatch({ type: 'SWAP_REFS', a, b })
+  }, [dispatch])
+
   // ── Iterative multi-mask generation ───────────────────────────────────────
   //
   // For each slot that has a mask (in slotId order):
@@ -607,6 +611,7 @@ export default function App() {
               onRemoveSlot={handleRemoveRefSlot}
               onReplaceSlot={handleReplaceSlotImage}
               onSwapWithBase={handleSwapWithBase}
+              onSwapRefs={handleSwapRefs}
               onUploadMask={handleUploadSlotMask}
               onClearMask={handleClearSlotMask}
               onSlotStrengthChange={handleSlotStrengthChange}

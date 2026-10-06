@@ -47,7 +47,8 @@ venv/bin/python -m core.run_store migrate <dir> [--apply]   # legacy flat output
 1. Server exits 60 s after the last browser ping; use `--no-auto-shutdown` for headless/API testing.
 2. Restart the server after backend changes (no auto-reload).
 3. `generate.py` CLI is Z-Image Turbo only.
-4. `Launch.command` never closes its Terminal window (the old 'close front window' hit whichever window was frontmost); it exits to the shell. A server you stopped can be restarted from CC with `venv/bin/python server.py --port 7860` via `run_in_background`, and say so.
+4. The user may run their own server on :7860 (`Launch.command`). For checks start `venv/bin/python server.py --port 7861 --no-auto-shutdown` via `run_in_background`, kill only that PID (`lsof -nP -iTCP:7861 -sTCP:LISTEN -t`), never `pkill -f server.py`, leave nothing running. The `/generate` runner's `--start` uses :7860; point it at `--port 7861`.
+5. `Launch.command` never closes its Terminal window (the old 'close front window' hit whichever window was frontmost); it exits to the shell. A server you stopped can be restarted from CC with `venv/bin/python server.py --port 7860` via `run_in_background`, and say so.
 
 ## 5. Environment
 1. Use `uv`, never pip; sync with `UV_PROJECT_ENVIRONMENT=venv uv sync`.
@@ -101,5 +102,5 @@ venv/bin/python -m core.run_store migrate <dir> [--apply]   # legacy flat output
 4. No UI test runner: verify pure-logic TS modules (`src/mask/*`, `src/slots.ts`) with `cd frontend && npm test` (node --test); verify UI in a real browser — claude-in-chrome is reliable for the mask editor, where agent-browser has frozen the tab on Invert/Grow after a polygon edit.
 5. Mask editor keys: Alt = subtract (SAM/box/brush/polygon-close), Shift+click = SAM refine last object.
 6. In claude-in-chrome UI checks, add ref slots by dispatching `dragover`+`drop` `DragEvent`s (a `DataTransfer` with `text/plain` = gallery image URL) on the "+ base img" / "+ ref img" button (or on a card to replace it; `application/x-ref-slot` = slotId on the base card swaps) — no file dialog needed.
-7. Ref row: Base (slot #1) and References are separate; never shift a ref into the base. Base changes only via `REPLACE_SLOT_IMAGE` / `SWAP_WITH_BASE` (`src/slots.ts`); every mask is drawn on the base, so a base change clears all masks.
+7. Ref row: a slot thumbnail click enlarges it (`SlotLightbox`); Ctrl/Cmd+click or drop replaces it. A ref dragged onto another ref reorders them (`swapRefs`, never touches the base). Base (slot #1) and References are separate; never shift a ref into the base. Base changes only via `REPLACE_SLOT_IMAGE` / `SWAP_WITH_BASE` (`src/slots.ts`); every mask is drawn on the base, so a base change clears all masks.
 8. Show LoRA lists alphabetically (case-insensitive, `sortLoras()`), never in server/mtime order; each selected LoRA shows its trigger hint (copy / insert at prompt start / edit) from `/api/lora/list` (`core/lora_triggers.py`: seed table by file name, user overrides in gitignored `lora_triggers.json`).

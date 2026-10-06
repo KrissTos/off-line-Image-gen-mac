@@ -4,6 +4,8 @@ import type { RefImageSlot, GenerateParams } from '../types'
 import { uploadFromUrl } from '../api'
 import HelpTip from './HelpTip'
 import MaskEditor from './MaskEditor'
+import SlotLightbox from './SlotLightbox'
+import { isReplaceClick } from '../slots'
 
 // ── Drag helpers ──────────────────────────────────────────────────────────────
 
@@ -25,9 +27,11 @@ interface SlotCardProps {
   canRemove:        boolean           // base only when it is the last slot
   thumbSize:        number
   onRemove:         () => void
-  onPickReplace:    () => void        // open the file picker to replace this image
+  onPickReplace:    () => void        // open the file picker to replace this image (Ctrl/Cmd+click)
+  onPreview:        () => void        // plain click: enlarge
   onDropReplace:    (src: File | string) => void
   onSwapFrom?:      (slotId: number) => void   // base only: a ref card dropped on it
+  onSwapRef?:       (fromSlotId: number) => void   // ref only: another ref card dropped on it
   maskIgnored:      boolean           // slot #2+ mask outside Inpainting Pipeline mode → not sent
   onClearMask:      () => void
   onDrawMask:       () => void
@@ -38,21 +42,23 @@ interface SlotCardProps {
 const EXTRA_MASK_HINT = 'Masks on slot #2+ are only used by Iterate Masks (mask mode "Inpainting Pipeline"). Normal Generate uses only the base image mask.'
 
 function SlotCard({
-  slot, isBase, canRemove, thumbSize, onRemove, onPickReplace, onDropReplace, onSwapFrom,
+  slot, isBase, canRemove, thumbSize, onRemove, onPickReplace, onPreview, onDropReplace, onSwapFrom, onSwapRef,
   maskIgnored, onClearMask, onDrawMask, onStrengthChange, onDimsLoaded,
 }: SlotCardProps) {
   const maskSize = Math.round(thumbSize * 0.7)
   const [dragOver, setDragOver] = useState(false)
   const label = isBase ? 'base image (img 1)' : `reference image (img ${slot.slotId})`
 
-  // Base accepts a ref card (swap) or a file/gallery image (replace); refs accept only the latter
-  const accepts = (e: React.DragEvent) => !isSlotDrag(e) || (isBase && !!onSwapFrom)
+  // Base accepts a ref card (swap); a ref accepts another ref card (reorder); both accept a file/gallery image (replace)
+  const accepts = (e: React.DragEvent) => !isSlotDrag(e) || (isBase ? !!onSwapFrom : !!onSwapRef)
 
   function handleDrop(e: React.DragEvent) {
     e.preventDefault()
     setDragOver(false)
     if (isSlotDrag(e)) {
-      if (isBase) onSwapFrom?.(Number(e.dataTransfer.getData(SLOT_DRAG)))
+      const from = Number(e.dataTransfer.getData(SLOT_DRAG))
+      if (isBase) onSwapFrom?.(from)
+      else if (from !== slot.slotId) onSwapRef?.(from)
       return
     }
     const src = dropSource(e)
@@ -100,7 +106,7 @@ function SlotCard({
     <div className="shrink-0 flex flex-col gap-1">
       <div className="flex items-end gap-1.5">
 
-        {/* Image — click or drop to replace; refs drag onto the base to swap */}
+        {/* Image — click enlarges, Ctrl/Cmd+click or drop replaces; refs drag onto the base to swap */}
         <div
           className={`relative rounded-lg overflow-hidden border group
                       ${dragOver ? 'border-[var(--color-accent)] ring-2 ring-[var(--color-accent)]/40' : 'border-border'}`}
@@ -116,9 +122,10 @@ function SlotCard({
           onDrop={handleDrop}
         >
           <button
-            onClick={onPickReplace}
-            aria-label={`Replace ${label}`}
-            className="w-full h-full"
+            onClick={e => (isReplaceClick(e) ? onPickReplace() : onPreview())}
+            aria-label={`Enlarge ${label} (Ctrl or Cmd+click to replace)`}
+            title="Click: enlarge · Ctrl/Cmd+click: replace"
+            className="w-full h-full cursor-zoom-in"
           >
             <img
               src={slot.imageUrl}
@@ -193,6 +200,7 @@ interface Props {
   onRemoveSlot:         (slotId: number) => void
   onReplaceSlot:        (slotId: number, src: File | string) => void
   onSwapWithBase:       (slotId: number) => void
+  onSwapRefs:           (a: number, b: number) => void
   onUploadMask:         (slotId: number, file: File) => void
   onClearMask:          (slotId: number) => void
   onSlotStrengthChange: (slotId: number, strength: number) => void
@@ -204,13 +212,14 @@ const SECTION_LABEL = 'text-[10px] text-muted uppercase tracking-wide select-non
 
 export default function RefImagesRow({
   slots, maskMode,
-  onAddSlots, onAddSlotDirect, onRemoveSlot, onReplaceSlot, onSwapWithBase,
+  onAddSlots, onAddSlotDirect, onRemoveSlot, onReplaceSlot, onSwapWithBase, onSwapRefs,
   onUploadMask, onClearMask, onSlotStrengthChange, onSlotDimsLoaded, onParamChange,
 }: Props) {
   const addRef     = useRef<HTMLInputElement>(null)
   const replaceRef = useRef<HTMLInputElement>(null)
   const [replaceTarget, setReplaceTarget] = useState<number | null>(null)
   const [maskEditorSlot, setMaskEditorSlot] = useState<RefImageSlot | null>(null)
+  const [previewSlotId, setPreviewSlotId] = useState<number | null>(null)
   const [thumbSize, setThumbSize] = useState(80)
   const [dragOverNew, setDragOverNew] = useState(false)
 
@@ -270,8 +279,10 @@ export default function RefImagesRow({
       thumbSize={thumbSize}
       onRemove={() => onRemoveSlot(slot.slotId)}
       onPickReplace={() => pickReplace(slot.slotId)}
+      onPreview={() => setPreviewSlotId(slot.slotId)}
       onDropReplace={src => onReplaceSlot(slot.slotId, src)}
       onSwapFrom={slot.slotId === 1 ? onSwapWithBase : undefined}
+      onSwapRef={slot.slotId === 1 ? undefined : from => onSwapRefs(from, slot.slotId)}
       maskIgnored={slot.slotId !== 1 && maskMode !== 'Inpainting Pipeline (Quality)'}
       onClearMask={() => onClearMask(slot.slotId)}
       onDrawMask={() => setMaskEditorSlot(slot)}
@@ -301,7 +312,7 @@ export default function RefImagesRow({
           <section aria-label="Base image" className="shrink-0 flex flex-col gap-1">
             <span className={`${SECTION_LABEL} flex items-center gap-1`}>
               Base
-              <HelpTip text="The image to edit. Click or drop an image on it to replace it; drag a reference onto it to swap them." />
+              <HelpTip text="The image to edit. Click to enlarge; Ctrl/Cmd+click or drop an image on it to replace it; drag a reference onto it to swap them." />
             </span>
             {base ? card(base) : addButton('base')}
           </section>
@@ -310,7 +321,7 @@ export default function RefImagesRow({
           <section aria-label="Reference images" className="shrink-0 flex flex-col gap-1 pl-3 border-l border-border">
             <span className={`${SECTION_LABEL} flex items-center gap-1`}>
               References
-              <HelpTip text="Material / style references (image 2, 3… in the prompt). Click or drop on a card to replace it." />
+              <HelpTip text="Material / style references (image 2, 3… in the prompt). Click to enlarge; Ctrl/Cmd+click or drop an image on a card to replace it; drag one reference onto another to swap their numbers." />
             </span>
             <div className="flex items-start gap-3">
               {refs.map(card)}
@@ -362,6 +373,17 @@ export default function RefImagesRow({
           )}
         </div>
       </div>
+
+      {/* Enlarged slot image — Replace opens the same file picker as Ctrl/Cmd+click */}
+      {previewSlotId !== null && (
+        <SlotLightbox
+          slots={slots}
+          slotId={previewSlotId}
+          onClose={() => setPreviewSlotId(null)}
+          onNavigate={setPreviewSlotId}
+          onReplace={id => { pickReplace(id); setPreviewSlotId(null) }}
+        />
+      )}
 
       {/* Mask editor modal — rendered outside the scrollable row */}
       {maskEditorSlot && slots[0] && (
