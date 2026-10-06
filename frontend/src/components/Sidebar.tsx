@@ -1263,8 +1263,8 @@ function DepthMapPanel({ modelRepo, onModelChange, onRefresh, onStatus }: DepthM
           className="w-full bg-card border border-border rounded-md px-3 py-1.5 text-sm text-white
                      focus:outline-none focus:border-accent transition-colors"
         >
-          <option value="depth-anything/DA3MONO-LARGE">DA3MONO-LARGE — best quality (~1.3 GB)</option>
-          <option value="depth-anything/Depth-Anything-V2-Large-hf">DA2-Large — fallback (~1.3 GB)</option>
+          <option value="depth-anything/DA3MONO-LARGE">DA3MONO-LARGE — sharp subject edges (~1.3 GB)</option>
+          <option value="depth-anything/Depth-Anything-V2-Large-hf">DA2-Large — smooth gradient, for the RefControl depth LoRA (~1.3 GB)</option>
         </select>
       </div>
 
