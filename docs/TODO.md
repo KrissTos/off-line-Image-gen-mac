@@ -1,5 +1,10 @@
 # TODO / known issues
 
+## Next up (decided 2026-10-06)
+1. Bug pass from the lists below (scope to confirm with the user; the nine testable backend items first, MaskEditor races later).
+2. Eyes Direction: plan ready in `docs/superpowers/plans/2026-10-06-eyes-direction.md`.
+3. Then CivitAI search in Model Sources; LTX-2.5 spike or dropping local video are parked.
+
 - `generate.py` CLI supports Z-Image Turbo only (no FLUX, no LTX).
 - Single-pass generate sends only slot #1's mask (`slotsToParams()`); per-slot masks need Iterate Masks.
 - Per-slot strength never reaches the backend in single-pass or LTX keyframes (all 1.0 / global `img_strength`).
