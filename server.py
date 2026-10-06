@@ -434,6 +434,8 @@ async def _run_events(run_dir: Path, params: dict, requested_seed: int):
                     produced += 1
                 queue.put_nowait(event)
         except Exception as e:
+            import traceback
+            traceback.print_exc()   # full traceback goes to server.log via _LogTee
             queue.put_nowait(e)
         finally:
             if not produced:
