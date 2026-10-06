@@ -70,6 +70,13 @@ def lora_function(name: str, text: str = "") -> str:
     return "other"
 
 
+# Lines that are card plumbing, not a description: licences, release links, install hints, scripts.
+_JUNK_LINE = re.compile(
+    r"licen[sc]e|distributed under|github|release link|link to|you can download|files and versions"
+    r"|copyright|number of|\botf\b|i/o|released under|i hope|temporary|mirror|no trigger"
+    r"|\.py\b|safetensors? (version|conversion)|^name\b|^scale\b", re.I)
+_KEY_VALUE = re.compile(r"^[A-Za-z][\w ]{0,18}:\s")
+
 _MD_LINK = re.compile(r"\[([^\]]*)\]\([^)]*\)")
 _TAG = re.compile(r"<[^>]*>")
 _SENTENCE = re.compile(r"(.+?[.!?])(?:\s|$)")
@@ -96,14 +103,34 @@ def describe(card_text: str) -> str:
         if re.match(r"^\W*trigger", line, re.I) or re.search(r"https?://|www\.", line):
             continue
         line = re.sub(r"[*`_]+", "", line).strip()
-        if not line:
+        if not line or _JUNK_LINE.search(line) or _KEY_VALUE.match(line):
             continue
         m = _SENTENCE.match(line)
         sentence = m.group(1) if m else line
+        if len(sentence) < 20 or sentence.endswith((",", ":", ";")) or not (sentence[0].isupper() or sentence[0].isdigit()):
+            continue                                   # a fragment, not a description
         if len(sentence) > DESC_MAX:
             sentence = sentence[:DESC_MAX - 1].rsplit(" ", 1)[0].rstrip(" ,;:") + "…"
         return sentence
     return ""
+
+
+_ARCHS = ("RealPLKSR", "PLKSR", "RealESRGAN", "ESRGAN", "SwinIR", "ATD", "DAT2", "DAT", "DRCT", "HAT",
+          "RGT", "MoSR", "SPAN", "Compact")
+
+
+def upscaler_summary(name: str) -> str:
+    """What an upscaler's name alone says: scale and architecture ('' when it says neither)."""
+    n = name or ""
+    scale = re.match(r"(?:.*?\b|^)(\d)x", n, re.I) or re.search(r"(?<![a-z0-9])(\d)x", n, re.I)
+    arch = next((a for a in _ARCHS if re.search(r"(?<![a-z])" + a + r"(?![a-z])", n, re.I)), None)
+    if not scale and not arch:
+        return ""
+    head = ""
+    if scale:
+        head = f"{scale.group(1)}x " + ("restoration" if scale.group(1) == "1" else "upscaler")
+    tail = f"{arch} architecture" if arch else ""
+    return " · ".join(p for p in (head, tail) if p)
 
 
 def _upscaler_name_ok(name: str) -> bool:
@@ -133,11 +160,13 @@ def prune_list(sources: list[dict]) -> list[dict]:
     for s in sources:
         s = dict(s)
         if s.get("type") == "lora":
-            fam = lora_family(s.get("name", "") or repo_id(s.get("url", "")))
+            fam = lora_family(s.get("name", "")) or lora_family(repo_id(s.get("url", "")))
             if fam is None and not s.get("custom"):
                 continue
             if fam:
                 s["family"] = fam
+            if not s.get("function"):
+                s["function"] = lora_function(s.get("name", ""), s.get("description", ""))
         out.append(s)
     return out
 
@@ -205,13 +234,33 @@ def enrich(sources: list[dict], fetch_card, deadline_s: float = ENRICH_DEADLINE_
         except Exception:
             report["failed"] += 1
             continue
-        desc = describe(text)
+        if out[i].get("type") == "upscaler":     # card prose is mostly training stats: the name says more
+            desc = upscaler_summary(out[i].get("name", "")) or describe(text)
+        else:
+            desc = describe(text)
         out[i]["description"] = desc
         out[i]["described"] = True
         if out[i].get("type") == "lora":
             out[i]["function"] = lora_function(out[i].get("name", ""), desc)
         report["described"] += 1
     return out, report
+
+
+def merge_discovery(current: list[dict], candidates: list[dict], ignored: list[str],
+                    fetch_files, fetch_card) -> tuple[list[dict], list[str], dict]:
+    """One "Update": drop already-known / previously-skipped repos, screen the rest against what this
+    app can use, remember the skips (not the unreadable ones: those are retried), merge, then fill
+    descriptions for new AND existing rows. Returns (sources, ignored_urls, report)."""
+    known = {s.get("url") for s in current} | set(ignored)
+    fresh = [c for c in candidates if c.get("url") not in known]
+    kept, skipped = screen(fresh, fetch_files)
+    new_ignored = list(ignored)
+    for sk in skipped:
+        if sk["reason"] != "repo unreadable" and sk["url"] not in new_ignored:
+            new_ignored.append(sk["url"])
+    merged, rep = enrich(list(current) + kept, fetch_card)
+    return merged, new_ignored, {"added": len(kept), "skipped": len(skipped),
+                                 "described": rep["described"], "failed": rep["failed"]}
 
 
 # ── real network implementations (not unit-tested; exercised by a live Update) ─────

@@ -89,7 +89,7 @@ def test_describe_empty_or_prose_free_card():
 
 
 def test_describe_cuts_at_a_word_boundary():
-    d = ms.describe("word " * 80)
+    d = ms.describe("Word " + "word " * 80)
     assert len(d) <= 140 and d.endswith("…") and not d.endswith(" …")
 
 
@@ -258,3 +258,72 @@ def test_merge_discovery_backfills_descriptions_of_existing_rows():
     current = [_src("Flux2-Klein-9B-Consistency")]
     out, _, rep = ms.merge_discovery(current, [], [], lambda r: [], lambda r: "Keeps faces consistent.")
     assert out[0]["description"] == "Keeps faces consistent." and rep["described"] == 1
+
+
+def test_prune_derives_function_offline_and_keeps_an_existing_one():
+    a = _src("flux-2-klein-4B-zoom-lora", description="Zooms into highlighted areas.")
+    b = _src("Flux2-Klein-9B-Consistency", function="custom-tag")
+    out = ms.prune_list([a, b])
+    assert out[0]["function"] == "camera"
+    assert out[1]["function"] == "custom-tag"
+
+
+# ── describe: junk lines seen in real cards (4xNomos*, gyre_*, Z-Image-loras, ...) ──
+
+@pytest.mark.parametrize("junk", [
+    "Link to Github Release", "Github Release Link", "Scale: 4", "Name: 4xRealWebPhotov3atd",
+    "license: creativeml-openrail-m", "distributed under the MIT license", "Distributed under the Apache-2.0 license",
+    "License from that repository:", "This project was inspired by Vision Banana,",
+    "You can download the models by going to the Files and versions tab.",
+    "Diffusers structure and SafeTensors format with diffusers/scripts/convert_original_controlnet_to_diffusers.py",
+])
+def test_describe_rejects_metadata_and_fragments(junk):
+    assert ms.describe(f"# Title\n\n{junk}\n") == ""
+
+
+def test_describe_skips_junk_then_takes_the_real_sentence():
+    card = "# T\n\nScale: 4\n\nLink to Github Release\n\nThis model removes JPEG artifacts from photos.\n"
+    assert ms.describe(card) == "This model removes JPEG artifacts from photos."
+
+
+# ── upscaler_summary: what the name alone tells ──────────────────────────────────
+
+@pytest.mark.parametrize("name, summary", [
+    ("4xNomosWebPhoto_RealPLKSR", "4x upscaler · RealPLKSR architecture"),
+    ("4xNomos2_hq_atd", "4x upscaler · ATD architecture"),
+    ("1xDeJPG_realplksr_otf", "1x restoration · RealPLKSR architecture"),
+    ("4xNomos2_otf_esrgan", "4x upscaler · ESRGAN architecture"),
+    ("4xRealWebPhoto_v4_dat2", "4x upscaler · DAT2 architecture"),
+    ("UltraSharpV2", ""),
+])
+def test_upscaler_summary(name, summary):
+    assert ms.upscaler_summary(name) == summary
+
+
+def test_enrich_upscaler_falls_back_to_the_name_summary():
+    s = _src("4xNomos2_hq_atd", "upscaler")
+    out, _ = ms.enrich([s], fetch_card=lambda repo: "# T\n\nLink to Github Release\n")
+    assert out[0]["description"] == "4x upscaler · ATD architecture" and out[0]["described"] is True
+
+
+@pytest.mark.parametrize("junk", [
+    "OTF (on the fly augmentations): Yes", "Number of train images: 101'904", "I/O Channels: 3(RGB)->3(RGB)",
+    "Copyright (c) 2023 Hust Vision Lab", "I hope you all like it.", "No trigger word needed.",
+    "xinntao/Real-ESRGAN, released under",
+    "which treats tasks such as depth, normal, and segmentation as image editing.",
+    "This mirror is temporary (will be removed if/when official Diffusers weights are released)",
+])
+def test_describe_rejects_more_real_card_noise(junk):
+    assert ms.describe(f"# Title\n\n{junk}\n") == ""
+
+
+def test_enrich_upscaler_prefers_the_name_summary_over_card_prose():
+    s = _src("4xNomos2_hq_atd", "upscaler")
+    out, _ = ms.enrich([s], fetch_card=lambda repo: "# T\n\nThis model removes JPEG artifacts from photos.\n")
+    assert out[0]["description"] == "4x upscaler · ATD architecture"
+
+
+def test_enrich_upscaler_without_a_summary_uses_card_prose():
+    s = _src("UltraSharpV2", "upscaler")
+    out, _ = ms.enrich([s], fetch_card=lambda repo: "# T\n\nA sharp general purpose 4x upscaler for photos.\n")
+    assert out[0]["description"] == "A sharp general purpose 4x upscaler for photos."
