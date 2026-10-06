@@ -83,6 +83,7 @@ venv/bin/python -m core.run_store migrate <dir> [--apply]   # legacy flat output
 7. All current models are distilled: guidance 0 (LTX 1.0), steps 20 FLUX / 4 Z-Image; guidance slider stays hidden.
 8. FLUX 4B + padding → outpaint LoRA path (green pad, auto LoRA, trigger prompt); don't send it for 9B/Z-Image.
 9. Load FLUX LoRAs only through `core/lora_flux2` (own BFL converter) and `sync_loras()`; never ignore a load status.
+10. klein LoRAs are size-specific (4B hidden 3072, 9B 4096): classify with `lora_variant()` (header only), never hardcode block counts; `/api/lora/list` exposes `variant` and the UI greys mismatches (`src/loraCompat.ts`); keep `assert_lora_matches_model()` in both loaders.
 
 ## 8. Video (LTX) rules
 1. Use `LTXConditionPipeline` only.
