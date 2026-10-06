@@ -251,6 +251,25 @@ async def _start_heartbeat() -> None:
         asyncio.create_task(_heartbeat_watcher())
 
 
+def _prune_temp_dir(max_age_s: float = 86400, now: float | None = None) -> int:
+    """Trash temp uploads older than max_age_s. Direct child files only."""
+    now = time.time() if now is None else now
+    n = 0
+    for f in TEMP_DIR.iterdir():
+        if f.is_file() and now - f.stat().st_mtime > max_age_s:
+            run_store.trash(f)
+            n += 1
+    return n
+
+
+@app.on_event("startup")
+async def _prune_stale_uploads() -> None:
+    try:
+        _prune_temp_dir()
+    except Exception as e:   # housekeeping must never block the server
+        print(f"[tmp_uploads] prune failed: {e}")
+
+
 # ── Lazy imports (avoid loading torch at import time) ─────────────────────────
 
 def _app():

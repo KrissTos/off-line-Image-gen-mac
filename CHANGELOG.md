@@ -3,6 +3,7 @@
 History and "why we did X". Operational rules live in `CLAUDE.md`; reference in `docs/`.
 
 ## 2026-10-06
+- Bug pass: server startup trashes `.tmp_uploads/` files older than 24 h (`_prune_temp_dir`).
 - Bug pass: `pipeline.py` and `server._run_events` print the full traceback of a failed generation to `server.log`; the client message stays `str(exc)`.
 - Bug pass: Z-Image LoRA load with any failing LoRA now returns a failure status naming them (`zimage_lora_status`), so `ensure_loras_loaded` aborts the generation instead of running with a partial set.
 - Bug pass: an LTX video event `info` now says `Saved: <renamed run path>` (it kept the pre-rename path).

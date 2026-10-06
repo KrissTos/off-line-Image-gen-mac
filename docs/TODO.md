@@ -13,7 +13,6 @@
 - Ref badges read `base`, `ref 1`, `ref 2`…, but FLUX.2 prompts refer to images by order (`image 1` = base, `image 2` = badge `ref 1`). Relabel to `img 1..N` offered, not decided (`RefImagesRow.tsx:48`).
 - Guidance slider is hidden: unhide when a non-distilled full-precision model is added.
 - `frontend/src/App.tsx:18` fails eslint `react-refresh/only-export-components` (pre-existing).
-- `.tmp_uploads/` grows without cleanup.
 - Text-to-mask (SAM 3 / Grounded-SAM) = phase 2.
 - MaskEditor residual races (rare, from the final review): dirty rect is overwritten not unioned across coalesced pointermoves (overlay gap until next rebuild); `maskRef` synced in a passive `useEffect` (move to render body / `useLayoutEffect`); brush pointermove doesn't clear `lastSam`, so Shift-refine after a mid-stroke SAM result can drop the stroke tail unundoably; a pointermove from a stale closure can overwrite a just-landed SAM result.
 - Run folders, deferred minors (2026-09-27 final review): migration leaves `X.png`+`X.mp4` same-stem pairs, upscale-of-upscale and prompt stems ending `_NNNxNNN` untouched (fail safe); overwriting an unmigrated v1 workflow leaves root `slot_N_image.png` strays.
