@@ -11,7 +11,7 @@ function readLayout(): Layout {
 
 interface Props {
   outputs:          OutputItem[]
-  onSelect:         (item: OutputItem) => void | Promise<void>
+  onSelect:         (item: OutputItem, opts: { direct: boolean }) => void | Promise<void>
   onDelete:         (filename: string) => void
   upscaleModelPath?: string
   onUpscale?:        (item: OutputItem) => void
@@ -68,10 +68,10 @@ export default function Gallery({ outputs, onSelect, onDelete, upscaleModelPath,
                 e.dataTransfer.setData('text/plain', item.url)
                 e.dataTransfer.effectAllowed = 'copy'
               }}
-              onClick={() => { setShowInfo(null); onSelect(item) }}
+              onClick={e => { setShowInfo(null); onSelect(item, { direct: e.metaKey || e.ctrlKey }) }}
               role="button"
               tabIndex={0}
-              onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') onSelect(item) }}
+              onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') onSelect(item, { direct: false }) }}
               aria-label={item.prompt ? item.prompt.slice(0, 120) : (item.name || 'Generated image')}
               className={`relative aspect-square rounded-lg overflow-hidden border border-border
                          hover:border-accent transition-colors group cursor-grab active:cursor-grabbing
