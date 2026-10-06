@@ -441,6 +441,57 @@ export default function SettingsDrawer({ open, onClose }: Props) {
 
         <div className="flex-1 overflow-y-auto p-5 space-y-6">
 
+          {/* ── Theme Colors ── */}
+          <section>
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-label flex items-center gap-1.5">
+                <Palette size={13} /> Theme Colors
+              </h3>
+              <div className="flex gap-2">
+                <button
+                  onClick={handleResetTheme}
+                  className="px-2.5 py-1 rounded-md bg-card border border-border text-muted hover:text-white text-[10px] transition-colors"
+                >
+                  Reset
+                </button>
+                <button
+                  onClick={handleSaveTheme}
+                  disabled={themeSaving}
+                  className={`px-2.5 py-1 rounded-md text-[10px] font-medium transition-colors flex items-center gap-1 disabled:opacity-40
+                    ${themeSaved
+                      ? 'bg-green-700/60 text-green-300 border border-green-700/50'
+                      : 'bg-accent text-white hover:bg-accent/80'}`}
+                >
+                  {themeSaving ? <RefreshCw size={10} className="animate-spin" /> : themeSaved ? <CheckCircle2 size={10} /> : <Save size={10} />}
+                  {themeSaved ? 'Saved' : 'Save'}
+                </button>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              {Object.entries(THEME_LABELS).map(([key, label]) => (
+                <div key={key} className="flex items-center gap-2 bg-card border border-border rounded-md px-3 py-2">
+                  <input
+                    type="color"
+                    value={themeColors[key] ?? DEFAULT_THEME[key]}
+                    onChange={e => {
+                      const next = { ...themeColors, [key]: e.target.value }
+                      setThemeColors(next)
+                      applyThemeColors(next)
+                    }}
+                    className="w-7 h-7 rounded cursor-pointer border-0 bg-transparent p-0"
+                    title={label}
+                    aria-label={label}
+                  />
+                  <div>
+                    <div className="text-xs text-white leading-none">{label}</div>
+                    <div className="text-[10px] text-muted font-mono mt-0.5">{themeColors[key] ?? DEFAULT_THEME[key]}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <p className="text-[10px] text-muted/60 mt-2">Colors preview live — click Save to persist.</p>
+          </section>
+
           {/* ── Output Folder ── */}
           <section>
             <h3 className="text-xs font-semibold uppercase tracking-wider text-label mb-3 flex items-center gap-1.5">
@@ -737,57 +788,6 @@ export default function SettingsDrawer({ open, onClose }: Props) {
               </div>
             </section>
           )}
-
-          {/* ── Theme Colors ── */}
-          <section>
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-label flex items-center gap-1.5">
-                <Palette size={13} /> Theme Colors
-              </h3>
-              <div className="flex gap-2">
-                <button
-                  onClick={handleResetTheme}
-                  className="px-2.5 py-1 rounded-md bg-card border border-border text-muted hover:text-white text-[10px] transition-colors"
-                >
-                  Reset
-                </button>
-                <button
-                  onClick={handleSaveTheme}
-                  disabled={themeSaving}
-                  className={`px-2.5 py-1 rounded-md text-[10px] font-medium transition-colors flex items-center gap-1 disabled:opacity-40
-                    ${themeSaved
-                      ? 'bg-green-700/60 text-green-300 border border-green-700/50'
-                      : 'bg-accent text-white hover:bg-accent/80'}`}
-                >
-                  {themeSaving ? <RefreshCw size={10} className="animate-spin" /> : themeSaved ? <CheckCircle2 size={10} /> : <Save size={10} />}
-                  {themeSaved ? 'Saved' : 'Save'}
-                </button>
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              {Object.entries(THEME_LABELS).map(([key, label]) => (
-                <div key={key} className="flex items-center gap-2 bg-card border border-border rounded-md px-3 py-2">
-                  <input
-                    type="color"
-                    value={themeColors[key] ?? DEFAULT_THEME[key]}
-                    onChange={e => {
-                      const next = { ...themeColors, [key]: e.target.value }
-                      setThemeColors(next)
-                      applyThemeColors(next)
-                    }}
-                    className="w-7 h-7 rounded cursor-pointer border-0 bg-transparent p-0"
-                    title={label}
-                    aria-label={label}
-                  />
-                  <div>
-                    <div className="text-xs text-white leading-none">{label}</div>
-                    <div className="text-[10px] text-muted font-mono mt-0.5">{themeColors[key] ?? DEFAULT_THEME[key]}</div>
-                  </div>
-                </div>
-              ))}
-            </div>
-            <p className="text-[10px] text-muted/60 mt-2">Colors preview live — click Save to persist.</p>
-          </section>
 
           {/* ── Storage ── */}
           <section>
