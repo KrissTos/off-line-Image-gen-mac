@@ -415,16 +415,21 @@ export default function App() {
 
   // ── Delete output ─────────────────────────────────────────────────────────
 
-  const handleDeleteOutput = useCallback(async (filename: string) => {
+  // `afterDelete` runs once the file is really gone, before the list refresh (the preview modal
+  // uses it to move to the neighbor without unmounting). Returns false when the delete failed.
+  const handleDeleteOutput = useCallback(async (filename: string, afterDelete?: () => void): Promise<boolean> => {
     try {
       await deleteOutput(filename)
-      if (state.resultUrl === `/api/output/${filename}`) {
-        dispatch({ type: 'CLEAR_RESULT' })
-      }
-      await refreshOutputs()
     } catch (err: unknown) {
       setStatusMsg(`Delete failed: ${(err as Error).message}`)
+      return false
     }
+    afterDelete?.()
+    if (state.resultUrl === `/api/output/${filename}`) {
+      dispatch({ type: 'CLEAR_RESULT' })
+    }
+    await refreshOutputs()
+    return true
   }, [state.resultUrl, dispatch, refreshOutputs])
 
   // ── Gallery upscale ────────────────────────────────────────────────────────
@@ -508,11 +513,11 @@ export default function App() {
     [state.outputs, previewUrl],
   )
 
-  // Deleting from the modal moves to the next output (else the previous, else closes)
-  const handlePreviewDelete = useCallback(async (item: OutputItem) => {
+  // Deleting from the modal moves to the next output (else the previous, else closes), but only
+  // once the delete succeeded; on failure the modal stays on this output and shows the error.
+  const handlePreviewDelete = useCallback((item: OutputItem) => {
     const after = neighbor(state.outputs, item.url, 1) ?? neighbor(state.outputs, item.url, -1)
-    setPreviewUrl(after?.url ?? null)
-    await handleDeleteOutput(item.name)
+    return handleDeleteOutput(item.name, () => setPreviewUrl(after?.url ?? null))
   }, [state.outputs, handleDeleteOutput])
 
   const handleWorkflowLoad = useCallback(async (wf: WorkflowData, name: string) => {

@@ -13,13 +13,14 @@ interface Props {
   onClose:    () => void
   onNavigate: (item: OutputItem) => void
   onLoad:     (item: OutputItem) => void
-  onDelete:   (item: OutputItem) => void
+  onDelete:   (item: OutputItem) => Promise<boolean>
 }
 
 export default function GalleryPreview({ item, outputs, canLoad, onClose, onNavigate, onLoad, onDelete }: Props) {
   const [wf, setWf]         = useState<WorkflowData | null>(null)
   const [wfError, setWfError] = useState(false)
   const [copied, setCopied] = useState(false)
+  const [deleteFailed, setDeleteFailed] = useState(false)
   const prev = neighbor(outputs, item.url, -1)
   const next = neighbor(outputs, item.url, 1)
 
@@ -33,6 +34,8 @@ export default function GalleryPreview({ item, outputs, canLoad, onClose, onNavi
       .catch(() => { if (!cancelled) setWfError(true) })
     return () => { cancelled = true }
   }, [item.run])
+
+  useEffect(() => { setDeleteFailed(false) }, [item.url])
 
   // Focus: remember the opener to hand focus back on close; Tab cycles inside the dialog.
   const dialogRef = useRef<HTMLDivElement>(null)
@@ -185,6 +188,10 @@ export default function GalleryPreview({ item, outputs, canLoad, onClose, onNavi
               </section>
             )}
 
+            {deleteFailed && (
+              <p role="alert" className="text-xs text-red-400">Delete failed. The file is still there.</p>
+            )}
+
             {(!item.run || wfError) && (
               <p className="text-xs text-muted">
                 {item.run ? 'Could not read this run\'s workflow.' : 'No workflow saved for this output.'}
@@ -202,7 +209,7 @@ export default function GalleryPreview({ item, outputs, canLoad, onClose, onNavi
               className="p-2 rounded bg-card border border-border text-muted hover:text-white hover:border-accent transition-colors">
               <Download size={16} aria-hidden="true" />
             </a>
-            <button onClick={() => onDelete(item)} aria-label="Delete output"
+            <button onClick={async () => setDeleteFailed(!(await onDelete(item)))} aria-label="Delete output"
               className="p-2 rounded bg-card border border-border text-muted hover:text-white hover:bg-red-600 transition-colors">
               <Trash2 size={16} aria-hidden="true" />
             </button>
