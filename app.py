@@ -2328,7 +2328,7 @@ def import_comfyui_workflow(json_file_path):
     fname = os.path.basename(json_file_path)
 
     # ── Model resolution: prefer locally available models ────────────────────
-    models_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
+    models_dir = get_local_models_dir()
     available  = get_locally_available_models(models_dir)
 
     matched_choice = wf.get("model_choice")   # may be None if ckpt not recognised

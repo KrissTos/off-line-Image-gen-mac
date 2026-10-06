@@ -497,7 +497,7 @@ async def api_models():
     from core.workflow_utils import get_locally_available_models
     a = _app()
     choices    = a.MODEL_CHOICES
-    models_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
+    models_dir = a.get_local_models_dir()
     available  = get_locally_available_models(models_dir)
     return {
         "choices":   choices,
@@ -899,7 +899,7 @@ async def api_import_comfyui(file: UploadFile = File(...)):
         raise HTTPException(400, "File is a native workflow — use /api/workflows/{name} instead")
 
     from core.workflow_utils import get_locally_available_models as glam
-    models_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
+    models_dir = _app().get_local_models_dir()
     available  = glam(models_dir)
 
     matched = wf.get("model_choice")
