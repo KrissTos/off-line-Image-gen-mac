@@ -10,6 +10,8 @@ LoRA formats automatically. This module adds:
 """
 from __future__ import annotations
 
+import re
+
 
 # ── BFL-native FLUX.2 LoRA → diffusers ─────────────────────────────────────────
 # diffusers' _convert_non_diffusers_flux2_lora_to_diffusers hardcodes FLUX.2-dev
@@ -102,6 +104,64 @@ def _prepare_state_dict(state_dict: dict) -> dict:
     return state_dict
 
 
+# klein-4B: 5 double / 20 single, hidden 3072. klein-9B: 8 double / 24 single, hidden 4096.
+# FLUX.2-dev (8 / 48, hidden 6144) is the larger model a LoRA must not be trained for.
+_KLEIN_MAX_SINGLE = 24
+_KLEIN_MAX_DOUBLE = 8
+_VARIANT_BY_HIDDEN = {3072: "4b", 4096: "9b"}
+# Modules whose lora_A input / lora_B output dim equals the transformer hidden size.
+_HIDDEN_IN_MODULES = re.compile(
+    r"(?:^|\.)(linear1|to_qkv_mlp_proj|qkv|to_q|to_k|to_v|add_q_proj|add_k_proj|add_v_proj)$")
+_HIDDEN_OUT_MODULES = re.compile(r"(?:^|\.)(linear2|to_out|to_out\.0|proj|to_add_out)$")
+
+
+def lora_variant(path: str):
+    """'4b' | '9b' | None for a FLUX.2-klein LoRA file, from tensor shapes in the header only.
+    None = hidden size unreadable or not a klein size (don't block it, just can't classify)."""
+    from safetensors import safe_open
+
+    dims = set()
+    try:
+        with safe_open(path, framework="pt", device="cpu") as f:
+            for key in f.keys():
+                m = re.match(r"^(.*)\.(lora_A|lora_B|lora_down|lora_up)(?:\.[^.]+)?\.weight$", key)
+                if not m:
+                    continue
+                mod, kind = m.groups()
+                mod = re.sub(r"^.*(?:single_blocks|double_blocks|transformer_blocks|"
+                             r"single_transformer_blocks)\.\d+\.", "", mod)
+                shape = f.get_slice(key).get_shape()
+                if kind in ("lora_A", "lora_down") and _HIDDEN_IN_MODULES.search(mod):
+                    dims.add(shape[1])
+                elif kind in ("lora_B", "lora_up") and _HIDDEN_OUT_MODULES.search(mod):
+                    dims.add(shape[0])
+    except Exception:
+        return None
+    variants = {_VARIANT_BY_HIDDEN.get(d) for d in dims}
+    return variants.pop() if len(variants) == 1 else None
+
+
+def pipe_variant(pipe):
+    """'4b' | '9b' | None for a loaded Flux2KleinPipeline (hidden = heads * head_dim)."""
+    try:
+        cfg = pipe.transformer.config
+        return _VARIANT_BY_HIDDEN.get(cfg.num_attention_heads * cfg.attention_head_dim)
+    except AttributeError:
+        return None  # unknown pipeline shape: skip the guard, loading still validates
+
+
+def assert_lora_matches_model(pipe, lora_path: str) -> None:
+    """Raise a one-line RuntimeError when a klein LoRA was trained for the other klein size.
+    Unclassifiable LoRAs (variant None) pass through; load itself will still validate."""
+    import os
+
+    lv, mv = lora_variant(lora_path), pipe_variant(pipe)
+    if lv and mv and lv != mv:
+        raise RuntimeError(
+            f"LoRA '{os.path.basename(lora_path)}' is for FLUX.2-klein-{lv.upper()} but the "
+            f"loaded model is klein-{mv.upper()} — switch model or pick a {mv.upper()} LoRA.")
+
+
 def check_lora_compatibility(path: str) -> None:
     """
     Validate that a LoRA file is compatible with FLUX.2-klein before saving.
@@ -145,17 +205,17 @@ def check_lora_compatibility(path: str) -> None:
 
     for k in normalised:
         m = single_re.match(k)
-        if m and int(m.group(1)) >= 20:
+        if m and int(m.group(1)) >= _KLEIN_MAX_SINGLE:
             raise RuntimeError(
                 f"LoRA not compatible with FLUX.2-klein — trained for a larger model "
-                f"(found single_blocks.{m.group(1)}, klein has 20). "
+                f"(found single_blocks.{m.group(1)}, klein has at most {_KLEIN_MAX_SINGLE}). "
                 f"Use a LoRA trained for FLUX.2-klein 4B or 9B."
             )
         m = double_re.match(k)
-        if m and int(m.group(1)) >= 19:
+        if m and int(m.group(1)) >= _KLEIN_MAX_DOUBLE:
             raise RuntimeError(
                 f"LoRA not compatible with FLUX.2-klein — trained for a larger model "
-                f"(found double_blocks.{m.group(1)}, klein has 19). "
+                f"(found double_blocks.{m.group(1)}, klein has at most {_KLEIN_MAX_DOUBLE}). "
                 f"Use a LoRA trained for FLUX.2-klein 4B or 9B."
             )
 
@@ -173,6 +233,7 @@ def load_lora(pipe, lora_path: str, strength: float) -> str:
     """
     from safetensors.torch import load_file
 
+    assert_lora_matches_model(pipe, lora_path)
     state_dict = load_file(lora_path)
 
     try:
@@ -224,6 +285,7 @@ def load_loras(pipe, loras: list) -> str:
             lora_path = lora["path"]
             strength  = float(lora.get("strength", 1.0))
             adapter_name = f"lora_{i}"
+            assert_lora_matches_model(pipe, lora_path)
 
             state_dict = load_file(lora_path)
 

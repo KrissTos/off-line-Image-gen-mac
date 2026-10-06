@@ -6,6 +6,7 @@ import {
   Eraser,
 } from 'lucide-react'
 import type { GenerateParams, RefImageSlot, LoraSlot } from '../types'
+import { modelVariant, loraDisabledReason } from '../loraCompat'
 import type { WorkflowData } from '../workflow'
 import { importComfyUI, loadWorkflow, saveWorkflow, uploadLora, uploadUpscaleModel, streamBatchUpscale, streamBatchGenerate, openFolderDialog, openFileDialog, upscaleSingleImage, updateSettings, openWorkflowFolderDialog, listLoras, stopGeneration, generateDepthMap, eraseDetect, eraseRemove } from '../api'
 import HelpTip from './HelpTip'
@@ -301,7 +302,7 @@ interface LoraPanelProps {
   modelChoice: string
 }
 function LoraPanel({ loraFiles, onChange, onStatus, modelChoice }: LoraPanelProps) {
-  const [library, setLibrary] = useState<Array<{ name: string; path: string; model_type: string }>>([])
+  const [library, setLibrary] = useState<Array<{ name: string; path: string; model_type: string; variant?: string | null }>>([])
 
   // Which LoRA type is compatible with the current model?
   const compatibleType = modelChoice.startsWith('FLUX') ? 'flux'
@@ -311,6 +312,7 @@ function LoraPanel({ loraFiles, onChange, onStatus, modelChoice }: LoraPanelProp
   const filteredLibrary = compatibleType
     ? library.filter(l => l.model_type === compatibleType || l.model_type === 'unknown')
     : library
+  const loadedVariant = modelVariant(modelChoice)
   const [uploading, setUploading] = useState<number | null>(null)  // slot index being uploaded
   const fileRefs = useRef<(HTMLInputElement | null)[]>([])
   // Stable keys for React reconciliation — index is unreliable when removing middle slots
@@ -388,9 +390,15 @@ function LoraPanel({ loraFiles, onChange, onStatus, modelChoice }: LoraPanelProp
               {slot.path && !filteredLibrary.find(l => l.path === slot.path) && (
                 <option value={slot.path}>{slot.path.split('/').pop()}</option>
               )}
-              {filteredLibrary.map(l => (
-                <option key={l.path} value={l.path}>{l.name}</option>
-              ))}
+              {filteredLibrary.map(l => {
+                // Wrong klein size can't load: grey it out (the slot's current pick stays selectable)
+                const why = l.path === slot.path ? null : loraDisabledReason(l, loadedVariant)
+                return (
+                  <option key={l.path} value={l.path} disabled={!!why} title={why ?? undefined}>
+                    {why ? `${l.name} (${l.variant!.toUpperCase()} only)` : l.name}
+                  </option>
+                )
+              })}
             </select>
 
             {/* Upload new file → auto-adds to library */}

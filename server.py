@@ -953,13 +953,16 @@ def _detect_lora_type(path: str) -> str:
 
 
 @app.get("/api/lora/list")
-async def api_list_loras():
-    """Return all .safetensors/.pt/.bin files in lora_uploads/ with model_type tag."""
+def api_list_loras():
+    """Return all .safetensors/.pt/.bin files in lora_uploads/ with model_type tag and, for
+    FLUX LoRAs, the klein size ("4b" | "9b" | null) so the UI can grey out mismatches."""
+    from core.lora_flux2 import lora_variant
     lora_dir = ROOT / "lora_uploads"
     if not lora_dir.exists():
         return {"files": []}
     files = [
-        {"name": f.name, "path": str(f), "model_type": _detect_lora_type(str(f))}
+        {"name": f.name, "path": str(f), "model_type": (mt := _detect_lora_type(str(f))),
+         "variant": lora_variant(str(f)) if mt == "flux" else None}
         for f in sorted(lora_dir.iterdir(), key=lambda f: f.stat().st_mtime, reverse=True)
         if f.suffix in (".safetensors", ".pt", ".bin") and f.is_file()
     ]

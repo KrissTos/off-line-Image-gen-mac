@@ -37,6 +37,7 @@ All distilled → guidance slider hidden; defaults from `guidanceForModel()` / `
 ## LoRA
 - Multi-LoRA: `lora_files: LoraSlot[]` (≤5), named adapters in `load_loras()`; `if not lora_files` (not `is None`) for legacy fallback. `LoraSlot` carries `name?` / `model_type?` for sidecars.
 - FLUX.2-klein LoRA needs diffusers git main. BFL-native LoRAs (`double_blocks.N.img_attn.qkv`, `single_blocks.N.linear1`) go through our `convert_bfl_flux2_lora()` (`core/lora_flux2.py`): diffusers' converter hardcodes FLUX.2-dev 8/48 blocks, requires MLP keys and rejects embedder/modulation keys. Unmapped key → error, never a half-applied LoRA.
+- klein LoRA size (4B/9B) comes from header tensor shapes (`lora_variant()`); `/api/lora/list` returns it, the UI greys mismatches, `assert_lora_matches_model()` guards loading. klein-4B = 5 double / 20 single, hidden 3072; 9B = 8 / 24, 4096.
 - `sync_loras()` loads requested LoRAs (failure → `ensure_loras_loaded()` raises → UI error) and unloads leftovers when a request has none.
 - LoRA accordion `key={lora_files.length > 0 ? 'lora-has-files' : 'lora-empty'}` + `defaultOpen` → remounts to auto-open when params are loaded (`useState(defaultOpen)` reads only at mount).
 
