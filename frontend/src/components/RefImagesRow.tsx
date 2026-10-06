@@ -43,7 +43,7 @@ function SlotCard({
 }: SlotCardProps) {
   const maskSize = Math.round(thumbSize * 0.7)
   const [dragOver, setDragOver] = useState(false)
-  const label = isBase ? 'base image' : `reference image ${slot.slotId - 1}`
+  const label = isBase ? 'base image (img 1)' : `reference image (img ${slot.slotId})`
 
   // Base accepts a ref card (swap) or a file/gallery image (replace); refs accept only the latter
   const accepts = (e: React.DragEvent) => !isSlotDrag(e) || (isBase && !!onSwapFrom)
@@ -122,7 +122,7 @@ function SlotCard({
           >
             <img
               src={slot.imageUrl}
-              alt={`ref #${slot.slotId}`}
+              alt={`img ${slot.slotId}`}
               draggable={false}
               className="w-full h-full object-cover hover:opacity-80 transition-opacity"
               onLoad={e => {
@@ -135,7 +135,7 @@ function SlotCard({
           {/* Slot role badge */}
           <div className={`absolute top-1 left-1 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-full shadow pointer-events-none
                            ${isBase ? 'bg-teal-600' : 'bg-accent'}`}>
-            {isBase ? 'base' : `ref ${slot.slotId - 1}`}
+            {isBase ? 'img 1 · base' : `img ${slot.slotId}`}
           </div>
 
           {/* Swap / replace hint while dragging over */}

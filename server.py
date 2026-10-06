@@ -251,6 +251,28 @@ async def _start_heartbeat() -> None:
         asyncio.create_task(_heartbeat_watcher())
 
 
+def _prune_temp_dir(max_age_s: float = 86400, now: float | None = None) -> int:
+    """Trash temp uploads older than max_age_s. Direct child files only."""
+    now = time.time() if now is None else now
+    n = 0
+    for f in TEMP_DIR.iterdir():
+        if f.is_file() and now - f.stat().st_mtime > max_age_s:
+            try:
+                run_store.trash(f)
+                n += 1
+            except Exception as e:   # one stuck file must not stop the rest
+                print(f"[tmp_uploads] could not trash {f.name}: {e}")
+    return n
+
+
+@app.on_event("startup")
+async def _prune_stale_uploads() -> None:
+    # One `trash` process per file: run it in a thread, in the background, so startup never waits.
+    task = asyncio.create_task(asyncio.to_thread(_prune_temp_dir))
+    _RUN_TASKS.add(task)
+    task.add_done_callback(_RUN_TASKS.discard)
+
+
 # ── Lazy imports (avoid loading torch at import time) ─────────────────────────
 
 def _app():
@@ -346,12 +368,12 @@ def _temp_path(file_id: str) -> Path:
     return TEMP_DIR / file_id
 
 def _load_pil(file_id: str):
-    """Load a PIL Image from a temp-upload file ID."""
-    from PIL import Image
+    """Load a PIL Image from a temp-upload file ID (EXIF orientation applied, like the UI)."""
+    from PIL import Image, ImageOps
     p = _temp_path(file_id)
     if not p.exists():
         raise HTTPException(404, f"Temp file {file_id} not found")
-    return Image.open(p).convert("RGB")
+    return ImageOps.exif_transpose(Image.open(p)).convert("RGB")
 
 def _output_dir() -> str:
     a = _app()
@@ -409,6 +431,8 @@ def _record_output(run_dir: Path, event: dict, requested_seed: int) -> None:
         run_store.add_output(run_dir, dst, event["type"], seed=seed)
     except Exception as e:
         print(f"[run_store] could not record {src.name}: {e}")
+    if event.get("info"):
+        event["info"] = event["info"].replace(str(src), str(dst))
     event["path"] = str(dst)
     event["url"]  = f"/api/output/{run_dir.name}/outputs/{dst.name}"
 
@@ -432,6 +456,8 @@ async def _run_events(run_dir: Path, params: dict, requested_seed: int):
                     produced += 1
                 queue.put_nowait(event)
         except Exception as e:
+            import traceback
+            traceback.print_exc()   # full traceback goes to server.log via _LogTee
             queue.put_nowait(e)
         finally:
             if not produced:
@@ -497,7 +523,7 @@ async def api_models():
     from core.workflow_utils import get_locally_available_models
     a = _app()
     choices    = a.MODEL_CHOICES
-    models_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
+    models_dir = a.get_local_models_dir()
     available  = get_locally_available_models(models_dir)
     return {
         "choices":   choices,
@@ -769,7 +795,10 @@ def api_delete_output(filename: str):
         raise HTTPException(404, detail="File not found")
     parts = p.relative_to(base).parts
     run_dir = base / parts[0]
-    if len(parts) > 1 and (run_dir / "workflow.json").is_file():
+    in_run = len(parts) > 1 and (run_dir / "workflow.json").is_file()
+    if in_run and not (len(parts) > 2 and parts[1] == "outputs"):
+        raise HTTPException(400, detail="Only files in outputs/ can be deleted")
+    if in_run:
         if run_store.remove_output(run_dir, "/".join(parts[1:])):
             run_store.trash(run_dir)
     else:
@@ -899,7 +928,7 @@ async def api_import_comfyui(file: UploadFile = File(...)):
         raise HTTPException(400, "File is a native workflow — use /api/workflows/{name} instead")
 
     from core.workflow_utils import get_locally_available_models as glam
-    models_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
+    models_dir = _app().get_local_models_dir()
     available  = glam(models_dir)
 
     matched = wf.get("model_choice")

@@ -910,7 +910,7 @@ def load_loras(loras: list, device: str) -> str:
     else:
         # Z-Image Full — custom forward-patch loader (bypasses PEFT module-name matching)
         from core.lora_zimage import load_lora_for_pipeline
-        loaded = []
+        loaded, failed = [], []
         for lora in valid:
             try:
                 net = load_lora_for_pipeline(
@@ -923,11 +923,21 @@ def load_loras(loras: list, device: str) -> str:
                 loaded.append(os.path.basename(lora["path"]))
                 _dbg(f"Z-Image LoRA patched: {lora['path']} strength={lora.get('strength', 1.0)}")
             except Exception as e:
+                failed.append(os.path.basename(lora["path"]))
                 print(f"  LoRA load failed for {lora['path']}: {e}")
         current_lora_paths = valid
-        if loaded:
-            return f"Loaded {len(loaded)} LoRA(s): {', '.join(loaded)}"
-        return "LoRA load failed — check console for details"
+        return zimage_lora_status(loaded, failed)
+
+
+def zimage_lora_status(loaded: list[str], failed: list[str]) -> str:
+    """Status string for a Z-Image LoRA load. Any failure must not read as 'Loaded ...',
+    because ensure_loras_loaded() treats that prefix as success."""
+    if failed:
+        return (f"LoRA load failed for {len(failed)} of {len(loaded) + len(failed)}: "
+                f"{', '.join(failed)} — check console for details")
+    if loaded:
+        return f"Loaded {len(loaded)} LoRA(s): {', '.join(loaded)}"
+    return "LoRA load failed — check console for details"
 
 
 def ensure_loras_loaded(status: str) -> None:
@@ -2328,7 +2338,7 @@ def import_comfyui_workflow(json_file_path):
     fname = os.path.basename(json_file_path)
 
     # ── Model resolution: prefer locally available models ────────────────────
-    models_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
+    models_dir = get_local_models_dir()
     available  = get_locally_available_models(models_dir)
 
     matched_choice = wf.get("model_choice")   # may be None if ckpt not recognised

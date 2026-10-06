@@ -317,6 +317,8 @@ class PipelineManager:
                 )
                 asyncio.run_coroutine_threadsafe(queue.put(None), loop)
             except Exception as exc:
+                import traceback
+                traceback.print_exc()   # full traceback goes to server.log via _LogTee
                 asyncio.run_coroutine_threadsafe(
                     queue.put({"type": "error", "message": str(exc)}),
                     loop,
