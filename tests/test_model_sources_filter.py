@@ -204,3 +204,57 @@ def test_screen_leaves_base_entries_alone():
     base = _src("m", "base")
     kept, skipped = ms.screen([base], fetch_files=lambda repo: [])
     assert kept == [base] and skipped == []
+
+
+def test_prune_uses_the_repo_id_when_the_label_says_nothing():
+    s = {"id": "x", "name": "Style Pack", "type": "lora", "description": "", "model_choice": "",
+         "url": "https://huggingface.co/DeverStyle/Flux.2-Klein-Loras"}
+    assert ms.prune_list([s])[0]["family"] == "klein"
+
+
+# ── merge_discovery: one Update = screen + remember skips + merge + describe ─────
+
+def _repo_files(mapping):
+    return lambda repo: mapping[repo]
+
+
+def test_merge_discovery_adds_supported_skips_rest_and_remembers_skips():
+    current = [_src("Flux2-Klein-9B-Consistency", description="kept")]
+    cands = [_src("Flux2-Klein-9B-Enhanced-Details"), _src("huggy_v17"), _src("Flux2-Klein-Delight-LoRA")]
+    files = _repo_files({"org/Flux2-Klein-9B-Enhanced-Details": ["a.safetensors"],
+                         "org/huggy_v17": ["a.safetensors"],
+                         "org/Flux2-Klein-Delight-LoRA": ["a.ckpt"]})
+    cards = lambda repo: "A real sentence about " + repo + "."
+    out, ignored, rep = ms.merge_discovery(current, cands, [], files, cards)
+    assert [s["name"] for s in out] == ["Flux2-Klein-9B-Consistency", "Flux2-Klein-9B-Enhanced-Details"]
+    assert rep["added"] == 1 and rep["skipped"] == 2
+    assert set(ignored) == {"https://huggingface.co/org/huggy_v17",
+                            "https://huggingface.co/org/Flux2-Klein-Delight-LoRA"}
+    assert out[1]["description"].startswith("A real sentence") and out[1]["function"] == "detail"
+    assert out[0]["description"] == "kept"
+
+
+def test_merge_discovery_ignores_previously_skipped_and_existing_urls():
+    current = [_src("Flux2-Klein-9B-Consistency")]
+    cands = [_src("Flux2-Klein-9B-Consistency"), _src("huggy_v17"), _src("Flux2-Klein-Delight-LoRA")]
+    seen = []
+    def files(repo):
+        seen.append(repo)
+        return ["a.safetensors"]
+    ignored = ["https://huggingface.co/org/huggy_v17"]
+    out, ignored2, rep = ms.merge_discovery(current, cands, ignored, files, lambda r: "Text here.")
+    assert seen == ["org/Flux2-Klein-Delight-LoRA"]          # existing + ignored never re-checked
+    assert rep["added"] == 1 and "https://huggingface.co/org/huggy_v17" in ignored2
+
+
+def test_merge_discovery_does_not_remember_unreadable_repos():
+    def boom(repo):
+        raise OSError("hf down")
+    _, ignored, rep = ms.merge_discovery([], [_src("Flux2-Klein-9B-Enhanced-Details")], [], boom, lambda r: "")
+    assert ignored == [] and rep["skipped"] == 1             # retried next Update
+
+
+def test_merge_discovery_backfills_descriptions_of_existing_rows():
+    current = [_src("Flux2-Klein-9B-Consistency")]
+    out, _, rep = ms.merge_discovery(current, [], [], lambda r: [], lambda r: "Keeps faces consistent.")
+    assert out[0]["description"] == "Keeps faces consistent." and rep["described"] == 1

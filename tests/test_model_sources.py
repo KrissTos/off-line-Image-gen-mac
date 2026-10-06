@@ -30,3 +30,57 @@ def test_total_memory_positive():
     import app
     # On any real host (MPS recommended-max or sysconf physical RAM) this is > 0.
     assert app.get_total_memory_gb() > 0
+
+
+# ── Model Sources cleanup: list read, save and Update wiring ─────────────────────
+
+import json
+
+
+def _lora(name, **kw):
+    return {"id": name, "name": name, "url": f"https://huggingface.co/org/{name}",
+            "type": "lora", "description": "", "model_choice": "", **kw}
+
+
+def _use_file(monkeypatch, tmp_path, sources, ignored=None):
+    import server
+    f = tmp_path / "model_sources.json"
+    data = {"version": 1, "sources": sources}
+    if ignored is not None:
+        data["ignored"] = ignored
+    f.write_text(json.dumps(data))
+    monkeypatch.setattr(server, "MODEL_SOURCES_FILE", f)
+    return f
+
+
+def test_get_prunes_unsupported_loras_but_keeps_custom(monkeypatch, tmp_path):
+    import server
+    _use_file(monkeypatch, tmp_path, [_lora("Flux2-Klein-9B-Consistency"), _lora("huggy_v17"),
+                                      _lora("my-own", custom=True)])
+    names = [s["name"] for s in server.api_get_model_sources()["sources"]]
+    assert names == ["Flux2-Klein-9B-Consistency", "my-own"]
+
+
+def test_save_keeps_the_ignored_list(monkeypatch, tmp_path):
+    import server
+    f = _use_file(monkeypatch, tmp_path, [], ignored=["https://huggingface.co/org/huggy_v17"])
+    server.api_save_model_sources({"sources": [_lora("Flux2-Klein-9B-Consistency", custom=True)]})
+    saved = json.loads(f.read_text())
+    assert saved["ignored"] == ["https://huggingface.co/org/huggy_v17"]
+    assert saved["sources"][0]["custom"] is True
+
+
+def test_discover_screens_describes_and_remembers(monkeypatch, tmp_path):
+    import server
+    from core import model_sources as ms
+    f = _use_file(monkeypatch, tmp_path, [])
+    cands = [_lora("Flux2-Klein-9B-Enhanced-Details"), _lora("huggy_v17")]
+    monkeypatch.setattr(server, "_discover_candidates", lambda existing, next_id: cands)
+    monkeypatch.setattr(ms, "hf_fetch_files", lambda repo: ["w.safetensors"])
+    monkeypatch.setattr(ms, "hf_fetch_card", lambda repo: "Sharpens fine detail in photos.")
+    out = server.api_discover_model_sources()
+    assert out["added"] == 1 and out["skipped"] == 1 and out["described"] == 1
+    saved = json.loads(f.read_text())
+    assert [s["name"] for s in saved["sources"]] == ["Flux2-Klein-9B-Enhanced-Details"]
+    assert saved["sources"][0]["description"] == "Sharpens fine detail in photos."
+    assert saved["ignored"] == ["https://huggingface.co/org/huggy_v17"]
