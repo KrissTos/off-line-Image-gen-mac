@@ -16,7 +16,6 @@
 - `frontend/src/App.tsx:18` fails eslint `react-refresh/only-export-components` (pre-existing).
 - `.tmp_uploads/` grows without cleanup.
 - Text-to-mask (SAM 3 / Grounded-SAM) = phase 2.
-- `_load_pil` (`server.py:343`) doesn't apply `exif_transpose`: a phone JPEG with EXIF orientation gets its SAM mask built upright (frontend transposes for display) but generation loads the untransposed pixels, so the mask can land misaligned with the actual image content.
 - MaskEditor residual races (rare, from the final review): dirty rect is overwritten not unioned across coalesced pointermoves (overlay gap until next rebuild); `maskRef` synced in a passive `useEffect` (move to render body / `useLayoutEffect`); brush pointermove doesn't clear `lastSam`, so Shift-refine after a mid-stroke SAM result can drop the stroke tail unundoably; a pointermove from a stale closure can overwrite a just-landed SAM result.
 - Run folders, deferred minors (2026-09-27 final review): `DELETE /api/output/<run>/workflow.json` or `refs/*` deletes non-output files (hand-built request only; require `parts[1] == "outputs"`); LTX video `info` still says `Saved: <old path>` after the rename; migration leaves `X.png`+`X.mp4` same-stem pairs, upscale-of-upscale and prompt stems ending `_NNNxNNN` untouched (fail safe); overwriting an unmigrated v1 workflow leaves root `slot_N_image.png` strays.
 - Depth map `filename` (legacy output-dir name) uses `Path(name).name`, so it can't reach files inside run folders; UI sends `file_path` only.

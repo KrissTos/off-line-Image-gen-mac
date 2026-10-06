@@ -346,12 +346,12 @@ def _temp_path(file_id: str) -> Path:
     return TEMP_DIR / file_id
 
 def _load_pil(file_id: str):
-    """Load a PIL Image from a temp-upload file ID."""
-    from PIL import Image
+    """Load a PIL Image from a temp-upload file ID (EXIF orientation applied, like the UI)."""
+    from PIL import Image, ImageOps
     p = _temp_path(file_id)
     if not p.exists():
         raise HTTPException(404, f"Temp file {file_id} not found")
-    return Image.open(p).convert("RGB")
+    return ImageOps.exif_transpose(Image.open(p)).convert("RGB")
 
 def _output_dir() -> str:
     a = _app()
