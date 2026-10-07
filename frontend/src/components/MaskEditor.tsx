@@ -4,7 +4,7 @@ import type { RefImageSlot } from '../types'
 import HelpTip from './HelpTip'
 import { segmentMask, segmentPrepare, segmentStatus } from '../api'
 import {
-  coverage, createMask, fillPolygon, fromRgba, grow, invert, paintOverlayFull, paintOverlayRect,
+  coverage, createMask, fillPolygon, fromRgba, grow, hexToRgb, invert, paintOverlayFull, paintOverlayRect,
   paintStroke, shrink, strokeRect, subtract, toRgba, union, type Mask, type Pt,
 } from '../mask/maskOps'
 import { MaskHistory } from '../mask/history'
@@ -25,6 +25,17 @@ interface Props {
 }
 
 const BRUSH_MIN = 4, BRUSH_MAX = 200
+const OVERLAY_COLOR_KEY = 'maskOverlayColor', OVERLAY_OPACITY_KEY = 'maskOverlayOpacity'
+const OPACITY_MIN = 5, OPACITY_MAX = 100
+const OVERLAY_SWATCHES = ['#ef4444', '#22c55e', '#3b82f6', '#facc15', '#ec4899', '#ffffff']
+
+// Per-viewer convenience only: storage can be blocked or throw, the editor works without it.
+function lsGet(key: string, fallback: string): string {
+  try { return localStorage.getItem(key) ?? fallback } catch { return fallback }
+}
+function lsSet(key: string, value: string): void {
+  try { localStorage.setItem(key, value) } catch { /* ignore */ }
+}
 const ZOOM_STEP = 1.25
 
 // Hover help for the left column: name + shortcut, how to use it, modifiers.
@@ -78,6 +89,9 @@ export default function MaskEditor({ slot, baseImageId, baseImageUrl, onClose, o
   const [brush, setBrush]       = useState(24)
   const [growPx, setGrowPx]     = useState(3)
   const [showMask, setShowMask] = useState(true)
+  const [overlayHex, setOverlayHex] = useState(() => lsGet(OVERLAY_COLOR_KEY, '#ef4444'))
+  const [overlayOpacity, setOverlayOpacity] = useState(() => Number(lsGet(OVERLAY_OPACITY_KEY, '45')) || 45)   // percent
+  const overlayRgb = useMemo(() => hexToRgb(overlayHex), [overlayHex])
   const [sam, setSam]           = useState<SamState>('loading')
   const [samError, setSamError] = useState('')
   const [samFirst, setSamFirst] = useState<SamFirstLoad>('no')
@@ -162,18 +176,18 @@ export default function MaskEditor({ slot, baseImageId, baseImageUrl, onClose, o
     const sameBuffer = overlayMaskData.current === mask.data && !sizeChanged
     const rect = strokeDirtyRect.current
     if (sameBuffer && overlayImgData.current && rect) {
-      paintOverlayRect(overlayImgData.current.data, mask, rect.x0, rect.y0, rect.x1, rect.y1)
+      paintOverlayRect(overlayImgData.current.data, mask, rect.x0, rect.y0, rect.x1, rect.y1, overlayRgb)
       ctx.putImageData(overlayImgData.current, 0, 0, rect.x0, rect.y0, rect.x1 - rect.x0 + 1, rect.y1 - rect.y0 + 1)
     } else {
       if (sizeChanged) { oc.width = mask.w; oc.height = mask.h }
       const id = ctx.createImageData(mask.w, mask.h)
-      paintOverlayFull(id.data, mask)
+      paintOverlayFull(id.data, mask, overlayRgb)
       ctx.putImageData(id, 0, 0)
       overlayImgData.current = id
     }
     overlayMaskData.current = mask.data
     strokeDirtyRect.current = null
-  }, [mask])
+  }, [mask, overlayRgb])
 
   // ── Draw ─────────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -188,7 +202,11 @@ export default function MaskEditor({ slot, baseImageId, baseImageUrl, onClose, o
     ctx.setTransform(dpr * view.scale, 0, 0, dpr * view.scale, dpr * view.tx, dpr * view.ty)
     ctx.imageSmoothingEnabled = view.scale < 2
     ctx.drawImage(img, 0, 0)
-    if (showMask) ctx.drawImage(overlayRef.current, 0, 0)
+    if (showMask) {
+      ctx.globalAlpha = overlayOpacity / 100
+      ctx.drawImage(overlayRef.current, 0, 0)
+      ctx.globalAlpha = 1
+    }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)            // screen-space overlays
     ctx.lineWidth = 1.5
     if (drag) {
@@ -208,7 +226,7 @@ export default function MaskEditor({ slot, baseImageId, baseImageUrl, onClose, o
     if (tool === 'brush' && cursor) {
       ctx.strokeStyle = '#ffffff'; ctx.beginPath(); ctx.arc(cursor.x, cursor.y, brush / 2, 0, Math.PI * 2); ctx.stroke()
     }
-  }, [mask, view, box, showMask, drag, poly, cursor, tool, brush])
+  }, [mask, view, box, showMask, overlayOpacity, overlayRgb, drag, poly, cursor, tool, brush])
 
   // ── Edit helpers ─────────────────────────────────────────────────────────────
   const commit = useCallback((next: Mask, before: Mask, keepSam = false) => {
@@ -470,6 +488,26 @@ export default function MaskEditor({ slot, baseImageId, baseImageUrl, onClose, o
                 className={numInput} />
             </div>
           )}
+          <div className="w-full border-t border-border my-1" />
+          <HelpTip text={tip('Mask color', 'M', ['Color and opacity of the mask overlay. Display only: the mask itself is unchanged.', 'M toggles the overlay.'])}
+                   position="right" className="flex w-full flex-col gap-1">
+            <span className="text-[10px] text-muted">Mask color</span>
+            <div className="w-full flex flex-wrap gap-1 items-center">
+              {OVERLAY_SWATCHES.map(c => (
+                <button key={c} aria-label={`Mask color ${c}`} aria-pressed={overlayHex === c}
+                  onClick={() => { setOverlayHex(c); lsSet(OVERLAY_COLOR_KEY, c) }}
+                  style={{ backgroundColor: c }}
+                  className={`w-4 h-4 rounded-full border ${overlayHex === c ? 'border-white' : 'border-border'}`} />
+              ))}
+              <input type="color" value={overlayHex} aria-label="Custom mask color"
+                onChange={e => { setOverlayHex(e.target.value); lsSet(OVERLAY_COLOR_KEY, e.target.value) }}
+                className="w-6 h-5 p-0 bg-transparent border-0 cursor-pointer" />
+            </div>
+            <span className="text-[10px] text-muted">Opacity {overlayOpacity}%</span>
+            <input type="range" min={OPACITY_MIN} max={OPACITY_MAX} value={overlayOpacity} aria-label="Mask opacity"
+              onChange={e => { const v = Number(e.target.value); setOverlayOpacity(v); lsSet(OVERLAY_OPACITY_KEY, String(v)) }}
+              className="w-full h-1 accent-accent appearance-none bg-border rounded-full" />
+          </HelpTip>
           <div className="w-full border-t border-border my-1" />
           {actBtn('Invert', () => act(invert), tip('Invert', 'I', ['Swap masked and unmasked areas.']), !mask)}
           <span className="w-full text-[10px] text-muted pt-1">Grow/shrink px</span>

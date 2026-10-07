@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   createMask, cloneMask, union, subtract, invert, paintStroke, fillPolygon,
-  grow, shrink, coverage, iou, fromRgba, toRgba, paintOverlayRect, paintOverlayFull,
+  grow, shrink, coverage, iou, fromRgba, toRgba, paintOverlayRect, paintOverlayFull, hexToRgb,
   strokeRect, type Mask,
 } from '../src/mask/maskOps.ts'
 
@@ -87,8 +87,8 @@ test('paintOverlayRect over the full image matches paintOverlayFull', () => {
   const viaRect = new Uint8ClampedArray(m.w * m.h * 4)
   paintOverlayRect(viaRect, m, 0, 0, m.w - 1, m.h - 1)
   assert.deepEqual([...viaRect], [...full])
-  // on pixels are red @ alpha 115, off pixels are fully transparent
-  assert.deepEqual([...full.slice(0, 4)], [239, 68, 68, 115])
+  // on pixels are red and opaque (opacity is applied at draw time), off pixels are fully transparent
+  assert.deepEqual([...full.slice(0, 4)], [239, 68, 68, 255])
   assert.deepEqual([...full.slice(4, 8)], [0, 0, 0, 0])
 })
 
@@ -98,7 +98,19 @@ test('paintOverlayRect only writes pixels inside the given rect', () => {
   paintOverlayRect(out, m, 1, 1, 2, 2)
   assert.deepEqual([...out.slice(0, 4)], [0, 0, 0, 0])              // (0,0) untouched
   const i = (1 * m.w + 1) * 4
-  assert.deepEqual([...out.slice(i, i + 4)], [239, 68, 68, 115])    // (1,1) painted
+  assert.deepEqual([...out.slice(i, i + 4)], [239, 68, 68, 255])    // (1,1) painted
+})
+
+test('paintOverlayRect uses the given color; off pixels stay transparent', () => {
+  const m = createMask(2, 1); m.data.set([255, 0])
+  const out = new Uint8ClampedArray(8)
+  paintOverlayFull(out, m, [10, 200, 30])
+  assert.deepEqual([...out], [10, 200, 30, 255, 0, 0, 0, 0])
+})
+
+test('hexToRgb parses #rrggbb and falls back to the default red on bad input', () => {
+  assert.deepEqual(hexToRgb('#0a1b2c'), [10, 27, 44])
+  assert.deepEqual(hexToRgb('nope'), [239, 68, 68])
 })
 
 test('strokeRect bounds a stroke by radius, clamped to the image', () => {

@@ -152,28 +152,39 @@ export function iou(a: Mask, b: Mask): number {
   return uni === 0 ? 1 : inter / uni
 }
 
-const OVERLAY_R = 239, OVERLAY_G = 68, OVERLAY_B = 68, OVERLAY_A = 115
+export type Rgb = [number, number, number]
+export const DEFAULT_OVERLAY_RGB: Rgb = [239, 68, 68]
 
-/** Paints the semi-transparent red mask overlay into RGBA `out` (m.w×m.h×4), for image
- *  pixels in [x0,x1]×[y0,y1] inclusive. Lets a brush stroke repaint just its dirty rect
- *  instead of rebuilding the whole overlay on every pointermove. */
-export function paintOverlayRect(out: Uint8ClampedArray, m: Mask, x0: number, y0: number, x1: number, y1: number): void {
+/** '#rrggbb' → [r,g,b]; anything else gives the default red. */
+export function hexToRgb(hex: string): Rgb {
+  const m = /^#([0-9a-f]{6})$/i.exec(hex)
+  if (!m) return DEFAULT_OVERLAY_RGB
+  const n = parseInt(m[1], 16)
+  return [n >> 16 & 255, n >> 8 & 255, n & 255]
+}
+
+/** Paints the mask overlay into RGBA `out` (m.w×m.h×4) in `color`, fully opaque on masked
+ *  pixels — the editor applies the opacity at draw time (globalAlpha), so the slider needs no
+ *  repaint. Covers image pixels in [x0,x1]×[y0,y1] inclusive, so a brush stroke can repaint
+ *  just its dirty rect instead of rebuilding the whole overlay on every pointermove. */
+export function paintOverlayRect(out: Uint8ClampedArray, m: Mask, x0: number, y0: number, x1: number, y1: number,
+                                 color: Rgb = DEFAULT_OVERLAY_RGB): void {
   for (let y = y0; y <= y1; y++) {
     const row = y * m.w
     for (let x = x0; x <= x1; x++) {
       const i = row + x, o = i * 4
       const on = m.data[i] !== 0
-      out[o] = on ? OVERLAY_R : 0
-      out[o + 1] = on ? OVERLAY_G : 0
-      out[o + 2] = on ? OVERLAY_B : 0
-      out[o + 3] = on ? OVERLAY_A : 0
+      out[o] = on ? color[0] : 0
+      out[o + 1] = on ? color[1] : 0
+      out[o + 2] = on ? color[2] : 0
+      out[o + 3] = on ? 255 : 0
     }
   }
 }
 
 /** paintOverlayRect over the whole mask. */
-export function paintOverlayFull(out: Uint8ClampedArray, m: Mask): void {
-  paintOverlayRect(out, m, 0, 0, m.w - 1, m.h - 1)
+export function paintOverlayFull(out: Uint8ClampedArray, m: Mask, color: Rgb = DEFAULT_OVERLAY_RGB): void {
+  paintOverlayRect(out, m, 0, 0, m.w - 1, m.h - 1, color)
 }
 
 /** Bounding box (image px, clamped to w×h) of radius-r circles centred on pts — the
