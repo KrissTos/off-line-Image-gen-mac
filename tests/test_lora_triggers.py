@@ -86,3 +86,15 @@ def test_refcontrol_depth_seeded_under_both_file_names(store, tmp_path):
         info = store.get_trigger_info(_lora(tmp_path, n))
         assert info["trigger"] == "refcontrol"
         assert "depth" in info["note"].lower() and info["source"].endswith("reference-depth-lora")
+
+
+def test_civitai_trained_words_fill_trigger_after_seed_and_user(store, tmp_path, monkeypatch):
+    from core import civitai_install as ci
+    monkeypatch.setattr(ci, "BASE_DIR", tmp_path)
+    (tmp_path / "civitai_installed.json").write_text(
+        '{"FComic.safetensors": {"modelId": 1, "versionId": 2, "family": "klein-9B", "trained": ["ComSpa"]}}')
+    path = str(tmp_path / "FComic.safetensors")
+    info = store.get_trigger_info(path)
+    assert info["trigger"] == "ComSpa" and info["origin"] == "civitai"
+    store.set_trigger("FComic.safetensors", "my own")
+    assert store.get_trigger_info(path)["origin"] == "user"
