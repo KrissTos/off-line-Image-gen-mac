@@ -156,6 +156,12 @@ export default function SettingsDrawer({ open, onClose }: Props) {
     fetchModelSources().then(setSources).catch(() => {}).finally(() => setSourcesLoaded(true))
   }, [open, loadData])
 
+  // A CivitAI download may have finished while Settings was open: tell the LoRA panel to reload its list on close
+  useEffect(() => {
+    if (!open) return
+    return () => { window.dispatchEvent(new Event('lora-library-changed')) }
+  }, [open])
+
   // ── HF login/logout ──────────────────────────────────────────────────────
   async function handleHFLogin() {
     if (!hfToken.trim()) return

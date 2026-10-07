@@ -5,6 +5,16 @@ import { civitaiRowState, formatSize, progressPct } from '../sourceGroups'
 
 interface Props { src: ModelSource; onChanged: () => void }
 
+/** Keeps watching a download after its row unmounted (Settings closed) so the LoRA list still refreshes. */
+function watchUntilDone(versionId: number) {
+  const t = window.setInterval(async () => {
+    const j = await fetchCivitaiJob(versionId).catch(() => null)
+    if (!j || (j.state !== 'done' && j.state !== 'error')) return
+    window.clearInterval(t)
+    if (j.state === 'done') window.dispatchEvent(new Event('lora-library-changed'))
+  }, 1500)
+}
+
 /** Download / Installed / Update / Delete controls for one CivitAI LoRA row. */
 export default function CivitaiRowActions({ src, onChanged }: Props) {
   const vid = src.civitai?.versionId
@@ -15,7 +25,12 @@ export default function CivitaiRowActions({ src, onChanged }: Props) {
   const state = civitaiRowState(src)
   const busy = job?.state === 'queued' || job?.state === 'downloading' || job?.state === 'verifying'
 
-  useEffect(() => () => { if (timer.current) window.clearInterval(timer.current) }, [])
+  const busyRef = useRef(false)
+  useEffect(() => { busyRef.current = busy })
+  useEffect(() => () => {
+    if (timer.current) window.clearInterval(timer.current)
+    if (busyRef.current && vid != null) watchUntilDone(vid)      // drawer closed mid-download
+  }, [])
 
   function notify() {
     window.dispatchEvent(new Event('lora-library-changed'))
