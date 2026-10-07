@@ -6,7 +6,7 @@ import {
   Eraser, Copy, ArrowDownToLine, Pencil, Check,
 } from 'lucide-react'
 import type { GenerateParams, RefImageSlot, LoraSlot } from '../types'
-import { modelVariant, loraDisabledReason, sortLoras, insertTrigger } from '../loraCompat'
+import { modelVariant, loraDisabledReason, sortLoras, insertTrigger, loraLabel, cleanLoraName } from '../loraCompat'
 import type { WorkflowData } from '../workflow'
 import { importComfyUI, loadWorkflow, saveWorkflow, uploadLora, uploadUpscaleModel, streamBatchUpscale, streamBatchGenerate, openFolderDialog, openFileDialog, upscaleSingleImage, updateSettings, openWorkflowFolderDialog, listLoras, setLoraTrigger, stopGeneration, generateDepthMap, eraseDetect, eraseRemove } from '../api'
 import type { LoraLibraryEntry } from '../api'
@@ -383,7 +383,7 @@ function LoraPanel({ loraFiles, onChange, onStatus, modelChoice, prompt, onPromp
       await setLoraTrigger(entry.name, triggerDraft)
       setEditingTrigger(null)
       refreshLibrary()
-      onStatus(triggerDraft.trim() ? `Trigger saved for ${entry.name}` : `Trigger cleared for ${entry.name}`)
+      onStatus(triggerDraft.trim() ? `Trigger saved for ${entry.display ?? entry.name}` : `Trigger cleared for ${entry.display ?? entry.name}`)
     } catch (e: unknown) {
       onStatus((e as Error).message)
     }
@@ -412,14 +412,14 @@ function LoraPanel({ loraFiles, onChange, onStatus, modelChoice, prompt, onPromp
               <option value="">— select a LoRA —</option>
               {/* If current path isn't in the filtered library (manually picked), show it */}
               {slot.path && !filteredLibrary.find(l => l.path === slot.path) && (
-                <option value={slot.path}>{slot.path.split('/').pop()}</option>
+                <option value={slot.path}>{cleanLoraName(slot.path.split('/').pop() ?? '')}</option>
               )}
               {filteredLibrary.map(l => {
                 // Wrong klein size can't load: grey it out (the slot's current pick stays selectable)
                 const why = l.path === slot.path ? null : loraDisabledReason(l, loadedVariant)
                 return (
-                  <option key={l.path} value={l.path} disabled={!!why} title={why ?? undefined}>
-                    {why ? `${l.name} (${l.variant!.toUpperCase()} only)` : l.name}
+                  <option key={l.path} value={l.path} disabled={!!why} title={why ?? l.name}>
+                    {loraLabel(l)}
                   </option>
                 )
               })}

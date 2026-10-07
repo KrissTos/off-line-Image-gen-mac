@@ -21,9 +21,23 @@ export function loraDisabledReason(
   return `${lora.variant.toUpperCase()} LoRA — needs klein-${lora.variant.toUpperCase()}`
 }
 
-/** LoRA lists are shown alphabetically (case-insensitive), whatever order the server sends. */
-export function sortLoras<T extends { name: string }>(loras: T[]): T[] {
-  return [...loras].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
+/** File name without its extension, underscores as spaces (mirrors core/lora_names.clean_name). */
+export function cleanLoraName(file: string): string {
+  const stem = file.replace(/\.(safetensors|pt|bin)$/i, '').replace(/_/g, ' ').replace(/\s+/g, ' ').trim()
+  return stem.replace(/^\.+|\.+$/g, '') || file
+}
+
+type Nameable = { name: string; display?: string; variant?: string | null }
+const shownName = (l: Nameable) => l.display ?? cleanLoraName(l.name)
+
+/** Dropdown text for a LoRA: friendly name plus its klein size, e.g. `70s Sci-Fi Movie · 4B`. */
+export function loraLabel(l: Nameable): string {
+  return l.variant ? `${shownName(l)} · ${l.variant.toUpperCase()}` : shownName(l)
+}
+
+/** LoRA lists are shown alphabetically (case-insensitive) by the shown name, whatever order the server sends. */
+export function sortLoras<T extends { name: string; display?: string }>(loras: T[]): T[] {
+  return [...loras].sort((a, b) => shownName(a).localeCompare(shownName(b), undefined, { sensitivity: 'base' }))
 }
 
 /** Prepend a LoRA trigger to the prompt, unless it is already there (case-insensitive). */

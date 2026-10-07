@@ -41,3 +41,28 @@ test('insertTrigger joins a sentence trigger with a space and ignores surroundin
   assert.equal(insertTrigger('  keep the pose  ', 'Transform into dmc_style.'), 'Transform into dmc_style. keep the pose')
   assert.equal(insertTrigger('anything', ''), 'anything')
 })
+
+import { cleanLoraName, loraLabel } from '../src/loraCompat.ts'
+
+test('cleanLoraName drops the extension and turns underscores into spaces', () => {
+  assert.equal(cleanLoraName('pasta_IL_v3.safetensors'), 'pasta IL v3')
+  assert.equal(cleanLoraName('Klein-consistency.safetensors'), 'Klein-consistency')
+  assert.equal(cleanLoraName('x.SAFETENSORS'), 'x')
+  assert.equal(cleanLoraName('_.safetensors'), '_.safetensors')
+})
+
+test('loraLabel shows the friendly name plus the klein size, always when known', () => {
+  assert.equal(loraLabel({ name: 'a.safetensors', display: '70s Sci-Fi Movie', variant: '4b' }), '70s Sci-Fi Movie · 4B')
+  assert.equal(loraLabel({ name: 'realistic.safetensors', variant: '9b' }), 'realistic · 9B')
+  assert.equal(loraLabel({ name: 'pasta_IL_v3.safetensors', variant: null }), 'pasta IL v3')
+  assert.equal(loraLabel({ name: 'z.safetensors' }), 'z')
+})
+
+test('sortLoras sorts by the shown name, not the file name', () => {
+  const out = sortLoras([
+    { name: 'zzz.safetensors', display: 'Alpha style' },
+    { name: 'aaa.safetensors', display: 'Beta style' },
+    { name: 'm_file.safetensors' },
+  ])
+  assert.deepEqual(out.map(l => l.name), ['zzz.safetensors', 'aaa.safetensors', 'm_file.safetensors'])
+})

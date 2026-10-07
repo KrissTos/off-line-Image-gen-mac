@@ -261,7 +261,8 @@ def _run(vid: int, row: dict, opener, verify, loaded_paths) -> None:
                 (lora_dir / Path(o).name).unlink(missing_ok=True)
                 reg.pop(o)
             reg[dest_name] = {"modelId": c["modelId"], "versionId": vid, "family": fam, "sha256": want,
-                              "trained": list(c.get("trained") or []), "installedAt": int(time.time())}
+                              "name": row.get("name", ""), "trained": list(c.get("trained") or []),
+                              "installedAt": int(time.time())}
             _save_registry(reg)
         _set(vid, state="done", file=dest_name)
     except DownloadError as e:

@@ -28,7 +28,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from core import civitai, civitai_install, model_sources, run_store
+from core import civitai, civitai_install, lora_names, model_sources, run_store
 
 # ── Suppress semaphore-leak warning ───────────────────────────────────────────
 # The warning is emitted by Python's multiprocessing.resource_tracker *daemon*
@@ -990,8 +990,10 @@ def api_list_loras():
     lora_dir = ROOT / "lora_uploads"
     if not lora_dir.exists():
         return {"files": []}
+    registry = civitai_install.load_registry()
     files = [
-        {"name": f.name, "path": str(f), "model_type": (mt := _detect_lora_type(str(f))),
+        {"name": f.name, "display": lora_names.display_name(f.name, registry), "path": str(f),
+         "model_type": (mt := _detect_lora_type(str(f))),
          "variant": lora_variant(str(f)) if mt == "flux" else None,
          **{f"trigger_{k}" if k != "trigger" else k: v
             for k, v in get_trigger_info(str(f)).items()}}

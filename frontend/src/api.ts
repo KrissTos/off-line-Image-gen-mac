@@ -292,7 +292,7 @@ export const loadLora  = (lora_path: string, strength: number, device: string) =
   post<{ status: string }>('/api/lora/load', { lora_path, strength, device })
 export const clearLora = () => del<{ status: string }>('/api/lora')
 export interface LoraLibraryEntry {
-  name: string; path: string; model_type: string; variant?: string | null
+  name: string; display?: string; path: string; model_type: string; variant?: string | null
   trigger?: string | null; trigger_note?: string; trigger_source?: string; trigger_origin?: string
 }
 export const listLoras = () => get<{ files: LoraLibraryEntry[] }>('/api/lora/list')

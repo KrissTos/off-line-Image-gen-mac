@@ -61,6 +61,7 @@ One self-contained folder per generation; saved workflows use the same format wi
 - `core/erase.py` — `detect_watermark(path) → bytes` (Laplacian + brightness anomaly, `np.bincount` CC sizing); `remove_watermark(path, mask_bytes) → bytes` (LaMa, `_lama_cache`); mask resize `Image.NEAREST` (binary mask).
 - `core/civitai.py` — CivitAI LoRA discovery (pure, network injected): `BASE_FAMILY` (CivitAI `baseModel` → klein-9B / klein-4B / Z-Image), `rows_from_model`, `discover`, `merge_rows`, `annotate`, `http_fetch_models`.
 - `core/civitai_install.py` — CivitAI API key (`civitai/token`, mode 600), registry `civitai_installed.json`, `start_download` (background thread, SHA256 + per-family `verify_lora`, `.tmp_<name>.part` temp), `delete_installed`, `trained_trigger`.
+- `core/lora_names.py` — `clean_name` / `display_name`: friendly LoRA names for the dropdown (display only; paths and workflows keep the file name).
 - `core/lora_zimage.py` — LoRA injection for Linear/Conv2d via `load_lora_for_pipeline()`.
 - `core/lora_flux2.py` — FLUX.2-klein LoRA, PEFT/fal prefix remap.
 - `core/quantized_flux2.py` — 4-bit SDNQ + int8 quantization utilities.
@@ -133,7 +134,7 @@ when the restore actually runs.
 | GET | `/api/runs/{run}` | `run_store.load`, URLs under `/api/output/<run>/…`, `warnings` |
 | GET/POST | `/api/workflows` · `/api/workflows/{name}` · `/api/workflows/save` · `/api/workflows/import` | Saved workflows (v2 folders); save takes optional `overwrite` (folder name, 400 if outside `workflows/`) → `{status, name}`; ComfyUI import |
 | GET | `/api/workflow-assets/{name}/{path}` | Serve `refs/…` / `masks/…` of a saved workflow |
-| GET | `/api/lora/list` | `{files:[{name,path,model_type}]}`, `model_type` = `flux`/`zimage`/`unknown` |
+| GET | `/api/lora/list` | `{files:[{name,display,path,model_type,variant,trigger…}]}`, `model_type` = `flux`/`zimage`/`unknown`; `display` = CivitAI model name (registry) else the file name without extension, underscores as spaces (`core/lora_names.py`); `name` stays the identity |
 | POST | `/api/upscale/upload` · `/api/upscale/batch` · `/api/upscale/single` | Upscale; gallery `single` takes `<run>/outputs/<file>`, writes beside it and records it in the run |
 | GET | `/api/open-file-dialog` · `/api/open-folder-dialog` | macOS pickers → `{path, cancelled}` |
 | POST | `/api/logs/save` | Snapshot `logs/server.log` |
