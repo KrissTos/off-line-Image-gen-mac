@@ -56,6 +56,12 @@ export interface ModelSource {
   family?:      string    // LoRA only: klein-9B | klein-4B | klein | Z-Image | LTX-Video (set by the server)
   function?:    string    // LoRA only: what it does (style, camera, detail, ...), filled from the model card
   custom?:      boolean   // added by hand: never pruned or auto-described
+  provider?:          'civitai'
+  nsfw?:              boolean
+  installed?:         boolean   // CivitAI: file downloaded into lora_uploads/
+  update?:            boolean   // CivitAI: a newer version than the installed one is listed
+  installed_version?: number | null
+  civitai?:           { modelId: number; versionId: number; file: string; sizeKB: number; trained: string[] }
 }
 
 export interface ModelUpdateResult {
@@ -441,12 +447,36 @@ export async function saveModelSources(sources: ModelSource[]): Promise<void> {
   }
 }
 
-export interface DiscoverResult { added: number; skipped: number; described: number; failed: number; sources: ModelSource[] }
+export interface DiscoverResult {
+  added: number; skipped: number; described: number; failed: number; sources: ModelSource[]
+  civitai?: { added: number; failed: string[]; updates: number }
+}
 
 export async function discoverModelSources(): Promise<DiscoverResult> {
   const r = await fetch('/api/model-sources/discover')
   if (!r.ok) throw new Error(`Discovery failed: ${r.status}`)
   return r.json()
+}
+
+export interface CivitaiStatus { has_key: boolean; show_nsfw: boolean }
+export interface CivitaiJob {
+  state: 'idle' | 'queued' | 'downloading' | 'verifying' | 'done' | 'error'
+  bytes?: number; total?: number; error?: string | null; file?: string
+}
+
+export const fetchCivitaiStatus = () => get<CivitaiStatus>('/api/civitai/status')
+export const setCivitaiKey = (key: string) => post<{ has_key: boolean }>('/api/civitai/key', { key })
+export const clearCivitaiKey = () => del<{ has_key: boolean }>('/api/civitai/key')
+export const startCivitaiDownload = (versionId: number) =>
+  post<CivitaiJob>('/api/civitai/download', { version_id: versionId })
+export const fetchCivitaiJob = (versionId: number) => get<CivitaiJob>(`/api/civitai/download/${versionId}`)
+
+export async function deleteCivitai(versionId: number): Promise<void> {
+  const r = await fetch(`/api/civitai/${versionId}`, { method: 'DELETE' })
+  if (!r.ok) {
+    const b = await r.json().catch(() => ({}))
+    throw new Error(b.detail ?? `Delete failed: ${r.status}`)
+  }
 }
 
 // ── SAM click-to-mask ─────────────────────────────────────────────────────────

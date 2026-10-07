@@ -74,7 +74,7 @@ venv/bin/python -m core.run_store migrate <dir> [--apply]   # legacy flat output
 9. Default model = `default_model` in `app_settings.json`, read in `App.tsx` bootstrap after `fetchSettings()`.
 10. Every generation writes one run folder through `core/run_store.py` (`server._run_events`); never write flat outputs or sidecar JSONs. Client paths/names go through `run_store.safe_join` / `_guarded_temp`.
 
-11. Model Sources: `core/model_sources.lora_family()` decides what the app can use (see architecture.md); update it when a model family is added (e.g. LTX-2), and keep manual "Add source" entries `custom: true` so they are never pruned.
+11. Model Sources: `core/model_sources.lora_family()` decides what the app can use (see architecture.md); update it when a model family is added (e.g. LTX-2), and keep manual "Add source" entries `custom: true` so they are never pruned. CivitAI rows are `provider: civitai`: the family comes from `baseModel` (`core/civitai.py`), never the name; the key lives in `civitai/token` (never log it).
 
 ## 7. Image pipeline rules
 1. Never stretch slot #1: fit it with `fit_ref_to_canvas()` and give its mask the same transform.

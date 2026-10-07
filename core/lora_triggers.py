@@ -98,6 +98,10 @@ def get_trigger_info(path: str) -> dict:
     if seed:
         return {"trigger": seed["trigger"], "note": seed["note"],
                 "source": seed["source"], "origin": "seed"}
+    from core.civitai_install import trained_trigger
+    civ = trained_trigger(name)
+    if civ:
+        return {"trigger": civ, "note": "", "source": "", "origin": "civitai"}
     tag = _metadata_tag(path)
     if tag:
         return {"trigger": tag, "note": "", "source": "", "origin": "metadata"}

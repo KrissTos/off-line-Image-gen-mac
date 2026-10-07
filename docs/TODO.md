@@ -3,7 +3,7 @@
 ## Next up (decided 2026-10-06)
 1. Bug pass from the lists below (scope to confirm with the user; the nine testable backend items first, MaskEditor races later).
 2. Eyes Direction: plan ready in `docs/superpowers/plans/2026-10-06-eyes-direction.md`.
-3. Then CivitAI search in Model Sources; LTX-2.5 spike or dropping local video are parked.
+3. CivitAI: shipped 2026-10-07 (list, Update, download, delete); still to do: verify one authenticated download with the user's key. LTX-2.5 spike or dropping local video are parked.
 
 - `generate.py` CLI supports Z-Image Turbo only (no FLUX, no LTX).
 - Single-pass generate sends only slot #1's mask (`slotsToParams()`); per-slot masks need Iterate Masks.
@@ -24,7 +24,7 @@
 
 - Gallery preview: still unexercised in a browser against real data: the "Upscaled from" link (no upscale-with-source output on disk; helper is unit-tested).
 
-- CivitAI search in Model Sources (discussed 2026-10-06, not started): anonymous `GET civitai.com/api/v1/models?types=LORA&query=...&nsfw=false` works and `baseModel` (`Flux.2 Klein 9B`, `Flux.2 Klein 4B`, `LTXV`) maps onto the family folders; file downloads need no key. Open: link-only vs download into `lora_uploads/`; the Z-Image base-model label is unknown. Worth doing now that rows say what a LoRA does.
+- CivitAI ideas left out of v1 (YAGNI): search box over CivitAI, preview images, bulk download, sort by downloads, rows with no `.safetensors`, checkpoints (needs a single-file loader + SDNQ conversion; the app loads diffusers repos from HF). Z-Image Base LoRAs are dropped on purpose (the app only has Turbo).
 - Parked ideas: evaluate LTX-2.5 locally (diffusers 0.40 has `LTX2Pipeline`; needs a one-clip MPS time/memory test, ~174 GB repo) or drop local video entirely (frees ~45 GB, not 100; touches `app.py`, `server.py`, the Video accordion, tests and the `/generate` skill's local route).
 - Model Sources: a few auto descriptions stay weak where the card has no good prose (e.g. `Flux2-Klein-9B-Migration` is empty); edit by hand, hand-written text is never overwritten.
 - One-click "pose from depth" (parked 2026-10-06, not started): DA3 depth map of a pose photo -> SAM subject mask, everything outside set to black (far) -> slot #1 depth map + slot #2 reference, LoRA `refcontrol_depth_klein9b` at 1.0, prompt `refcontrol`. Evidence so far: one A/B on one seed (distilled klein-9B, DA2 depth, runner photo as pose source): with the LoRA the reference person takes the pose; without it the model blends the depth map's tones. Untested: the masked-background variant, clutter in front of the subject, a front-facing pose (face identity), DA3 maps, base-vs-distilled (the LoRA is trained on klein-9B Base, guidance 5). Test on a cluttered photo before building any UI.

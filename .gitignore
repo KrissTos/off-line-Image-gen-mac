@@ -29,3 +29,5 @@ uv-setuptools-*.lock
 .pytest_cache/
 work/
 lora_triggers.json
+civitai/
+civitai_installed.json

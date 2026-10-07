@@ -336,6 +336,10 @@ function LoraPanel({ loraFiles, onChange, onStatus, modelChoice, prompt, onPromp
     listLoras().then(r => setLibrary(r.files)).catch(() => {})
   }
   useEffect(() => { refreshLibrary() }, [])
+  useEffect(() => {
+    window.addEventListener('lora-library-changed', refreshLibrary)
+    return () => window.removeEventListener('lora-library-changed', refreshLibrary)
+  }, [])
 
   async function handleUpload(idx: number, file: File) {
     setUploading(idx)

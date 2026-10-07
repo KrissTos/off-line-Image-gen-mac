@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { groupSources, functionCounts, filterByFunction, familyLabel, parseOpenState } from '../src/sourceGroups.ts'
+import { groupSources, functionCounts, filterByFunction, familyLabel, parseOpenState, civitaiRowState, formatSize, progressPct, civitaiNote } from '../src/sourceGroups.ts'
 import type { ModelSource } from '../src/api.ts'
 
 const src = (name: string, type: ModelSource['type'], over: Partial<ModelSource> = {}): ModelSource =>
@@ -60,4 +60,38 @@ test('parseOpenState survives garbage', () => {
   assert.deepEqual(parseOpenState('not json'), {})
   assert.deepEqual(parseOpenState('[1,2]'), {})
   assert.deepEqual(parseOpenState('{"lora":true,"x":"y"}'), { lora: true })
+})
+
+test('civitai row state: update wins over installed, default is download', () => {
+  const s = (over: Partial<ModelSource>) => src('x', 'lora', over)
+  assert.equal(civitaiRowState(s({})), 'download')
+  assert.equal(civitaiRowState(s({ installed: true })), 'installed')
+  assert.equal(civitaiRowState(s({ installed: true, update: true })), 'update')
+})
+
+test('installed rows sort first inside a family folder, then by name', () => {
+  const g = groupSources([
+    src('b', 'lora', { family: 'klein-9B' }),
+    src('z', 'lora', { family: 'klein-9B', installed: true }),
+    src('a', 'lora', { family: 'klein-9B' }),
+  ])
+  assert.deepEqual(g.find(c => c.type === 'lora')!.folders![0].items.map(s => s.name), ['z', 'a', 'b'])
+})
+
+test('formatSize and progressPct', () => {
+  assert.equal(formatSize(undefined), '')
+  assert.equal(formatSize(20 * 1024), '20 MB')
+  assert.equal(formatSize(166 * 1024), '166 MB')
+  assert.equal(formatSize(1.2 * 1024 * 1024), '1.2 GB')
+  assert.equal(progressPct(50, 200), 25)
+  assert.equal(progressPct(5, 0), 0)
+  assert.equal(progressPct(300, 200), 100)
+})
+
+test('civitaiNote summarises an Update result', () => {
+  assert.equal(civitaiNote(undefined), '')
+  assert.equal(civitaiNote({ added: 5, failed: [], updates: 3 }), '5 CivitAI new · 3 updates')
+  assert.equal(civitaiNote({ added: 0, failed: [], updates: 0 }), '')
+  assert.equal(civitaiNote({ added: 2, failed: ['klein-9B'], updates: 0 }),
+    '2 CivitAI new · could not reach CivitAI for klein-9B')
 })
