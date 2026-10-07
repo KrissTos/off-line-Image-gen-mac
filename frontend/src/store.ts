@@ -25,6 +25,7 @@ export interface State {
   // Latest result
   resultUrl:  string | null
   resultInfo: string | undefined
+  resultStale: boolean   // result predates the loaded workflow → shown dimmed until a new result or a click
   // Reference image slots (#1, #2, …)
   refSlots: RefImageSlot[]
   // UI state
@@ -73,6 +74,7 @@ export const initialState: State = {
   progressTotal:   undefined,
   resultUrl:       null,
   resultInfo:      undefined,
+  resultStale:     false,
   refSlots:        [],
   settingsOpen:    false,
   error:           null,
@@ -91,6 +93,8 @@ export type Action =
   | { type: 'START_GENERATE' }
   | { type: 'STOP_GENERATE' }
   | { type: 'SET_PROGRESS';    message: string; step?: number; total?: number }
+  | { type: 'MARK_RESULT_STALE' }
+  | { type: 'DISMISS_STALE' }
   | { type: 'ADD_RESULT';      url: string; info?: string }
   | { type: 'SET_RESULT_URL';  url: string }
   | { type: 'CLEAR_RESULT' }
@@ -168,6 +172,7 @@ function reducer(state: State, action: Action): State {
       return {
         ...state,
         isGenerating:  true,
+        resultStale:   false,
         error:         null,
         progressMsg:   '',
         progressStep:  undefined,
@@ -180,14 +185,20 @@ function reducer(state: State, action: Action): State {
     case 'SET_PROGRESS':
       return { ...state, progressMsg: action.message, progressStep: action.step, progressTotal: action.total }
 
+    case 'MARK_RESULT_STALE':
+      return state.resultUrl ? { ...state, resultStale: true } : state
+
+    case 'DISMISS_STALE':
+      return { ...state, resultStale: false }
+
     case 'ADD_RESULT':
-      return { ...state, resultUrl: action.url, resultInfo: action.info }
+      return { ...state, resultUrl: action.url, resultInfo: action.info, resultStale: false }
 
     case 'SET_RESULT_URL':
-      return { ...state, resultUrl: action.url, resultInfo: undefined }
+      return { ...state, resultUrl: action.url, resultInfo: undefined, resultStale: false }
 
     case 'CLEAR_RESULT':
-      return { ...state, resultUrl: null, resultInfo: undefined, error: null }
+      return { ...state, resultUrl: null, resultInfo: undefined, resultStale: false, error: null }
 
     case 'SET_ERROR':
       return { ...state, error: action.message }

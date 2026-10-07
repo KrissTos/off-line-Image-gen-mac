@@ -8,11 +8,13 @@ interface Props {
   progressStep?: number
   progressTotal?: number
   error?:        string | null
+  stale?:        boolean          // result predates the loaded workflow → dimmed + badge
+  onDismissStale?: () => void
   onDropRef?:    (file: File) => void
 }
 
 export default function Canvas({
-  resultUrl, isGenerating, progressMsg, progressStep, progressTotal, error, onDropRef,
+  resultUrl, isGenerating, progressMsg, progressStep, progressTotal, error, stale, onDismissStale, onDropRef,
 }: Props) {
   const [dragOver, setDragOver] = useState(false)
   const dropRef = useRef<HTMLDivElement>(null)
@@ -54,7 +56,7 @@ export default function Canvas({
             controls
             autoPlay
             loop
-            className="w-full h-full object-contain"
+            className={`w-full h-full object-contain transition-opacity ${stale ? 'opacity-30' : ''}`}
           />
         )}
 
@@ -64,8 +66,20 @@ export default function Canvas({
             key={resultUrl}
             src={resultUrl}
             alt="Generated output"
-            className="w-full h-full object-contain"
+            className={`w-full h-full object-contain transition-opacity ${stale ? 'opacity-30 cursor-pointer' : ''}`}
+            onClick={stale ? onDismissStale : undefined}
           />
+        )}
+
+        {/* Stale badge: the shown result is from before the loaded workflow */}
+        {stale && resultUrl && !isGenerating && (
+          <button
+            onClick={onDismissStale}
+            className="absolute top-3 left-1/2 -translate-x-1/2 px-3 py-1.5 rounded-full bg-surface/90 border border-border
+                       text-xs text-muted hover:text-white transition-colors"
+          >
+            Previous result, not from this workflow · click to show
+          </button>
         )}
 
         {/* Empty state */}

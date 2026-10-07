@@ -519,7 +519,8 @@ export default function App() {
 
   const handleWorkflowLoad = useCallback(async (wf: WorkflowData, name: string) => {
     await applyWorkflow(wf, { label: name, loaded: name })
-  }, [applyWorkflow])
+    dispatch({ type: 'MARK_RESULT_STALE' })
+  }, [applyWorkflow, dispatch])
 
   // ── Render ────────────────────────────────────────────────────────────────
 
@@ -588,6 +589,8 @@ export default function App() {
               progressStep={state.progressStep}
               progressTotal={state.progressTotal}
               error={state.error}
+              stale={state.resultStale}
+              onDismissStale={() => dispatch({ type: 'DISMISS_STALE' })}
               onDropRef={file => handleAddRefSlots([file])}
             />
           </div>
