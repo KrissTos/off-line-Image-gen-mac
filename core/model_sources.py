@@ -160,6 +160,9 @@ def prune_list(sources: list[dict]) -> list[dict]:
     for s in sources:
         s = dict(s)
         if s.get("type") == "lora":
+            if s.get("provider") == "civitai":
+                out.append(s)               # family is stored at discovery, names rarely say "klein"
+                continue
             fam = lora_family(s.get("name", "")) or lora_family(repo_id(s.get("url", "")))
             if fam is None and not s.get("custom"):
                 continue
