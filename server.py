@@ -28,7 +28,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from core import model_sources, run_store
+from core import civitai, civitai_install, model_sources, run_store
 
 # ── Suppress semaphore-leak warning ───────────────────────────────────────────
 # The warning is emitted by Python's multiprocessing.resource_tracker *daemon*
@@ -1435,19 +1435,33 @@ async def api_update_settings(req: UpdateSettingsRequest):
 
 # ── Routes: Model Sources ──────────────────────────────────────────────────────
 
-@app.get("/api/model-sources")
-def api_get_model_sources():
-    """Return the model sources list. Seeds from DEFAULT_SOURCES if file missing.
-    Always merges model_choice from DEFAULT_SOURCES by ID so existing saved files
-    get the field even if they were written before it existed. LoRAs this app cannot use
-    (wrong model family) are pruned unless the user added them by hand (`custom`)."""
+def _show_nsfw() -> bool:
+    return bool(_app().load_settings().get("civitai_show_nsfw"))
+
+
+def _loaded_lora_paths() -> list[str]:
+    return [p["path"] for p in _app().current_lora_paths]
+
+
+def _stored_sources() -> list[dict]:
+    """Rows as stored (pruned, sorted), including NSFW CivitAI rows the list view hides."""
     _defaults_by_id = {s["id"]: s for s in DEFAULT_SOURCES}
     sources = _read_sources_file().get("sources", DEFAULT_SOURCES)
     # Merge model_choice from DEFAULT_SOURCES for any entry that lacks it
     for s in sources:
         if "model_choice" not in s and s.get("id") in _defaults_by_id:
             s["model_choice"] = _defaults_by_id[s["id"]].get("model_choice", "")
-    return {"sources": _sort_sources(model_sources.prune_list(_drop_unusable_base(sources)))}
+    return _sort_sources(model_sources.prune_list(_drop_unusable_base(sources)))
+
+
+@app.get("/api/model-sources")
+def api_get_model_sources():
+    """Return the model sources list. Seeds from DEFAULT_SOURCES if file missing.
+    Always merges model_choice from DEFAULT_SOURCES by ID so existing saved files
+    get the field even if they were written before it existed. LoRAs this app cannot use
+    (wrong model family) are pruned unless the user added them by hand (`custom`).
+    CivitAI rows are annotated installed/update; NSFW ones are hidden unless the setting is on."""
+    return {"sources": civitai.annotate(_stored_sources(), civitai_install.installed_map(), _show_nsfw())}
 
 
 def _read_sources_file() -> dict:
@@ -1583,7 +1597,7 @@ def _discover_candidates(existing_urls: set[str], next_id: int) -> list[dict]:
 @app.get("/api/model-sources/discover")
 def api_discover_model_sources():
     """Update: find new repos, keep only those this app can use, fill in what each one does."""
-    current = api_get_model_sources()["sources"]
+    current = _stored_sources()
     ignored = list(_read_sources_file().get("ignored", []))
     existing_urls = {s["url"] for s in current}
     existing_ids = [
@@ -1595,9 +1609,16 @@ def api_discover_model_sources():
     candidates = _drop_unusable_base(_discover_candidates(existing_urls, next_id))  # never surface base models the loader can't load
     merged, ignored, report = model_sources.merge_discovery(
         current, candidates, ignored, model_sources.hf_fetch_files, model_sources.hf_fetch_card)
+    fresh, failed_bases = civitai.discover(civitai.http_fetch_models, _show_nsfw())
+    failed_fam = {civitai.BASE_FAMILY[b] for b in failed_bases}
+    installed = civitai_install.installed_map()
+    merged, c_added = civitai.merge_rows(merged, fresh, failed_fam, set(installed))
     updated = _sort_sources(merged)
     _write_sources_file(updated, ignored)
-    return {**report, "sources": updated}
+    visible = civitai.annotate(updated, installed, _show_nsfw())
+    return {**report, "civitai": {"added": c_added, "failed": sorted(failed_fam),
+                                  "updates": sum(1 for s in visible if s.get("update"))},
+            "sources": visible}
 
 
 @app.post("/api/model-sources")
@@ -1610,8 +1631,72 @@ def api_save_model_sources(payload: dict = Body(...)):
             raise HTTPException(400, "Each source must have a non-empty name and url.")
         if s.get("type") not in valid_types:
             raise HTTPException(400, f"Invalid type '{s.get('type')}'. Must be base, lora, or upscaler.")
+    sources = [{k: v for k, v in s.items() if k not in ("installed", "update", "installed_version")}
+               for s in sources]
+    if not _show_nsfw():
+        in_ids = {s.get("id") for s in sources}
+        installed = civitai_install.installed_map()
+        for s in _read_sources_file().get("sources", []):
+            c = s.get("civitai") or {}
+            if (s.get("provider") == "civitai" and s.get("nsfw") and s.get("id") not in in_ids
+                    and (c.get("modelId"), s.get("family")) not in installed):
+                sources.append(s)                  # hidden by the toggle, not removed by the user
     _write_sources_file(sources, list(_read_sources_file().get("ignored", [])))
     return {"ok": True}
+
+
+# ── Routes: CivitAI ───────────────────────────────────────────────────────────
+
+class CivitaiKeyRequest(BaseModel):
+    key: str
+
+
+class CivitaiDownloadRequest(BaseModel):
+    version_id: int
+
+
+@app.get("/api/civitai/status")
+def api_civitai_status():
+    return {"has_key": civitai_install.get_key() is not None, "show_nsfw": _show_nsfw()}
+
+
+@app.post("/api/civitai/key")
+def api_civitai_set_key(req: CivitaiKeyRequest):
+    try:
+        civitai_install.set_key(req.key)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    return {"has_key": True}
+
+
+@app.delete("/api/civitai/key")
+def api_civitai_clear_key():
+    civitai_install.clear_key()
+    return {"has_key": False}
+
+
+@app.post("/api/civitai/download")
+def api_civitai_download(req: CivitaiDownloadRequest):
+    for s in _stored_sources():
+        if s.get("provider") == "civitai" and (s.get("civitai") or {}).get("versionId") == req.version_id:
+            return civitai_install.start_download(s)
+    raise HTTPException(status_code=404, detail="Unknown CivitAI version: run Update first")
+
+
+@app.get("/api/civitai/download/{version_id}")
+def api_civitai_download_state(version_id: int):
+    return civitai_install.job_state(version_id)
+
+
+@app.delete("/api/civitai/{version_id}")
+def api_civitai_delete(version_id: int):
+    try:
+        name = civitai_install.delete_installed(version_id, _loaded_lora_paths())
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    return {"deleted": name}
 
 
 # ── Routes: Storage ───────────────────────────────────────────────────────────

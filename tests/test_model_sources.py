@@ -78,6 +78,9 @@ def test_discover_screens_describes_and_remembers(monkeypatch, tmp_path):
     monkeypatch.setattr(server, "_discover_candidates", lambda existing, next_id: cands)
     monkeypatch.setattr(ms, "hf_fetch_files", lambda repo: ["w.safetensors"])
     monkeypatch.setattr(ms, "hf_fetch_card", lambda repo: "Sharpens fine detail in photos.")
+    from core import civitai
+    monkeypatch.setattr(civitai, "http_fetch_models", lambda base, limit: [])   # Update also asks CivitAI
+    monkeypatch.setattr(server, "_show_nsfw", lambda: False)
     out = server.api_discover_model_sources()
     assert out["added"] == 1 and out["skipped"] == 1 and out["described"] == 1
     saved = json.loads(f.read_text())
