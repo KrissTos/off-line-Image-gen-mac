@@ -47,7 +47,7 @@ venv/bin/python -m core.run_store migrate <dir> [--apply]   # legacy flat output
 1. Server exits 60 s after the last browser ping; use `--no-auto-shutdown` for headless/API testing.
 2. Restart the server after backend changes (no auto-reload).
 3. `generate.py` CLI is Z-Image Turbo only.
-4. The user may run their own server on :7860 (`Launch.command`). For checks start `venv/bin/python server.py --port 7861 --no-auto-shutdown` via `run_in_background`, kill only that PID (`lsof -nP -iTCP:7861 -sTCP:LISTEN -t`), never `pkill -f server.py`, leave nothing running. The `/generate` runner's `--start` uses :7860; point it at `--port 7861`.
+4. One server only, on :7860 (no second server on :7861; that was dropped 2026-10-07 because the two processes share `model_sources.json`, `lora_uploads/` and the CivitAI registry). The user may be running it (`Launch.command`): say before stopping it (it may be mid-generation), kill only its PID (`lsof -nP -iTCP:7860 -sTCP:LISTEN -t`), never `pkill -f server.py`, run the check with `venv/bin/python server.py --port 7860 --no-auto-shutdown` via `run_in_background`, then restart it as in rule 5. The `/generate` runner's `--start` uses :7860.
 5. `Launch.command` never closes its Terminal window (the old 'close front window' hit whichever window was frontmost); it exits to the shell. A server you stopped can be restarted from CC with `venv/bin/python server.py --port 7860` via `run_in_background`, and say so.
 
 ## 5. Environment
