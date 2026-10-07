@@ -12,7 +12,9 @@ import {
   type ModelUpdateResult, type ModelExtras, type ModelSource,
 } from '../api'
 import SourceFolder from './SourceFolder'
-import { groupSources, functionCounts, filterByFunction, parseOpenState } from '../sourceGroups'
+import CivitaiKeyPanel from './CivitaiKeyPanel'
+import CivitaiRowActions from './CivitaiRowActions'
+import { groupSources, functionCounts, filterByFunction, parseOpenState, civitaiNote } from '../sourceGroups'
 import { applyThemeColors } from '../App'
 import { useAppState } from '../store'
 
@@ -331,12 +333,13 @@ export default function SettingsDrawer({ open, onClose }: Props) {
     setDiscovering(true)
     setDiscoverMsg(null)
     try {
-      const { added, skipped, described, sources: updated } = await discoverModelSources()
+      const { added, skipped, described, civitai, sources: updated } = await discoverModelSources()
       setSources(updated)
       const parts = [
         added > 0 ? `${added} new source${added > 1 ? 's' : ''} added` : 'Already up to date',
         skipped > 0 ? `${skipped} skipped (not usable here)` : '',
         described > 0 ? `${described} described` : '',
+        civitaiNote(civitai),
       ].filter(Boolean)
       setDiscoverMsg(parts.join(' · '))
     } catch {
@@ -835,6 +838,7 @@ export default function SettingsDrawer({ open, onClose }: Props) {
             <p className="text-[10px] text-muted/70 mb-3">
               Curated Mac Silicon models. User-editable — add your own sources.
             </p>
+            <CivitaiKeyPanel onNsfwChange={() => fetchModelSources().then(setSources).catch(() => {})} />
 
             {!sourcesLoaded ? (
               <p className="text-xs text-muted">Loading…</p>
@@ -848,7 +852,9 @@ export default function SettingsDrawer({ open, onClose }: Props) {
                     src.type === 'lora'     ? 'Download from HuggingFace, then upload via the LoRA panel' :
                     src.type === 'upscaler' ? 'Download from HuggingFace, then upload via the Upscale panel' :
                     !KNOWN_MODELS_NAMES.has(src.name) ? 'Open HuggingFace page to download manually' : ''
+                  const isCivitai = src.provider === 'civitai'
                   const isLocal =
+                    isCivitai               ? !!src.installed :
                     src.type === 'base'     ? availableModels.includes(src.model_choice || src.name) :
                     src.type === 'upscaler' ? (extras?.upscale_models.some(m => m.name.replace(/\.[^.]+$/, '') === src.name) ?? false) :
                     false
@@ -866,6 +872,9 @@ export default function SettingsDrawer({ open, onClose }: Props) {
                                 ★ Recommended
                               </span>
                             )}
+                            {isCivitai && (
+                              <span className="shrink-0 text-[9px] px-1.5 py-0.5 rounded bg-white/5 text-muted border border-border">CivitAI</span>
+                            )}
                             {src.type === 'lora' && src.function && (
                               <span className="shrink-0 text-[9px] px-1.5 py-0.5 rounded bg-white/5 text-muted border border-border">
                                 {src.function}
@@ -878,15 +887,19 @@ export default function SettingsDrawer({ open, onClose }: Props) {
                           {src.description && (
                             <div className="text-[10px] text-muted/70 line-clamp-2 mt-0.5">{src.description}</div>
                           )}
+                          {isCivitai && (
+                            <CivitaiRowActions src={src} onChanged={() => fetchModelSources().then(setSources).catch(() => {})} />
+                          )}
                         </div>
                         <div className="flex items-center gap-1 shrink-0">
                           <button
                             onClick={() => window.open(src.url, '_blank')}
-                            title="Open HuggingFace page"
+                            title={isCivitai ? 'Open CivitAI page' : 'Open HuggingFace page'}
                             className="p-1 rounded text-muted hover:text-white hover:bg-white/10 transition-colors"
                           >
                             <ExternalLink size={12} />
                           </button>
+                          {!isCivitai && (<>
                           <button
                             onClick={() => canDownload && handleDownloadSource(src)}
                             disabled={!canDownload || downloadingSource === src.id}
@@ -909,6 +922,7 @@ export default function SettingsDrawer({ open, onClose }: Props) {
                           >
                             <Trash2 size={11} />
                           </button>
+                          </>)}
                         </div>
                       </div>
                       {downloadingSource === src.id && downloadProgress && (

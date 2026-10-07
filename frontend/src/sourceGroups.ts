@@ -23,7 +23,8 @@ export function familyLabel(family: string | undefined): string {
   return FAMILY_FOLDERS.find(f => f.key === family)?.label ?? OTHER.label
 }
 
-const byName = (a: ModelSource, b: ModelSource) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
+const byName = (a: ModelSource, b: ModelSource) =>
+  (Number(!!b.installed) - Number(!!a.installed)) || a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
 
 export function groupSources(sources: ModelSource[]): Category[] {
   const out: Category[] = []
@@ -61,4 +62,28 @@ export function parseOpenState(raw: string | null): Record<string, boolean> {
     if (!v || typeof v !== 'object' || Array.isArray(v)) return {}
     return Object.fromEntries(Object.entries(v).filter(([, b]) => typeof b === 'boolean')) as Record<string, boolean>
   } catch { return {} }
+}
+
+export type CivitaiRowState = 'download' | 'installed' | 'update'
+export const civitaiRowState = (s: ModelSource): CivitaiRowState =>
+  s.update ? 'update' : s.installed ? 'installed' : 'download'
+
+/** File size for a row: '' unknown, MB under 1 GB, else GB with one decimal. */
+export function formatSize(kb: number | undefined): string {
+  if (!kb || kb <= 0) return ''
+  const mb = kb / 1024
+  return mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${Math.round(mb)} MB`
+}
+
+export const progressPct = (bytes?: number, total?: number): number =>
+  !total || total <= 0 ? 0 : Math.min(100, Math.round(((bytes ?? 0) / total) * 100))
+
+/** CivitAI part of the Update message ('' when there is nothing to say). */
+export function civitaiNote(c: { added: number; failed: string[]; updates: number } | undefined): string {
+  if (!c) return ''
+  const parts: string[] = []
+  if (c.added > 0) parts.push(`${c.added} CivitAI new`)
+  if (c.updates > 0) parts.push(`${c.updates} update${c.updates > 1 ? 's' : ''}`)
+  if (c.failed.length) parts.push(`could not reach CivitAI for ${c.failed.join(', ')}`)
+  return parts.join(' · ')
 }
