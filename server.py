@@ -1679,7 +1679,7 @@ def api_civitai_clear_key():
 def api_civitai_download(req: CivitaiDownloadRequest):
     for s in _stored_sources():
         if s.get("provider") == "civitai" and (s.get("civitai") or {}).get("versionId") == req.version_id:
-            return civitai_install.start_download(s)
+            return civitai_install.start_download(s, loaded_paths=_loaded_lora_paths)
     raise HTTPException(status_code=404, detail="Unknown CivitAI version: run Update first")
 
 

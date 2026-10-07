@@ -75,9 +75,12 @@ def load_registry() -> dict:
         return {}
 
 
+_reg_lock = threading.RLock()       # guards every registry read-modify-write (download, delete)
+
+
 def _save_registry(reg: dict) -> None:
     p = _registry_path()
-    tmp = p.with_suffix(".json.tmp")
+    tmp = p.with_name(f".{p.name}.{os.getpid()}.{threading.get_ident()}.tmp")
     tmp.write_text(json.dumps(reg, indent=2))
     os.replace(tmp, p)
 
@@ -103,7 +106,7 @@ def safe_filename(name: str) -> str:
         raise ValueError("Not a .safetensors file name")
     if len(base) > 120:
         base = base[:120 - len(ext)] + ext
-    return base
+    return base[:-len(ext)] + ext                  # /api/lora/list matches the suffix case-sensitively
 
 
 def _dest_name(name: str, c: dict, fam: str, reg: dict, lora_dir: Path) -> str:
@@ -194,14 +197,14 @@ def _sweep_partials(lora_dir: Path) -> None:
             pass
 
 
-def start_download(row: dict, *, open_stream=None, verify=None, threaded: bool = True) -> dict:
+def start_download(row: dict, *, open_stream=None, verify=None, loaded_paths=None, threaded: bool = True) -> dict:
     vid = int(row["civitai"]["versionId"])
     with _lock:
         cur = _jobs.get(vid)
         if cur and cur.get("state") in _ACTIVE:
             return dict(cur)
         _jobs[vid] = {"state": "queued", "bytes": 0, "total": 0, "error": None}
-    args = (vid, row, open_stream or globals()["open_stream"], verify or verify_lora)
+    args = (vid, row, open_stream or globals()["open_stream"], verify or verify_lora, loaded_paths or (lambda: []))
     if threaded:
         threading.Thread(target=_run, args=args, daemon=True).start()
     else:
@@ -209,7 +212,7 @@ def start_download(row: dict, *, open_stream=None, verify=None, threaded: bool =
     return job_state(vid)
 
 
-def _run(vid: int, row: dict, opener, verify) -> None:
+def _run(vid: int, row: dict, opener, verify, loaded_paths) -> None:
     c, fam = row["civitai"], row.get("family", "")
     key = get_key()
     tmp = None
@@ -244,16 +247,22 @@ def _run(vid: int, row: dict, opener, verify) -> None:
             verify(str(tmp), fam)
         except RuntimeError as e:
             raise DownloadError(str(e))
-        os.replace(tmp, lora_dir / dest_name)
-        tmp = None
-        reg = load_registry()
-        for old, e in list(reg.items()):                       # a newer version replaces the old file
-            if e.get("modelId") == c["modelId"] and e.get("family") == fam and old != dest_name:
-                (lora_dir / Path(old).name).unlink(missing_ok=True)
-                reg.pop(old)
-        reg[dest_name] = {"modelId": c["modelId"], "versionId": vid, "family": fam, "sha256": want,
-                          "trained": list(c.get("trained") or []), "installedAt": int(time.time())}
-        _save_registry(reg)
+        with _reg_lock:
+            reg = load_registry()
+            olds = [o for o, e in reg.items()                  # a newer version replaces the old file
+                    if e.get("modelId") == c["modelId"] and e.get("family") == fam and o != dest_name]
+            in_use = {os.path.basename(p) for p in loaded_paths()}
+            busy = next((o for o in olds if o in in_use), None)
+            if busy:
+                raise DownloadError(f"{busy} is loaded: unload it first, then update")
+            os.replace(tmp, lora_dir / dest_name)
+            tmp = None
+            for o in olds:
+                (lora_dir / Path(o).name).unlink(missing_ok=True)
+                reg.pop(o)
+            reg[dest_name] = {"modelId": c["modelId"], "versionId": vid, "family": fam, "sha256": want,
+                              "trained": list(c.get("trained") or []), "installedAt": int(time.time())}
+            _save_registry(reg)
         _set(vid, state="done", file=dest_name)
     except DownloadError as e:
         _fail(vid, str(e), key)
@@ -271,13 +280,14 @@ def _run(vid: int, row: dict, opener, verify) -> None:
 
 def delete_installed(version_id: int, loaded_paths=()) -> str:
     """Delete a downloaded file (registry files only). LookupError if unknown, RuntimeError if loaded."""
-    reg = load_registry()
-    name = next((n for n, e in reg.items() if e.get("versionId") == version_id), None)
-    if name is None or Path(name).name != name:
-        raise LookupError("Not an installed CivitAI LoRA")
-    if any(os.path.basename(p) == name for p in loaded_paths):
-        raise RuntimeError("This LoRA is loaded: unload it first")
-    (_lora_dir() / name).unlink(missing_ok=True)
-    reg.pop(name)
-    _save_registry(reg)
+    with _reg_lock:
+        reg = load_registry()
+        name = next((n for n, e in reg.items() if e.get("versionId") == version_id), None)
+        if name is None or Path(name).name != name:
+            raise LookupError("Not an installed CivitAI LoRA")
+        if any(os.path.basename(p) == name for p in loaded_paths):
+            raise RuntimeError("This LoRA is loaded: unload it first")
+        (_lora_dir() / name).unlink(missing_ok=True)
+        reg.pop(name)
+        _save_registry(reg)
     return name

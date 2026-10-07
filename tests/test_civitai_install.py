@@ -3,6 +3,8 @@ import hashlib
 import json
 import os
 import stat
+import threading
+import time
 
 import pytest
 
@@ -80,6 +82,7 @@ def test_key_rejects_empty_or_whitespace_inside(bad):
     ("C:\\x\\y.safetensors", "y.safetensors"),
     (".hidden.safetensors", "hidden.safetensors"),
     ("a b$%.safetensors", "a b__.safetensors"),
+    ("Loud.SAFETENSORS", "Loud.safetensors"),            # /api/lora/list matches the suffix case-sensitively
 ])
 def test_safe_filename(raw, safe):
     assert ci.safe_filename(raw) == safe
@@ -277,3 +280,40 @@ def test_trained_trigger_comes_from_registry_and_vanishes_on_delete(env):
     assert ci.trained_trigger("other.safetensors") is None
     ci.delete_installed(11)
     assert ci.trained_trigger("Comic.safetensors") is None
+
+
+# ── final-review fixes ───────────────────────────────────────────────────────
+
+def test_overlapping_downloads_both_end_up_in_the_registry(env, monkeypatch):
+    real_load = ci.load_registry
+
+    def slow_load():                          # widen the read-modify-write window
+        reg = real_load()
+        time.sleep(0.05)
+        return reg
+    monkeypatch.setattr(ci, "load_registry", slow_load)
+    rows = [row(vid=11, mid=5, file="A.safetensors", body=b"aaaaaaaa"),
+            row(vid=21, mid=6, file="B.safetensors", body=b"bbbbbbbb")]
+    bodies = {11: b"aaaaaaaa", 21: b"bbbbbbbb"}
+
+    def go(r):
+        vid = r["civitai"]["versionId"]
+        ci.start_download(r, open_stream=lambda u, k: FakeResp(200, bodies[vid]),
+                          verify=lambda p, f: None, threaded=False)
+    threads = [threading.Thread(target=go, args=(r,)) for r in rows]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    assert ci.job_state(11)["state"] == "done" and ci.job_state(21)["state"] == "done"
+    assert sorted(real_load()) == ["A.safetensors", "B.safetensors"]
+
+
+def test_update_is_refused_while_the_old_file_is_loaded(env):
+    run(row(vid=11, file="Comic_v1.safetensors"))
+    old = str(env / "lora_uploads" / "Comic_v1.safetensors")
+    new = row(vid=12, file="Comic_v2.safetensors", body=b"newnewnew")
+    ci.start_download(new, open_stream=lambda u, k: FakeResp(200, b"newnewnew"),
+                      verify=lambda p, f: None, loaded_paths=lambda: [old], threaded=False)
+    st = ci.job_state(12)
+    assert st["state"] == "error" and "unload" in st["error"].lower()
+    assert lora_files(env) == ["Comic_v1.safetensors"]                       # old kept, new + .part gone
+    assert list(ci.load_registry()) == ["Comic_v1.safetensors"]
