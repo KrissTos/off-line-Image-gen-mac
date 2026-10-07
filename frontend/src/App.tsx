@@ -7,7 +7,7 @@ import {
   fetchSettings, deleteOutput, upscaleSingleImage, stopGeneration, loadRun,
 } from './api'
 import { workflowToParams, type WorkflowData } from './workflow'
-import { hasMasks } from './slots'
+import { hasMasks, iterateInputIds } from './slots'
 
 function hexToRgbVar(hex: string): string {
   const h = hex.replace('#', '')
@@ -359,17 +359,10 @@ export default function App() {
 
         dispatch({ type: 'SET_PROGRESS', message: `Pass ${passNum}/${totalPasses} — applying mask on slot #${slot.slotId}…` })
 
-        // Build input image list for this pass
-        let inputImageIds: string[]
-        if (i === 0) {
-          // First pass: always use slot #1's image as the base being edited
-          const baseId = state.refSlots[0].imageId
-          inputImageIds = slot.slotId === 1 ? [baseId] : [baseId, slot.imageId]
-        } else {
-          // Subsequent passes: re-upload previous output as the new base
-          const { id: prevId } = await uploadFromUrl(currentOutputUrl!)
-          inputImageIds = slot.slotId === 1 ? [prevId] : [prevId, slot.imageId]
-        }
+        // Build input image list for this pass: base (original, or the previous pass's output),
+        // this slot, then the unmasked refs
+        const baseId = i === 0 ? state.refSlots[0].imageId : (await uploadFromUrl(currentOutputUrl!)).id
+        const inputImageIds = iterateInputIds(state.refSlots, slot, baseId)
 
         const passParams: GenerateParams = {
           ...state.params,

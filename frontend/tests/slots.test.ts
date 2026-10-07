@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { replaceSlotImage, removeSlot, swapWithBase, hasMasks, neighborSlot, isReplaceClick, swapRefs } from '../src/slots.ts'
+import { replaceSlotImage, removeSlot, swapWithBase, hasMasks, iterateInputIds, neighborSlot, isReplaceClick, swapRefs } from '../src/slots.ts'
 import type { RefImageSlot } from '../src/types.ts'
 
 const slot = (slotId: number, extra: Partial<RefImageSlot> = {}): RefImageSlot => ({
@@ -88,4 +88,20 @@ test('swapRefs never touches the base and ignores same / missing slots', () => {
   assert.equal(swapRefs(slots, 2, 1), slots)
   assert.equal(swapRefs(slots, 2, 2), slots)
   assert.equal(swapRefs(slots, 2, 9), slots)
+})
+
+test('iterate pass for a masked base still sends the unmasked refs, in slot order (img 2, img 3)', () => {
+  const slots = [masked(1), slot(2), slot(3)]
+  assert.deepEqual(iterateInputIds(slots, slots[0], 'base'), ['base', 'img2', 'img3'])
+})
+
+test('iterate pass for a masked ref: base, that ref, then the other unmasked refs', () => {
+  const slots = [slot(1), masked(2), slot(3), masked(4)]
+  assert.deepEqual(iterateInputIds(slots, slots[1], 'prev'), ['prev', 'img2', 'img3'])
+})
+
+test('iterate pass with no unmasked refs is unchanged from before', () => {
+  const slots = [slot(1), masked(2)]
+  assert.deepEqual(iterateInputIds(slots, slots[0], 'b'), ['b'])
+  assert.deepEqual(iterateInputIds(slots, slots[1], 'b'), ['b', 'img2'])
 })

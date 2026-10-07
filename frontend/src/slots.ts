@@ -58,3 +58,13 @@ export function neighborSlot(slots: RefImageSlot[], slotId: number, dir: -1 | 1)
 
 /** Ctrl/Cmd-click on a slot image replaces it (file picker); a plain click enlarges it. */
 export const isReplaceClick = (e: { metaKey: boolean; ctrlKey: boolean }) => e.metaKey || e.ctrlKey
+
+/** Input image ids for one Iterate Masks pass: the base being edited, the pass slot's own image
+ *  (unless it is the base), then every unmasked reference in slot order. Unmasked refs have no pass
+ *  of their own, so without this they never reached the model (a logo in slot #2 next to a masked
+ *  base was silently dropped and the prompt's "image 2" pointed at nothing). */
+export function iterateInputIds(slots: RefImageSlot[], passSlot: RefImageSlot, baseId: string): string[] {
+  const own = passSlot.slotId === 1 ? [] : [passSlot.imageId]
+  const extras = slots.filter(s => s.slotId !== 1 && s.slotId !== passSlot.slotId && !s.maskId).map(s => s.imageId)
+  return [baseId, ...own, ...extras]
+}
