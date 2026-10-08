@@ -75,6 +75,7 @@ venv/bin/python -m core.run_store migrate <dir> [--apply]   # legacy flat output
 10. Every generation writes one run folder through `core/run_store.py` (`server._run_events`); never write flat outputs or sidecar JSONs. Client paths/names go through `run_store.safe_join` / `_guarded_temp`.
 
 11. Model Sources: `core/model_sources.lora_family()` decides what the app can use (see architecture.md); update it when a model family is added (e.g. LTX-2), and keep manual "Add source" entries `custom: true` so they are never pruned. CivitAI rows are `provider: civitai`: the family comes from `baseModel` (`core/civitai.py`), never the name; the key lives in `civitai/token` (never log it).
+12. Load every uploaded image through `server._load_pil` → `core/image_alpha.flatten_to_rgb()`; never `convert("RGB")` a ref (a logo PNG with same-colour pixels under its alpha became a solid block and the model never saw it). `_stored_sources()` maps a base row with empty `model_choice` to its `DEFAULT_SOURCES` row by URL (name + `model_choice`), or the card never shows installed.
 
 ## 7. Image pipeline rules
 1. Never stretch slot #1: fit it with `fit_ref_to_canvas()` and give its mask the same transform.
@@ -88,6 +89,7 @@ venv/bin/python -m core.run_store migrate <dir> [--apply]   # legacy flat output
 8. FLUX 4B + padding → outpaint LoRA path (green pad, auto LoRA, trigger prompt); don't send it for 9B/Z-Image.
 9. Load FLUX LoRAs only through `core/lora_flux2` (own BFL converter) and `sync_loras()`; never ignore a load status. `ensure_loras_loaded()` treats a status starting with `Loaded` as success, so a partial failure (Z-Image too) must never begin with it.
 10. klein LoRAs are size-specific (4B hidden 3072, 9B 4096): classify with `lora_variant()` (header only), never hardcode block counts; `/api/lora/list` exposes `variant` and the UI greys mismatches (`src/loraCompat.ts`); keep `assert_lora_matches_model()` in both loaders.
+11. Small mask (either mask mode): `plan_mask_crop()` gives a context crop upscaled toward 1 MP; generate on `ref_work`/`mask_work` (`gen_w/gen_h` differ from the output), then composite back via `mask_bbox` (`apply_mask_composite`). Large masks and auto-outpaint keep the old paths; never feed a small mask to a full-frame inpaint.
 
 ## 8. Video (LTX) rules
 1. Use `LTXConditionPipeline` only.
