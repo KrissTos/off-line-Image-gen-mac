@@ -1188,6 +1188,58 @@ def get_mask_bbox(mask_pil: Image.Image, padding: int = 32) -> tuple | None:
     return (x0, y0, x1, y1)
 
 
+class MaskCropPlan(NamedTuple):
+    bbox: tuple       # (x0, y0, x1, y1) context crop on the output canvas
+    work_size: tuple  # (w, h) generation size, multiples of 16
+
+
+# A small mask on a big canvas leaves the model a handful of latent tokens (16 px each):
+# a 117x83 mask is ~7x5 tokens, too few to draw a wide logo or a face. Generate on a
+# context crop upscaled toward ~1 MP instead, then scale back and composite.
+MASK_WORK_AREA     = 1_000_000   # target pixels of the generation crop
+MASK_WORK_MAX_SIDE = 1536
+MASK_WORK_MAX_SCALE = 4.0
+MASK_WORK_MIN_SCALE = 1.25       # less upscale than this is not worth the crop
+MASK_CTX_FRAC      = 0.5         # context margin per side, relative to the mask bbox side
+MASK_CTX_MIN       = 64
+MASK_WORK_MAX_CANVAS_FRAC = 0.5  # crop covering more than this = large mask, legacy path
+
+
+def plan_mask_crop(mask_pil: Image.Image, canvas_size: tuple) -> MaskCropPlan | None:
+    """Plan an upscaled context crop for a small mask, or None to keep the legacy path
+    (empty mask, large mask, or a crop already near the working size)."""
+    import numpy as np
+    m = np.array(mask_pil.convert("L")) > 10
+    rows, cols = np.where(m.any(axis=1))[0], np.where(m.any(axis=0))[0]
+    if rows.size == 0 or cols.size == 0:
+        return None
+    cw_img, ch_img = canvas_size
+    bw, bh = int(cols[-1] - cols[0] + 1), int(rows[-1] - rows[0] + 1)
+    mx = max(MASK_CTX_MIN, round(MASK_CTX_FRAC * bw))
+    my = max(MASK_CTX_MIN, round(MASK_CTX_FRAC * bh))
+    x0, y0 = max(0, int(cols[0]) - mx), max(0, int(rows[0]) - my)
+    x1, y1 = min(cw_img, int(cols[-1]) + 1 + mx), min(ch_img, int(rows[-1]) + 1 + my)
+    cw, ch = x1 - x0, y1 - y0
+    if cw * ch >= MASK_WORK_MAX_CANVAS_FRAC * cw_img * ch_img:
+        return None
+    scale = min((MASK_WORK_AREA / (cw * ch)) ** 0.5,
+                MASK_WORK_MAX_SCALE,
+                MASK_WORK_MAX_SIDE / max(cw, ch))
+    if scale < MASK_WORK_MIN_SCALE:
+        return None
+    ww = max(64, round(cw * scale / 16) * 16)
+    wh = max(64, round(ch * scale / 16) * 16)
+    return MaskCropPlan((x0, y0, x1, y1), (ww, wh))
+
+
+def crop_mask_work(ref: Image.Image, mask: Image.Image, plan: MaskCropPlan) -> tuple:
+    """Crop slot #1 and its mask to *plan* and resize both to the working size.
+    The mask is resized with NEAREST so it stays binary."""
+    ref_w = ref.convert("RGB").crop(plan.bbox).resize(plan.work_size, Image.LANCZOS)
+    mask_w = mask.convert("L").crop(plan.bbox).resize(plan.work_size, Image.NEAREST)
+    return ref_w, mask_w
+
+
 def crop_flux_refs(refs: list | None, ref_crop: Image.Image) -> list:
     """
     Mask crop mode: slot #1 (the image being edited) becomes *ref_crop*;
@@ -1432,8 +1484,10 @@ def generate_image(
                  and not is_video_model)
     mask_full  = None   # mask at full output dims (L mode)
     ref_full   = None   # slot #1 fitted to full output dims (for compositing)
-    mask_bbox  = None   # (x0,y0,x1,y1) crop region in crop mode
-    gen_w, gen_h = img_w, img_h  # generation dims; smaller than output in crop mode
+    mask_bbox  = None   # (x0,y0,x1,y1) crop region in crop mode / small-mask work crop
+    ref_work   = None   # upscaled slot #1 crop for a small mask (inpaint input)
+    mask_work  = None   # its mask, same size, binary
+    gen_w, gen_h = img_w, img_h  # generation dims; differ from output in crop / small-mask mode
 
     if has_mask:
         import numpy as np
@@ -1443,7 +1497,24 @@ def generate_image(
 
         is_crop_mode = "Crop" in (mask_mode or "Crop")
 
-        if is_crop_mode:
+        # Small mask (either mode): generate on an upscaled context crop so the model
+        # gets enough latent tokens, then scale back and composite. Auto-outpaint keeps
+        # its full-frame LoRA path.
+        work_plan = None if auto_outpainted else plan_mask_crop(mask_full, ref_full.size)
+
+        if work_plan is not None:
+            mask_bbox = work_plan.bbox
+            gen_w, gen_h = work_plan.work_size
+            ref_work, mask_work = crop_mask_work(ref_full, mask_full, work_plan)
+            if current_model in ("flux2-klein-int8", "flux2-klein-sdnq",
+                                 "flux2-klein-9b-sdnq"):
+                preprocessed_flux_refs = crop_flux_refs(preprocessed_flux_refs, ref_work)
+            elif current_model == "zimage-full":
+                preprocessed_zimage_ref = ref_work
+            x0, y0, x1, y1 = work_plan.bbox
+            print(f"  Small mask: crop ({x0},{y0})–({x1},{y1}) {x1 - x0}×{y1 - y0} "
+                  f"→ generate {gen_w}×{gen_h} (upscaled, {mask_mode})")
+        elif is_crop_mode:
             bbox = get_mask_bbox(mask_full, padding=32)
             if bbox is None:
                 print("  Mask is empty — ignoring masking")
@@ -1465,8 +1536,8 @@ def generate_image(
                 print(f"  Mask crop: ({x0},{y0})–({x1},{y1}) "
                       f"→ generate {gen_w}×{gen_h} "
                       f"(full {img_w}×{img_h}, ~{speedup}× faster)")
-        # Inpainting pipeline mode: gen dims stay the same (full image),
-        # but we'll use FluxInpaintPipeline / ZImageInpaintPipeline in the loop.
+        # Inpainting pipeline mode, large mask: gen dims stay the same (full image),
+        # and we use Flux2KleinInpaintPipeline / ZImageInpaintPipeline in the loop.
 
     base_seed    = int(seed)
     repeat_count = max(1, int(repeat_count or 1))
@@ -1530,8 +1601,8 @@ def generate_image(
                                 # No padding_mask_crop: it returns a flat rectangle on klein.
                                 image = inpaint_pipe(
                                     prompt=prompt,
-                                    image=ref_full,
-                                    mask_image=mask_full,
+                                    image=ref_work if ref_work is not None else ref_full,
+                                    mask_image=mask_work if mask_work is not None else mask_full,
                                     image_reference=extra_refs or None,
                                     height=gen_h,
                                     width=gen_w,
@@ -1611,11 +1682,11 @@ def generate_image(
                                 inpaint_pipe = ZImageInpaintPipeline.from_pipe(pipe)
                             image = inpaint_pipe(
                                 prompt=prompt,
-                                image=ref_full,
-                                mask_image=mask_full,
+                                image=ref_work if ref_work is not None else ref_full,
+                                mask_image=mask_work if mask_work is not None else mask_full,
                                 strength=float(img_strength),
-                                height=img_h,
-                                width=img_w,
+                                height=gen_h,
+                                width=gen_w,
                                 num_inference_steps=int(steps),
                                 guidance_scale=float(guidance),
                                 generator=generator,
@@ -1686,11 +1757,11 @@ def generate_image(
                 return
             raise
 
-        # ── Crop & composite: paste generated crop back onto full reference ──
+        # ── Crop & composite (Crop mode, or any small-mask work crop): paste the
+        #    generated crop back onto the full reference ──
         if (image is not None
                 and has_mask
                 and mask_bbox is not None
-                and "Crop" in (mask_mode or "Crop")
                 and ref_full is not None
                 and mask_full is not None):
             image = apply_mask_composite(ref_full, image, mask_full, mask_bbox)

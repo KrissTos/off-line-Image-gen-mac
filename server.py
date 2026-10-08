@@ -373,7 +373,8 @@ def _load_pil(file_id: str):
     p = _temp_path(file_id)
     if not p.exists():
         raise HTTPException(404, f"Temp file {file_id} not found")
-    return ImageOps.exif_transpose(Image.open(p)).convert("RGB")
+    from core.image_alpha import flatten_to_rgb
+    return flatten_to_rgb(ImageOps.exif_transpose(Image.open(p)))
 
 def _output_dir() -> str:
     a = _app()
