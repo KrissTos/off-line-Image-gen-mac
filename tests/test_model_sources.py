@@ -87,3 +87,25 @@ def test_discover_screens_describes_and_remembers(monkeypatch, tmp_path):
     assert [s["name"] for s in saved["sources"]] == ["Flux2-Klein-9B-Enhanced-Details"]
     assert saved["sources"][0]["description"] == "Sharpens fine detail in photos."
     assert saved["ignored"] == ["https://huggingface.co/org/huggy_v17"]
+
+
+def test_discovered_base_row_gets_model_choice_from_defaults_by_url(monkeypatch, tmp_path):
+    """Regression: a base row for a known repo added by Update (new id, empty model_choice)
+    never matched the available list, so the LTX card had no green frame and no Download."""
+    import server
+    ltx = next(s for s in server.DEFAULT_SOURCES if s["name"] == "LTX-Video")
+    _use_file(monkeypatch, tmp_path, [
+        {"id": "src-116", "name": "LTX-Video-0.9.8-13B-distilled", "url": ltx["url"],
+         "type": "base", "description": "", "model_choice": ""}])
+    rows = server.api_get_model_sources()["sources"]
+    assert rows[0]["model_choice"] == ltx["model_choice"]
+    assert rows[0]["name"] == "LTX-Video"   # the download endpoint and the Download gate key on it
+
+
+def test_base_row_with_its_own_model_choice_is_left_alone(monkeypatch, tmp_path):
+    import server
+    ltx = next(s for s in server.DEFAULT_SOURCES if s["name"] == "LTX-Video")
+    _use_file(monkeypatch, tmp_path, [
+        {"id": "src-9", "name": "mine", "url": ltx["url"], "type": "base",
+         "description": "", "model_choice": "custom choice"}])
+    assert server.api_get_model_sources()["sources"][0]["model_choice"] == "custom choice"

@@ -1449,11 +1449,18 @@ def _loaded_lora_paths() -> list[str]:
 def _stored_sources() -> list[dict]:
     """Rows as stored (pruned, sorted), including NSFW CivitAI rows the list view hides."""
     _defaults_by_id = {s["id"]: s for s in DEFAULT_SOURCES}
+    _default_by_url = {s["url"]: s for s in DEFAULT_SOURCES
+                       if s.get("type") == "base" and s.get("model_choice")}
     sources = _read_sources_file().get("sources", DEFAULT_SOURCES)
     # Merge model_choice from DEFAULT_SOURCES for any entry that lacks it
     for s in sources:
         if "model_choice" not in s and s.get("id") in _defaults_by_id:
             s["model_choice"] = _defaults_by_id[s["id"]].get("model_choice", "")
+        # A base row for a known repo added under another id (Update) has no model_choice and
+        # its own name: match by URL and take both, or it never shows as installed / downloadable
+        if s.get("type") == "base" and not s.get("model_choice") and s.get("url") in _default_by_url:
+            d = _default_by_url[s["url"]]
+            s["model_choice"], s["name"] = d["model_choice"], d["name"]
     return _sort_sources(model_sources.prune_list(_drop_unusable_base(sources)))
 
 
