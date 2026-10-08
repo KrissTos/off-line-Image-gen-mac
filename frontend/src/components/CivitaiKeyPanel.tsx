@@ -4,7 +4,7 @@ import { fetchCivitaiStatus, setCivitaiKey, clearCivitaiKey, updateSettings } fr
 
 interface Props { onNsfwChange: () => void }
 
-/** CivitAI API key (never shown again after save) and the "Show NSFW LoRAs" toggle. */
+/** CivitAI API key row (never shown again after save) and the "Show NSFW LoRAs" toggle. */
 export default function CivitaiKeyPanel({ onNsfwChange }: Props) {
   const [hasKey, setHasKey] = useState(false)
   const [showNsfw, setShowNsfw] = useState(false)
@@ -35,7 +35,7 @@ export default function CivitaiKeyPanel({ onNsfwChange }: Props) {
   }
 
   return (
-    <div className="mb-3 p-2 rounded-lg bg-card border border-border space-y-2">
+    <div className="space-y-2">
       <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted/80">
         <KeyRound size={11} /> CivitAI
         {hasKey && <span className="flex items-center gap-1 text-green-400 normal-case font-normal"><CheckCircle2 size={11} /> key set</span>}

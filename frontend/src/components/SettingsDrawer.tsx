@@ -1,5 +1,5 @@
 import {
-  X, HardDrive, LogIn, LogOut, CheckCircle2, Download, Trash2,
+  X, HardDrive, CheckCircle2, Download, Trash2,
   RefreshCw, AlertCircle, FolderOpen, Save, CloudDownload, ArrowDownCircle, Palette, FileDown,
   ExternalLink, Globe, Plus,
 } from 'lucide-react'
@@ -13,6 +13,7 @@ import {
 } from '../api'
 import SourceFolder from './SourceFolder'
 import CivitaiKeyPanel from './CivitaiKeyPanel'
+import HuggingFaceLogin from './HuggingFaceLogin'
 import CivitaiRowActions from './CivitaiRowActions'
 import { groupSources, functionCounts, filterByFunction, parseOpenState, civitaiNote } from '../sourceGroups'
 import { applyThemeColors } from '../App'
@@ -592,42 +593,6 @@ export default function SettingsDrawer({ open, onClose }: Props) {
             </section>
           )}
 
-          {/* ── HuggingFace ── */}
-          <section>
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-label mb-3 flex items-center gap-1.5">
-              <LogIn size={13} /> HuggingFace
-            </h3>
-            {hfStatus && (
-              <div className={`flex items-center gap-2 mb-3 text-xs px-3 py-2 rounded-md
-                ${isLoggedIn ? 'bg-green-900/30 text-green-400 border border-green-800/40'
-                             : 'bg-card border border-border text-muted'}`}>
-                {isLoggedIn ? <><CheckCircle2 size={12} /> Logged in · {hfStatus}</> : <>{hfStatus}</>}
-              </div>
-            )}
-            <div className="space-y-2">
-              <input
-                type="password"
-                value={hfToken}
-                onChange={e => setHfToken(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && handleHFLogin()}
-                placeholder="hf_…  token"
-                className="w-full bg-card border border-border rounded-md px-3 py-2 text-sm text-white
-                           placeholder-muted focus:outline-none focus:border-accent"
-              />
-              <div className="flex gap-2">
-                <button onClick={handleHFLogin}
-                  className="flex-1 py-2 rounded-md bg-accent text-white text-xs font-medium hover:bg-accent/80 transition-colors">
-                  {isLoggedIn ? 'Re-login' : 'Login'}
-                </button>
-                <button onClick={handleHFLogout}
-                  className="py-2 px-3 rounded-md bg-card border border-border text-muted hover:text-white text-xs transition-colors flex items-center gap-1">
-                  <LogOut size={13} /> Logout
-                </button>
-              </div>
-              {statusMsg && <p className="text-xs text-muted">{statusMsg}</p>}
-            </div>
-          </section>
-
           {/* ── Models ── */}
           {modelChoices.length > 0 && (
             <section>
@@ -844,7 +809,15 @@ export default function SettingsDrawer({ open, onClose }: Props) {
             <p className="text-[10px] text-muted/70 mb-3">
               Curated Mac Silicon models. User-editable — add your own sources.
             </p>
-            <CivitaiKeyPanel onNsfwChange={() => fetchModelSources().then(setSources).catch(() => {})} />
+            <div className="mb-3 p-2 rounded-lg bg-card border border-border space-y-3">
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-label">Accounts &amp; API keys</div>
+              <HuggingFaceLogin
+                token={hfToken} onToken={setHfToken} status={hfStatus} loggedIn={!!isLoggedIn}
+                message={statusMsg} onLogin={handleHFLogin} onLogout={handleHFLogout}
+              />
+              <div className="border-t border-border" />
+              <CivitaiKeyPanel onNsfwChange={() => fetchModelSources().then(setSources).catch(() => {})} />
+            </div>
 
             {!sourcesLoaded ? (
               <p className="text-xs text-muted">Loading…</p>
