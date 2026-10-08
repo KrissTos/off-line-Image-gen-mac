@@ -494,6 +494,7 @@ export default function App() {
     try {
       const wf = await loadRun(item.run)
       await applyWorkflow(wf, { seed: item.seed, label: item.run, loaded: null })
+      dispatch({ type: 'MARK_RESULT_STALE' })   // dimmed: settings are loaded to tweak, Generate makes a variation
     } catch (err: unknown) {
       setStatusMsg(`Could not load run ${item.run}: ${(err as Error).message}`)
     }

@@ -71,14 +71,14 @@ export default function Canvas({
           />
         )}
 
-        {/* Stale badge: the shown result is from before the loaded workflow */}
+        {/* Stale badge: a workflow was loaded; the shown image is not a result of the current settings */}
         {stale && resultUrl && !isGenerating && (
           <button
             onClick={onDismissStale}
             className="absolute top-3 left-1/2 -translate-x-1/2 px-3 py-1.5 rounded-full bg-surface/90 border border-border
                        text-xs text-muted hover:text-white transition-colors"
           >
-            Previous result, not from this workflow · click to show
+            Workflow loaded: tweak it and Generate · click to show the image
           </button>
         )}
 
